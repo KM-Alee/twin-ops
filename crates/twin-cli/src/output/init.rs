@@ -11,10 +11,11 @@ pub fn render(result: &InitResult) -> String {
     format!(
         "Twin init: {status}\n\n\
          Config: {}\n\
-         Database: {}\n\
+         Database: {} (schema v{})\n\
          Log: {}",
         result.config_path.display(),
         result.db_path.display(),
+        result.schema_version,
         result.log_path.display(),
     )
 }

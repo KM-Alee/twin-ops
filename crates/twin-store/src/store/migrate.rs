@@ -4,19 +4,25 @@ use crate::store::Store;
 
 impl Store {
     pub fn initialize(&self) -> Result<(), StoreError> {
+        self.apply_migrations_through(LATEST_VERSION)
+    }
+
+    /// Applies pending migrations through `target` (inclusive).
+    #[doc(hidden)]
+    pub fn apply_migrations_through(&self, target: i64) -> Result<(), StoreError> {
         let current = self.schema_version().map_err(|e| match e {
             StoreError::Query { source } => StoreError::Migration { version: 0, source },
             other => other,
         })?;
 
-        for version in (current + 1)..=LATEST_VERSION {
+        for version in (current + 1)..=target {
             self.run_migration(version)?;
         }
         Ok(())
     }
 
     pub fn schema_version(&self) -> Result<i64, StoreError> {
-        if !self.is_initialized() {
+        if !self.is_initialized()? {
             return Ok(0);
         }
         let version: i64 = self
@@ -30,18 +36,22 @@ impl Store {
         Ok(version)
     }
 
-    pub fn is_initialized(&self) -> bool {
-        self.conn
-            .prepare(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
-            )
-            .and_then(|mut stmt| stmt.query_row([], |row| row.get::<_, i32>(0)).map(|_| true))
-            .unwrap_or(false)
+    pub fn is_initialized(&self) -> Result<bool, StoreError> {
+        match self.conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+            [],
+            |_| Ok(()),
+        ) {
+            Ok(()) => Ok(true),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(source) => Err(StoreError::Query { source }),
+        }
     }
 
     fn run_migration(&self, version: i64) -> Result<(), StoreError> {
         let sql = match version {
             1 => migration::MIGRATION_001,
+            2 => migration::MIGRATION_002,
             _ => {
                 return Err(StoreError::Migration {
                     version,

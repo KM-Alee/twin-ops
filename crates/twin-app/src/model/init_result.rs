@@ -10,4 +10,5 @@ pub struct InitResult {
     pub config_created: bool,
     pub config_updated: bool,
     pub db_created: bool,
+    pub schema_version: i64,
 }

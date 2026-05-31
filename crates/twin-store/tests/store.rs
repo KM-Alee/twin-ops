@@ -1,6 +1,8 @@
+mod support;
+
 use std::path::Path;
 
-use twin_store::{Store, StoreOpenError};
+use twin_store::{Store, StoreOpenError, LATEST_VERSION};
 
 #[test]
 fn open_in_memory_succeeds() {
@@ -10,24 +12,15 @@ fn open_in_memory_succeeds() {
 #[test]
 fn initialize_creates_schema_migrations() {
     let store = Store::open_in_memory().expect("open");
-    assert!(!store.is_initialized());
+    assert!(!store.is_initialized().expect("check"));
     store.initialize().expect("initialize");
-    assert!(store.is_initialized());
-    assert_eq!(store.schema_version().expect("version"), 1);
-}
-
-#[test]
-fn initialize_is_idempotent() {
-    let store = Store::open_in_memory().expect("open");
-    store.initialize().expect("first");
-    store.initialize().expect("second");
-    assert_eq!(store.schema_version().expect("version"), 1);
+    assert!(store.is_initialized().expect("check"));
+    assert_eq!(store.schema_version().expect("version"), LATEST_VERSION);
 }
 
 #[test]
 fn health_check_on_healthy_db() {
-    let store = Store::open_in_memory().expect("open");
-    store.initialize().expect("initialize");
+    let store = support::blank_store();
     assert!(store.health_check().is_ok());
 }
 

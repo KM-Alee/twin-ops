@@ -2,8 +2,9 @@ mod support;
 
 use std::fs;
 
-use twin_app::{init_in, read_config, InitRequest};
+use twin_app::{doctor_in, init_in, read_config, InitRequest};
 use twin_core::config::{TwinConfig, DEFAULT_CONFIG_TOML};
+use twin_store::LATEST_VERSION;
 
 #[test]
 fn creates_config_and_database() {
@@ -14,6 +15,16 @@ fn creates_config_and_database() {
     assert!(result.db_path.exists());
     assert!(result.config_created);
     assert!(result.db_created);
+    assert_eq!(result.schema_version, LATEST_VERSION);
+}
+
+#[test]
+fn init_and_doctor_agree_on_schema_version() {
+    let home = support::IsolatedHome::new();
+    let init = init_in(&home.layout, InitRequest::default()).expect("init");
+    let doctor = doctor_in(&home.layout, None).expect("doctor");
+    assert_eq!(init.schema_version, LATEST_VERSION);
+    assert_eq!(doctor.database.schema_version, Some(init.schema_version));
 }
 
 #[test]

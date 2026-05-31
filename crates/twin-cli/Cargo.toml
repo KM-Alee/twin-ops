@@ -21,3 +21,4 @@ twin-app = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 twin-app = { workspace = true }
+twin-store = { workspace = true }

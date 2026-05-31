@@ -4,30 +4,33 @@ use twin_app::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, InitResult, PermissionMode,
 };
 use twin_cli::output;
+use twin_store::LATEST_VERSION;
 
-#[test]
-fn init_render_created() {
-    let result = InitResult {
+fn sample_init_result() -> InitResult {
+    InitResult {
         config_path: PathBuf::from("/tmp/config.toml"),
         db_path: PathBuf::from("/tmp/twin.db"),
         log_path: PathBuf::from("/tmp/twin.log"),
         config_created: true,
         config_updated: false,
         db_created: true,
-    };
-    let text = output::init::render(&result);
+        schema_version: LATEST_VERSION,
+    }
+}
+
+#[test]
+fn init_render_created() {
+    let text = output::init::render(&sample_init_result());
     assert!(text.contains("Twin init: Created"));
 }
 
 #[test]
 fn init_render_unchanged() {
     let result = InitResult {
-        config_path: PathBuf::from("/tmp/config.toml"),
-        db_path: PathBuf::from("/tmp/twin.db"),
-        log_path: PathBuf::from("/tmp/twin.log"),
         config_created: false,
         config_updated: false,
         db_created: false,
+        ..sample_init_result()
     };
     let text = output::init::render(&result);
     assert!(text.contains("Already exists"));
@@ -60,15 +63,12 @@ fn doctor_render_sections() {
 }
 
 #[test]
-fn json_render_parses() {
-    let result = InitResult {
-        config_path: PathBuf::from("/tmp/config.toml"),
-        db_path: PathBuf::from("/tmp/twin.db"),
-        log_path: PathBuf::from("/tmp/twin.log"),
-        config_created: true,
-        config_updated: false,
-        db_created: false,
-    };
+fn init_json_includes_schema_version() {
+    let result = sample_init_result();
     let json = output::json::render(&result).expect("json");
-    serde_json::from_str::<serde_json::Value>(&json).expect("parse");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(
+        value.get("schema_version").and_then(|v| v.as_i64()),
+        Some(LATEST_VERSION)
+    );
 }

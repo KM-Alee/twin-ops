@@ -1,6 +1,8 @@
+mod batch;
 mod health;
 mod migrate;
 mod open;
+mod transaction;
 
 use rusqlite::Connection;
 

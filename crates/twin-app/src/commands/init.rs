@@ -20,15 +20,10 @@ fn run_inner(layout: &TwinLayout, request: InitRequest) -> Result<InitResult, In
         config_io::sync_default_template(&cfg_path, request.force)
             .map_err(InitError::ConfigWrite)?;
 
-    let db_was_initialized = db_path.exists()
-        && Store::open(&db_path)
-            .ok()
-            .is_some_and(|store| store.is_initialized());
-
     let store = Store::open(&db_path).map_err(InitError::Database)?;
-    if !db_was_initialized {
-        store.initialize().map_err(InitError::Migration)?;
-    }
+    let db_created = !store.is_initialized().map_err(InitError::Migration)?;
+    store.initialize().map_err(InitError::Migration)?;
+    let schema_version = store.schema_version().map_err(InitError::Migration)?;
 
     Ok(InitResult {
         config_path: cfg_path,
@@ -36,7 +31,8 @@ fn run_inner(layout: &TwinLayout, request: InitRequest) -> Result<InitResult, In
         log_path,
         config_created,
         config_updated,
-        db_created: !db_was_initialized,
+        db_created,
+        schema_version,
     })
 }
 

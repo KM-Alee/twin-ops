@@ -21,7 +21,8 @@ pub fn check(db_path: &Path) -> DoctorDatabase {
         Err(_) => return result,
     };
 
-    if !store.is_initialized() || store.health_check().is_err() {
+    let initialized = store.is_initialized().unwrap_or(false);
+    if !initialized || store.health_check().is_err() {
         return result;
     }
 
