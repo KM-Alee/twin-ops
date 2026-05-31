@@ -5,6 +5,7 @@ members = [
     "crates/twin-core",
     "crates/twin-store",
     "crates/twin-observation",
+    "crates/twin-collectors",
 ]
 resolver = "2"
 
@@ -18,6 +19,7 @@ twin-core = { path = "crates/twin-core" }
 twin-store = { path = "crates/twin-store" }
 twin-app = { path = "crates/twin-app" }
 twin-observation = { path = "crates/twin-observation" }
+twin-collectors = { path = "crates/twin-collectors" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

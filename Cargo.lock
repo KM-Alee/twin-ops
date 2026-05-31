@@ -674,7 +674,9 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "twin-collectors",
  "twin-core",
+ "twin-observation",
  "twin-store",
 ]
 
@@ -686,7 +688,19 @@ dependencies = [
  "serde",
  "serde_json",
  "twin-app",
+ "twin-core",
  "twin-store",
+]
+
+[[package]]
+name = "twin-collectors"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "twin-core",
+ "twin-observation",
 ]
 
 [[package]]

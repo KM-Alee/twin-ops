@@ -133,6 +133,22 @@ impl ObservationMetadata {
             .insert(key.to_string(), serde_json::Value::Bool(value));
     }
 
+    pub fn insert_u32(&mut self, key: &str, value: u32) {
+        self.0.insert(
+            key.to_string(),
+            serde_json::Value::Number(serde_json::Number::from(value)),
+        );
+    }
+
+    pub fn insert_str_array(&mut self, key: &str, values: &[String]) {
+        let array = values
+            .iter()
+            .map(|v| serde_json::Value::String(v.clone()))
+            .collect();
+        self.0
+            .insert(key.to_string(), serde_json::Value::Array(array));
+    }
+
     pub fn keys(&self) -> Vec<String> {
         self.0.keys().cloned().collect()
     }

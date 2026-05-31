@@ -1,18 +1,14 @@
 [package]
-name = "twin-app"
+name = "twin-collectors"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-dirs = { workspace = true }
-serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-toml = { workspace = true }
-twin-collectors = { workspace = true }
 twin-core = { workspace = true }
 twin-observation = { workspace = true }
-twin-store = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

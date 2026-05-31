@@ -132,6 +132,16 @@ impl Store {
         self.insert_observation(&ObservationRow::from(obs))
     }
 
+    pub fn insert_observation_typed_for_run(
+        &mut self,
+        obs: &Observation,
+        run_id: i64,
+    ) -> Result<(), StoreError> {
+        let mut row = ObservationRow::from(obs);
+        row.collector_run_id = Some(run_id);
+        self.insert_observation(&row)
+    }
+
     pub fn get_observation_typed(
         &self,
         id: ObservationId,

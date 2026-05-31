@@ -1,0 +1,115 @@
+use crate::edge::{EdgeClass, EdgeId, EdgeKind, EdgeState};
+use crate::graph_metadata::GraphMetadata;
+use crate::node::NodeId;
+use crate::TimestampNs;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphEdgeParts {
+    pub from: NodeId,
+    pub to: NodeId,
+    pub kind: EdgeKind,
+    pub class: EdgeClass,
+    pub state: EdgeState,
+    pub evidence_count: u32,
+    pub first_seen: TimestampNs,
+    pub last_seen: TimestampNs,
+    pub metadata: GraphMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphEdge {
+    id: EdgeId,
+    from: NodeId,
+    to: NodeId,
+    kind: EdgeKind,
+    class: EdgeClass,
+    state: EdgeState,
+    evidence_count: u32,
+    first_seen: TimestampNs,
+    last_seen: TimestampNs,
+    metadata: GraphMetadata,
+}
+
+impl GraphEdge {
+    pub fn from_stored(parts: GraphEdgeParts) -> Self {
+        let id = EdgeId::new(&parts.from, parts.kind, &parts.to);
+        Self {
+            id,
+            from: parts.from,
+            to: parts.to,
+            kind: parts.kind,
+            class: parts.class,
+            state: parts.state,
+            evidence_count: parts.evidence_count,
+            first_seen: parts.first_seen,
+            last_seen: parts.last_seen,
+            metadata: parts.metadata,
+        }
+    }
+
+    pub fn observed_parent(
+        parent: &NodeId,
+        child: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::ParentOf;
+        let id = EdgeId::new(parent, kind, child);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: parent.clone(),
+            to: child.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::empty(),
+        }
+    }
+
+    pub fn id(&self) -> &EdgeId {
+        &self.id
+    }
+
+    pub fn from(&self) -> &NodeId {
+        &self.from
+    }
+
+    pub fn to(&self) -> &NodeId {
+        &self.to
+    }
+
+    pub fn kind(&self) -> EdgeKind {
+        self.kind
+    }
+
+    pub fn class(&self) -> EdgeClass {
+        self.class
+    }
+
+    pub fn state(&self) -> EdgeState {
+        self.state
+    }
+
+    pub fn evidence_count(&self) -> u32 {
+        self.evidence_count
+    }
+
+    pub fn first_seen(&self) -> TimestampNs {
+        self.first_seen
+    }
+
+    pub fn last_seen(&self) -> TimestampNs {
+        self.last_seen
+    }
+
+    pub fn metadata(&self) -> &GraphMetadata {
+        &self.metadata
+    }
+}

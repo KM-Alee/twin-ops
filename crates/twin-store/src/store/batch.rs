@@ -17,7 +17,7 @@ enum TxPlan<T> {
 }
 
 impl Store {
-    pub(crate) fn with_transaction<F, T>(&mut self, mut f: F) -> Result<T, StoreError>
+    pub fn with_transaction<F, T>(&mut self, mut f: F) -> Result<T, StoreError>
     where
         F: FnMut(&mut Self) -> Result<T, StoreError>,
     {

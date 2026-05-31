@@ -1,6 +1,7 @@
 pub mod collector_run;
 pub mod edge;
 pub mod edge_observation;
+pub mod graph_typed;
 pub mod node;
 pub mod observation;
 

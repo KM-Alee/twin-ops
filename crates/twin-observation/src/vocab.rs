@@ -41,6 +41,9 @@ impl FromStr for ObservationSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ObservationKind {
     ProcessSeen,
+    ProcessCommandSeen,
+    ProcessExeSeen,
+    ProcessParentSeen,
     TcpSocketSeen,
     ProcessBelongsToCgroup,
 }
@@ -49,6 +52,9 @@ impl fmt::Display for ObservationKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::ProcessSeen => "process_seen",
+            Self::ProcessCommandSeen => "process_command_seen",
+            Self::ProcessExeSeen => "process_exe_seen",
+            Self::ProcessParentSeen => "process_parent_seen",
             Self::TcpSocketSeen => "tcp_socket_seen",
             Self::ProcessBelongsToCgroup => "process_belongs_to_cgroup",
         })
@@ -61,6 +67,9 @@ impl FromStr for ObservationKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "process_seen" => Ok(Self::ProcessSeen),
+            "process_command_seen" => Ok(Self::ProcessCommandSeen),
+            "process_exe_seen" => Ok(Self::ProcessExeSeen),
+            "process_parent_seen" => Ok(Self::ProcessParentSeen),
             "tcp_socket_seen" => Ok(Self::TcpSocketSeen),
             "process_belongs_to_cgroup" => Ok(Self::ProcessBelongsToCgroup),
             other => Err(ParseError::Enum {
