@@ -1,0 +1,133 @@
+# twin-ops — Rust workspace (.gitignore)
+# https://github.com/github/gitignore/blob/main/Rust.gitignore
+
+### Rust / Cargo ###
+/target/
+**/*.rs.bk
+*.orig
+*.pdb
+
+# Backup cargo config (keep config.toml.example if you add one)
+/config.local.toml
+
+# Optional cargo vendor tree
+/vendor/
+
+# Build artifacts outside default target/ (custom CARGO_TARGET_DIR, cross builds)
+/dist/
+/build/
+/out/
+
+# Rust-analyzer / rustfmt / clippy (local overrides only)
+rust-toolchain.toml.local
+
+### Coverage & profiling ###
+/coverage/
+/coverage-*/
+*.profraw
+*.profdata
+lcov.info
+tarpaulin-report.html
+cobertura.xml
+bench-results/
+
+### Fuzzing (cargo-fuzz / libfuzzer) ###
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/*.lock
+
+### eBPF / Aya (future twin-ebpf) ###
+*.bpf
+*.bpf.o
+*.o
+*.bc
+*.ll
+/bpf/target/
+**/bpf/.output/
+**/*.skel.h
+**/*.skel.json
+# Keep hand-written skeletons if you explicitly version them — remove line above and document path
+
+### Local twin runtime (dev only; production uses XDG dirs) ###
+/.twin/
+/twin-data/
+/twin-state/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Accidental init in repo root
+/config.toml
+/twin.yaml.local
+/twin.local.yaml
+
+### Snapshots & golden files (opt-in: delete if you commit insta snapshots) ###
+# **/snapshots/
+# **/*.snap.new
+
+### Environment & secrets ###
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+secrets/
+credentials.json
+
+### Kubernetes / Docker (local kubeconfig copies, compose overrides) ###
+kubeconfig
+kubeconfig.*
+docker-compose.override.yml
+docker-compose.local.yml
+.dockercfg
+.docker/
+
+### IDE & editors ###
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.code-workspace
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# Cursor (keep shared rules/skills paths if you version them under .cursor/)
+.cursor/*
+!.cursor/rules/
+!.cursor/skills/
+
+### OS ###
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+### Docs / site generators (if added later) ###
+/book/
+/site/
+.docusaurus/
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+### Misc tooling ###
+*.tmp
+*.temp
+.cache/
+.direnv/
+.envrc.local
+.terraform/
+*.tfstate
+*.tfstate.*

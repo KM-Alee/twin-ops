@@ -1,0 +1,23 @@
+[package]
+name = "twin-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "twin_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "twin"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+twin-app = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+twin-app = { workspace = true }
