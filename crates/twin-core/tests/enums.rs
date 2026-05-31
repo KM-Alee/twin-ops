@@ -1,0 +1,54 @@
+use std::str::FromStr;
+
+use twin_core::{EdgeClass, EdgeKind, EdgeState, NodeKind, NodeState, ParseError};
+
+fn roundtrip<T>(variants: &[T])
+where
+    T: std::fmt::Display + std::str::FromStr<Err = ParseError> + PartialEq + std::fmt::Debug + Copy,
+{
+    for variant in variants {
+        let s = variant.to_string();
+        let parsed = T::from_str(&s).expect("parse");
+        assert_eq!(*variant, parsed, "round-trip failed for {s}");
+    }
+}
+
+#[test]
+fn all_variants_roundtrip() {
+    roundtrip(&[
+        NodeKind::Host,
+        NodeKind::Process,
+        NodeKind::Service,
+        NodeKind::Port,
+        NodeKind::File,
+        NodeKind::Cgroup,
+    ]);
+    roundtrip(&[NodeState::Active, NodeState::Stale, NodeState::Gone]);
+    roundtrip(&[
+        EdgeKind::ParentOf,
+        EdgeKind::Owns,
+        EdgeKind::InCgroup,
+        EdgeKind::ListensOn,
+        EdgeKind::ConnectsTo,
+        EdgeKind::ConfiguredBy,
+        EdgeKind::DependsOn,
+    ]);
+    roundtrip(&[
+        EdgeClass::Observed,
+        EdgeClass::Inferred,
+        EdgeClass::Predicted,
+    ]);
+    roundtrip(&[EdgeState::Active, EdgeState::Stale, EdgeState::Gone]);
+}
+
+#[test]
+fn unknown_enum_errors() {
+    let err = NodeKind::from_str("unknown").expect_err("bad");
+    assert!(matches!(
+        err,
+        ParseError::Enum {
+            kind: "NodeKind",
+            ..
+        }
+    ));
+}

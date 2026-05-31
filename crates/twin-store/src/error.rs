@@ -31,6 +31,8 @@ pub enum StoreError {
     TransactionBegin { source: rusqlite::Error },
     #[error("transaction commit failed: {source}")]
     TransactionCommit { source: rusqlite::Error },
+    #[error("cannot decode stored observation: {detail}")]
+    Decode { detail: String },
 }
 
 pub fn is_foreign_key_violation(err: &rusqlite::Error) -> bool {
@@ -51,5 +53,6 @@ pub fn store_error_source(err: &StoreError) -> Option<&rusqlite::Error> {
         | StoreError::HealthCheck { source }
         | StoreError::TransactionBegin { source }
         | StoreError::TransactionCommit { source } => Some(source),
+        StoreError::Decode { .. } => None,
     }
 }

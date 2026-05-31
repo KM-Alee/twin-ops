@@ -8,6 +8,7 @@ license.workspace = true
 rusqlite = { workspace = true }
 thiserror = { workspace = true }
 twin-core = { workspace = true }
+twin-observation = { workspace = true }
 
 [dev-dependencies]
 rusqlite = { workspace = true }

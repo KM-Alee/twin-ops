@@ -4,6 +4,7 @@ members = [
     "crates/twin-app",
     "crates/twin-core",
     "crates/twin-store",
+    "crates/twin-observation",
 ]
 resolver = "2"
 
@@ -16,6 +17,7 @@ license = "MIT"
 twin-core = { path = "crates/twin-core" }
 twin-store = { path = "crates/twin-store" }
 twin-app = { path = "crates/twin-app" }
+twin-observation = { path = "crates/twin-observation" }
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -23,4 +25,5 @@ serde_json = "1"
 toml = "0.8"
 thiserror = "1"
 dirs = "5"
+uuid = { version = "1", features = ["v4", "serde"] }
 tempfile = "3"

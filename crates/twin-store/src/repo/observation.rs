@@ -1,7 +1,16 @@
+use std::str::FromStr;
+
 use rusqlite::{params, Row};
+use twin_core::{NodeId, ObservationId, TimestampNs};
+use twin_observation::{
+    ConfidenceHint, Observation, ObservationKind, ObservationMetadata, ObservationSource,
+    RawEvidenceRef, RedactionState,
+};
 
 use crate::error::StoreError;
 use crate::store::Store;
+
+const RAW_REF_KEY: &str = "__raw_ref";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservationRow {
@@ -118,6 +127,112 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM observations", [], |row| row.get(0))
             .map_err(|source| StoreError::Query { source })
     }
+
+    pub fn insert_observation_typed(&mut self, obs: &Observation) -> Result<(), StoreError> {
+        self.insert_observation(&ObservationRow::from(obs))
+    }
+
+    pub fn get_observation_typed(
+        &self,
+        id: ObservationId,
+    ) -> Result<Option<Observation>, StoreError> {
+        match self.get_observation(&id.to_string())? {
+            Some(row) => Ok(Some(Observation::try_from(&row)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+impl From<&Observation> for ObservationRow {
+    fn from(obs: &Observation) -> Self {
+        let mut metadata = obs.metadata().clone();
+        metadata.remove(RAW_REF_KEY);
+        if let Some(raw_ref) = obs.raw_ref() {
+            metadata.insert_str(RAW_REF_KEY, raw_ref.as_str());
+        }
+        ObservationRow {
+            id: obs.id().to_string(),
+            source: obs.source().to_string(),
+            kind: obs.kind().to_string(),
+            subject_node_id: obs.subject().map(|n| n.as_str().to_string()),
+            object_node_id: obs.object().map(|n| n.as_str().to_string()),
+            timestamp_ns: obs.timestamp().as_i64(),
+            confidence_hint: obs.confidence_hint().to_string(),
+            redaction_state: obs.redaction_state().to_string(),
+            metadata_json: metadata.to_json(),
+            collector_run_id: None,
+        }
+    }
+}
+
+impl TryFrom<&ObservationRow> for Observation {
+    type Error = StoreError;
+
+    fn try_from(row: &ObservationRow) -> Result<Self, Self::Error> {
+        decode_observation_row(row)
+    }
+}
+
+fn decode_observation_row(row: &ObservationRow) -> Result<Observation, StoreError> {
+    let id = parse_field("observation id", &row.id, ObservationId::from_str)?;
+    let source = parse_field("source", &row.source, ObservationSource::from_str)?;
+    let kind = parse_field("kind", &row.kind, ObservationKind::from_str)?;
+    let confidence_hint = parse_field(
+        "confidence_hint",
+        &row.confidence_hint,
+        ConfidenceHint::from_str,
+    )?;
+    let redaction_state = parse_field(
+        "redaction_state",
+        &row.redaction_state,
+        RedactionState::from_str,
+    )?;
+    let subject = row
+        .subject_node_id
+        .as_deref()
+        .map(|s| parse_field("subject_node_id", s, NodeId::from_str))
+        .transpose()?;
+    let object = row
+        .object_node_id
+        .as_deref()
+        .map(|s| parse_field("object_node_id", s, NodeId::from_str))
+        .transpose()?;
+    let mut metadata =
+        ObservationMetadata::from_json(&row.metadata_json).map_err(|e| StoreError::Decode {
+            detail: e.to_string(),
+        })?;
+    let raw_ref = metadata
+        .remove(RAW_REF_KEY)
+        .map(|v| {
+            v.as_str()
+                .ok_or_else(|| StoreError::Decode {
+                    detail: format!("{RAW_REF_KEY} must be a string"),
+                })
+                .map(|s| RawEvidenceRef::new(s.to_string()))
+        })
+        .transpose()?;
+    Ok(Observation::from_parts(
+        id,
+        source,
+        kind,
+        subject,
+        object,
+        TimestampNs::new(row.timestamp_ns),
+        raw_ref,
+        confidence_hint,
+        redaction_state,
+        metadata,
+    ))
+}
+
+fn parse_field<T, E, F>(field: &str, value: &str, parse: F) -> Result<T, StoreError>
+where
+    E: std::fmt::Display,
+    F: FnOnce(&str) -> Result<T, E>,
+{
+    parse(value).map_err(|e| StoreError::Decode {
+        detail: format!("invalid {field} `{value}`: {e}"),
+    })
 }
 
 fn row_from_observation(row: &Row<'_>) -> Result<ObservationRow, rusqlite::Error> {
