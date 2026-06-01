@@ -82,6 +82,17 @@ Follow `docs/code-layout.md`: command code under `twin-app/src/commands/`, resul
 - CLI is thin shell: parse args → call app → render result. No business logic in `twin-cli`.
 - App layer orchestrates. No direct store access from CLI. CLI talks to `twin-app` only.
 
+### CLI human output
+
+Human-facing command output lives in `twin-cli/src/output/`. **Every command must look polished in the terminal** — not debug dumps or bare key-value lines.
+
+- Use the shared helpers in `output/format.rs` (`Lines`, tree rows, status tags, section headers).
+- Prefer a consistent layout: command title with rule line (`═`), short status summary, then tree (`├──` / `└──`) or graph connectors (`│`, `▼`) for structured data.
+- Show full paths and labels; do not truncate user-visible names for convenience.
+- Use `ok` / `warn` / `fail` status tags for health and outcomes; keep JSON output machine-oriented via `--json` only.
+- Graph views should read as trees or neighborhoods, not flat tables.
+- New commands ship with a human renderer and tests in `twin-cli/tests/output.rs` that lock in stable sections and formatting.
+
 ### Tests
 
 - Every slice needs tests. No slice ships without tests.

@@ -1,11 +1,10 @@
 use std::process;
-use std::str::FromStr;
 
 use clap::Parser;
-use twin_app::{AppError, GraphRequest, InitRequest, ScanRequest};
+use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
 use twin_cli::cli::args::{Cli, Command, DoctorArgs, GlobalArgs, GraphArgs, InitArgs, ScanArgs};
+use twin_cli::cli::graph;
 use twin_cli::output;
-use twin_core::{NodeId, NodeKind};
 
 fn main() {
     let cli = Cli::parse();
@@ -68,10 +67,10 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
 }
 
 fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
-    let request = match graph_request(args) {
+    let request = match graph::graph_request(args) {
         Ok(request) => request,
         Err(error) => {
-            eprintln!("Error: {error}");
+            eprint_graph_error(&error);
             return 1;
         }
     };
@@ -81,40 +80,20 @@ fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
             0
         }
         Err(error) => {
-            eprintln!("Error: {error}");
+            eprint_graph_error(&error);
             1
         }
     }
 }
 
-fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
-    let target = match &args.target {
-        Some(value) => {
-            Some(
-                NodeId::from_str(value).map_err(|source| AppError::InvalidGraphTarget {
-                    value: value.clone(),
-                    source,
-                })?,
-            )
-        }
-        None => None,
-    };
-    let kind = match &args.kind {
-        Some(value) => {
-            Some(
-                NodeKind::from_str(value).map_err(|source| AppError::InvalidGraphTarget {
-                    value: value.clone(),
-                    source,
-                })?,
-            )
-        }
-        None => None,
-    };
-    Ok(GraphRequest {
-        config_override: args.config.clone(),
-        kind,
-        target,
-    })
+fn eprint_graph_error(error: &AppError) {
+    eprintln!("Error: {error}");
+    if matches!(
+        error,
+        AppError::InvalidGraphTarget { .. } | AppError::Graph(GraphError::MissingQuery)
+    ) {
+        eprintln!("Try: twin graph process, twin graph 1234, or twin graph process:pid:1234");
+    }
 }
 
 fn emit<T: serde::Serialize>(json: bool, value: &T, text: fn(&T) -> String) {

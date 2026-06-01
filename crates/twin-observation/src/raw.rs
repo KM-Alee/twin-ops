@@ -39,7 +39,6 @@ impl RawEvidenceRef {
     }
 }
 
-/// `collector` is pipeline provenance only; persisted via `collector_run_id` in slice 4+.
 #[derive(Debug, Clone)]
 pub struct RawObservation {
     pub source: ObservationSource,

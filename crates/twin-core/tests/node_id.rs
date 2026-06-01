@@ -3,8 +3,11 @@ use std::str::FromStr;
 use twin_core::{NodeId, NodeKind, ParseError};
 
 #[test]
-fn process_pid() {
-    assert_eq!(NodeId::process(8841).as_str(), "process:pid:8841");
+fn process_pid_roundtrip() {
+    let id = NodeId::process(8841);
+    assert_eq!(id.as_str(), "process:pid:8841");
+    assert_eq!(id.process_pid(), Some(8841));
+    assert_eq!(NodeId::host("x").process_pid(), None);
 }
 
 #[test]

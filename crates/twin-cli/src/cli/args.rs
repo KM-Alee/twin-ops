@@ -52,9 +52,12 @@ pub struct GraphArgs {
     #[arg(long, help = "Config file path")]
     pub config: Option<PathBuf>,
 
-    #[arg(long, help = "List nodes of this kind (e.g. process)")]
+    #[arg(long, help = "List nodes of this kind (default: process)")]
     pub kind: Option<String>,
 
-    #[arg(value_name = "TARGET", help = "Show neighborhood for this node id")]
+    #[arg(
+        value_name = "TARGET",
+        help = "Node id, pid, or kind (e.g. process, 1234, process:pid:1234)"
+    )]
     pub target: Option<String>,
 }

@@ -23,7 +23,8 @@ fn sample_init_result() -> InitResult {
 #[test]
 fn init_render_created() {
     let text = output::init::render(&sample_init_result());
-    assert!(text.contains("Twin init: Created"));
+    assert!(text.contains("twin init"));
+    assert!(text.contains("created"));
 }
 
 #[test]
@@ -35,7 +36,7 @@ fn init_render_unchanged() {
         ..sample_init_result()
     };
     let text = output::init::render(&result);
-    assert!(text.contains("Already exists"));
+    assert!(text.contains("unchanged"));
 }
 
 #[test]
@@ -60,8 +61,9 @@ fn doctor_render_sections() {
         },
     };
     let text = output::doctor::render(&result);
-    assert!(text.contains("Twin Doctor"));
+    assert!(text.contains("twin doctor"));
     assert!(text.contains("not initialized"));
+    assert!(text.contains("├──"));
 }
 
 #[test]
@@ -77,8 +79,9 @@ fn scan_render_counts() {
         warning_details: vec![],
     };
     let text = output::scan::render(&result);
-    assert!(text.contains("processes: 143"));
-    assert!(text.contains("parent-child: 128"));
+    assert!(text.contains("twin scan"));
+    assert!(text.contains("143"));
+    assert!(text.contains("parent-of"));
 }
 
 #[test]
@@ -103,8 +106,8 @@ fn scan_render_warning_aggregation() {
         warning_details: vec![],
     };
     let text = output::scan::render(&result);
-    assert!(text.contains("4 processes disappeared"));
-    assert!(text.contains("2 process exe links unreadable"));
+    assert!(text.contains("4 disappeared during scan"));
+    assert!(text.contains("2 unreadable exe links"));
 }
 
 #[test]
@@ -128,6 +131,7 @@ fn graph_list_render_stable() {
         }],
     });
     let text = output::graph::render(&result);
+    assert!(text.contains("twin graph"));
     assert!(text.contains("Process tree"));
     assert!(text.contains("└──"));
     assert!(text.contains("systemd"));

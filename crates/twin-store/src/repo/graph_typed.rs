@@ -6,6 +6,7 @@ use twin_core::{
 };
 
 use crate::error::StoreError;
+use crate::repo::decode::parse_field;
 use crate::repo::{EdgeRow, NodeRow};
 use crate::store::Store;
 
@@ -92,16 +93,6 @@ impl TryFrom<&EdgeRow> for GraphEdge {
             metadata: GraphMetadata::from_json(row.metadata_json.clone()),
         }))
     }
-}
-
-fn parse_field<T, E, F>(field: &str, value: &str, parse: F) -> Result<T, StoreError>
-where
-    E: std::fmt::Display,
-    F: FnOnce(&str) -> Result<T, E>,
-{
-    parse(value).map_err(|e| StoreError::Decode {
-        detail: format!("invalid {field} `{value}`: {e}"),
-    })
 }
 
 impl Store {

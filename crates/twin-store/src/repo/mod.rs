@@ -1,4 +1,5 @@
 pub mod collector_run;
+pub(crate) mod decode;
 pub mod edge;
 pub mod edge_observation;
 pub mod graph_typed;

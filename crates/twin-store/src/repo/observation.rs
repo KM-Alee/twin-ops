@@ -8,6 +8,7 @@ use twin_observation::{
 };
 
 use crate::error::StoreError;
+use crate::repo::decode::parse_field;
 use crate::store::Store;
 
 const RAW_REF_KEY: &str = "__raw_ref";
@@ -233,16 +234,6 @@ fn decode_observation_row(row: &ObservationRow) -> Result<Observation, StoreErro
         redaction_state,
         metadata,
     ))
-}
-
-fn parse_field<T, E, F>(field: &str, value: &str, parse: F) -> Result<T, StoreError>
-where
-    E: std::fmt::Display,
-    F: FnOnce(&str) -> Result<T, E>,
-{
-    parse(value).map_err(|e| StoreError::Decode {
-        detail: format!("invalid {field} `{value}`: {e}"),
-    })
 }
 
 fn row_from_observation(row: &Row<'_>) -> Result<ObservationRow, rusqlite::Error> {

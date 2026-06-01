@@ -41,6 +41,10 @@ impl ProcessBatch {
     pub fn ended_at(&self) -> TimestampNs {
         self.ended_at
     }
+
+    pub fn drain_observations(&mut self) -> Vec<RawObservation> {
+        std::mem::take(&mut self.observations)
+    }
 }
 
 pub struct ProcessCollector<R: ProcReader = StdProcReader> {

@@ -64,7 +64,7 @@ pub enum GraphError {
     Paths(#[from] PathError),
     #[error("database is not initialized; run `twin init` first")]
     DatabaseNotInitialized,
-    #[error("specify --kind or a node id")]
+    #[error("specify a node id or kind")]
     MissingQuery,
     #[error("cannot open database: {0}")]
     StoreOpen(#[from] StoreOpenError),

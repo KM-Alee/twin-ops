@@ -33,21 +33,16 @@ fn scan_at(
     proc_root: &Path,
     db_path: &Path,
 ) -> Result<ScanResult, AppError> {
-    let _config_path = layout.config_file(request.config_override.as_deref());
+    let _ = layout.config_file(request.config_override.as_deref());
     if !db_path.exists() {
         return Err(ScanError::DatabaseNotInitialized.into());
     }
     let started_at = TimestampNs::now();
     let batch = ProcessCollector::new(proc_root).collect(started_at)?;
-    persist_scan(layout, request, db_path, batch)
+    persist_scan(db_path, batch)
 }
 
-fn persist_scan(
-    _layout: &TwinLayout,
-    _request: &ScanRequest,
-    db_path: &Path,
-    batch: ProcessBatch,
-) -> Result<ScanResult, AppError> {
+fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, AppError> {
     let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
     if !store.is_initialized().map_err(ScanError::Store)? {
         return Err(ScanError::DatabaseNotInitialized.into());
@@ -55,12 +50,8 @@ fn persist_scan(
 
     let pipeline = Pipeline::default();
     let mut observations: Vec<Observation> = Vec::new();
-    for raw in batch.observations() {
-        observations.push(
-            pipeline
-                .process(raw.clone())
-                .map_err(ScanError::Observation)?,
-        );
+    for raw in batch.drain_observations() {
+        observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
 
     let parent_obs_by_child = parent_observation_ids(&observations);
@@ -163,12 +154,10 @@ fn parent_observation_ids(observations: &[Observation]) -> HashMap<u32, Observat
         let Some(child) = obs.object() else {
             continue;
         };
-        let Some(pid_str) = child.as_str().strip_prefix("process:pid:") else {
+        let Some(pid) = child.process_pid() else {
             continue;
         };
-        if let Ok(pid) = pid_str.parse::<u32>() {
-            map.insert(pid, obs.id());
-        }
+        map.insert(pid, obs.id());
     }
     map
 }
@@ -187,49 +176,43 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
         }
     }
     let mut out = Vec::new();
-    if vanished > 0 {
-        out.push(ScanWarning {
-            kind: "vanished_processes".to_string(),
-            count: vanished,
-        });
-    }
-    if permission > 0 {
-        out.push(ScanWarning {
-            kind: "permission_denied".to_string(),
-            count: permission,
-        });
-    }
-    if malformed > 0 {
-        out.push(ScanWarning {
-            kind: "malformed_proc_files".to_string(),
-            count: malformed,
-        });
-    }
-    if exe > 0 {
-        out.push(ScanWarning {
-            kind: "exe_unreadable".to_string(),
-            count: exe,
-        });
-    }
+    push_aggregate(&mut out, ProcessWarningKind::Vanished, vanished);
+    push_aggregate(&mut out, ProcessWarningKind::PermissionDenied, permission);
+    push_aggregate(&mut out, ProcessWarningKind::Malformed, malformed);
+    push_aggregate(&mut out, ProcessWarningKind::ExeUnreadable, exe);
     out
+}
+
+fn push_aggregate(out: &mut Vec<ScanWarning>, kind: ProcessWarningKind, count: usize) {
+    if count > 0 {
+        out.push(ScanWarning {
+            kind: kind.aggregate_key().to_string(),
+            count,
+        });
+    }
 }
 
 fn detailed_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarningDetail> {
     warnings
         .iter()
+        .filter(|w| w.kind().includes_json_detail())
         .map(|w| ScanWarningDetail {
-            kind: warning_kind_label(w.kind()).to_string(),
+            kind: w.kind().detail_key().to_string(),
             path: w.path().display().to_string(),
             detail: w.detail().to_string(),
         })
         .collect()
 }
 
-fn warning_kind_label(kind: ProcessWarningKind) -> &'static str {
-    match kind {
-        ProcessWarningKind::Vanished => "vanished",
-        ProcessWarningKind::PermissionDenied => "permission_denied",
-        ProcessWarningKind::Malformed => "malformed",
-        ProcessWarningKind::ExeUnreadable => "exe_unreadable",
+#[cfg(test)]
+mod tests {
+    use twin_collectors::ProcessWarningKind;
+
+    #[test]
+    fn bulk_coverage_gaps_omit_per_pid_json_details() {
+        assert!(!ProcessWarningKind::ExeUnreadable.includes_json_detail());
+        assert!(!ProcessWarningKind::PermissionDenied.includes_json_detail());
+        assert!(ProcessWarningKind::Vanished.includes_json_detail());
+        assert!(ProcessWarningKind::Malformed.includes_json_detail());
     }
 }

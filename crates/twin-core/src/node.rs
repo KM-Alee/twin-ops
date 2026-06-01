@@ -141,6 +141,10 @@ impl NodeId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn process_pid(&self) -> Option<u32> {
+        self.0.strip_prefix("process:pid:")?.parse().ok()
+    }
 }
 
 impl fmt::Display for NodeId {

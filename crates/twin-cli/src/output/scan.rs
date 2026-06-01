@@ -1,33 +1,53 @@
-use twin_app::{ScanResult, ScanWarning};
+use twin_app::ScanResult;
+use twin_collectors::ProcessWarningKind;
+
+use crate::output::format::{format_duration_ns, Lines, Status};
 
 pub fn render(result: &ScanResult) -> String {
-    let mut lines = vec![
-        "Scan complete.".to_string(),
-        String::new(),
-        "Nodes:".to_string(),
-        format!("- processes: {}", result.process_count),
-        String::new(),
-        "Edges:".to_string(),
-        format!("- parent-child: {}", result.parent_edge_count),
-    ];
+    let mut out = Lines::new();
+    out.title("twin scan");
+
+    let status = if result.warning_count > 0 {
+        Status::Warn
+    } else {
+        Status::Ok
+    };
+    out.status_row(
+        status,
+        "result",
+        &format!(
+            "{} processes, {} parent edges",
+            result.process_count, result.parent_edge_count
+        ),
+    );
+    out.status_row(
+        Status::Neutral,
+        "duration",
+        &format_duration_ns(result.started_at_ns, result.ended_at_ns),
+    );
+    out.blank();
+    out.section("persisted");
+    out.tree_leaf(false, "processes", &result.process_count.to_string());
+    out.tree_leaf(false, "parent-of", &result.parent_edge_count.to_string());
+    out.tree_leaf(true, "observations", &result.observation_count.to_string());
 
     if result.warning_count > 0 {
-        lines.push(String::new());
-        lines.push("Warnings:".to_string());
-        for warning in &result.warnings {
-            lines.push(format!("- {}", warning_line(warning)));
+        out.blank();
+        out.section(&format!("warnings ({})", result.warning_count));
+        let warnings = &result.warnings;
+        for (i, warning) in warnings.iter().enumerate() {
+            let is_last = i + 1 == warnings.len();
+            let (kind, detail) = warning_parts(&warning.kind, warning.count);
+            out.tree_leaf(is_last, kind, &detail);
         }
     }
 
-    lines.join("\n")
+    out.into_string()
 }
 
-fn warning_line(warning: &ScanWarning) -> String {
-    match warning.kind.as_str() {
-        "vanished_processes" => format!("{} processes disappeared during scan", warning.count),
-        "exe_unreadable" => format!("{} process exe links unreadable", warning.count),
-        "permission_denied" => format!("{} processes permission denied", warning.count),
-        "malformed_proc_files" => format!("{} malformed proc files", warning.count),
-        other => format!("{} {}", warning.count, other.replace('_', " ")),
+fn warning_parts(kind: &str, count: usize) -> (&'static str, String) {
+    if let Some(kind) = ProcessWarningKind::from_aggregate_key(kind) {
+        return kind.cli_summary(count);
     }
+    ("other", format!("{count} {}", kind.replace('_', " ")))
 }

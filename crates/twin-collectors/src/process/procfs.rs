@@ -134,20 +134,7 @@ pub(crate) fn read_process(
                 err.to_string(),
             ));
         }
-        Err(err) if is_vanished(&err) => {
-            warnings.push(ProcessWarning::new(
-                ProcessWarningKind::Vanished,
-                exe_path,
-                err.to_string(),
-            ));
-        }
-        Err(err) => {
-            warnings.push(ProcessWarning::new(
-                ProcessWarningKind::ExeUnreadable,
-                exe_path,
-                err.to_string(),
-            ));
-        }
+        Err(_) => {}
     }
 
     Some(record)

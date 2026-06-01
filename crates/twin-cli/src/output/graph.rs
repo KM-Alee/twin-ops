@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{GraphListResult, GraphNodeResult, GraphParentEdge, GraphResult};
 
+use crate::output::format::{Lines, Status};
+
 pub fn render(result: &GraphResult) -> String {
     match result {
         GraphResult::List(list) => render_list(list),
@@ -14,7 +16,15 @@ fn render_list(list: &GraphListResult) -> String {
         twin_core::NodeKind::Process => "Process tree",
         other => return format!("Unsupported list kind: {other}"),
     };
-    let mut lines = vec![format!("{title} ({} nodes)", list.nodes.len()), String::new()];
+    let mut out = Lines::new();
+    out.title("twin graph");
+    out.status_row(
+        Status::Neutral,
+        "view",
+        &format!("{title}, {} nodes", list.nodes.len()),
+    );
+    out.blank();
+    let mut lines = Vec::new();
 
     let labels: HashMap<String, String> = list
         .nodes
@@ -37,23 +47,43 @@ fn render_list(list: &GraphListResult) -> String {
 
     if roots.is_empty() {
         for node in &list.nodes {
-            render_tree_branch(&mut lines, &node.id, &labels[&node.id], &children, &labels, "", true);
+            render_tree_branch(
+                &mut lines,
+                &node.id,
+                &labels[&node.id],
+                &children,
+                &labels,
+                "",
+                true,
+            );
         }
     } else {
         for (i, root) in roots.iter().enumerate() {
             let is_last_root = i + 1 == roots.len();
             let label = labels.get(root).map(String::as_str).unwrap_or("?");
-            render_tree_branch(&mut lines, root, label, &children, &labels, "", is_last_root);
+            render_tree_branch(
+                &mut lines,
+                root,
+                label,
+                &children,
+                &labels,
+                "",
+                is_last_root,
+            );
             if !is_last_root {
                 lines.push(String::new());
             }
         }
     }
 
-    lines.join("\n")
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
 fn render_node(node: &GraphNodeResult) -> String {
+    let mut out = Lines::new();
+    out.title("twin graph");
+    out.status_row(Status::Neutral, "view", "process neighborhood");
+    out.blank();
     let mut lines = Vec::new();
 
     lines.push("parent_of (observed)".to_string());
@@ -103,7 +133,7 @@ fn render_node(node: &GraphNodeResult) -> String {
         lines.extend(evidence);
     }
 
-    lines.join("\n")
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
 fn render_tree_branch(
@@ -116,10 +146,7 @@ fn render_tree_branch(
     is_last: bool,
 ) {
     let branch = if is_last { "└──" } else { "├──" };
-    lines.push(format!(
-        "{prefix}{branch} {}",
-        format_peer(node_id, label)
-    ));
+    lines.push(format!("{prefix}{branch} {}", format_peer(node_id, label)));
     let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
     if let Some(kids) = children.get(node_id) {
         for (i, (child_id, child_label)) in kids.iter().enumerate() {
@@ -216,7 +243,9 @@ fn parse_stat_ppid(line: &str) -> Option<String> {
 }
 
 fn peer_pid(node_id: &str) -> Option<u32> {
-    node_id.strip_prefix("process:pid:")?.parse().ok()
+    std::str::FromStr::from_str(node_id)
+        .ok()
+        .and_then(|id: twin_core::NodeId| id.process_pid())
 }
 
 #[cfg(test)]
@@ -225,9 +254,7 @@ mod tests {
 
     #[test]
     fn summarizes_duplicate_ppid_evidence() {
-        let refs: Vec<String> = (2..=5)
-            .map(|n| format!("/proc/{n}/stat ppid=1"))
-            .collect();
+        let refs: Vec<String> = (2..=5).map(|n| format!("/proc/{n}/stat ppid=1")).collect();
         let summary = summarize_child_stat_evidence(&refs, 4).expect("summary");
         assert!(summary.contains("4 children"));
         assert!(summary.contains("ppid=1"));
@@ -237,10 +264,7 @@ mod tests {
     fn tree_branch_renders_connector() {
         let mut lines = Vec::new();
         let children = BTreeMap::new();
-        let labels = HashMap::from([(
-            "process:pid:1".to_string(),
-            "systemd".to_string(),
-        )]);
+        let labels = HashMap::from([("process:pid:1".to_string(), "systemd".to_string())]);
         render_tree_branch(
             &mut lines,
             "process:pid:1",

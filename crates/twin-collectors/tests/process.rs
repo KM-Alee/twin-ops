@@ -88,6 +88,30 @@ fn empty_cmdline_is_valid() {
 }
 
 #[test]
+fn missing_exe_is_not_vanished_warning() {
+    let tmp = TempDir::new().expect("tempdir");
+    let proc = tmp.path().join("proc");
+    std::fs::create_dir_all(&proc).expect("proc root");
+    write_proc_fixture(
+        &proc,
+        2,
+        "2 (kthreadd) S 0 0 0 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t0\t0\t0\t0\n",
+        b"",
+        None,
+    );
+    let batch = ProcessCollector::new(&proc)
+        .collect(TimestampNs::new(1))
+        .expect("collect");
+    assert_eq!(batch.records().len(), 1);
+    assert!(batch.records()[0].exe().is_none());
+    assert!(!batch
+        .warnings()
+        .iter()
+        .any(|w| w.kind() == ProcessWarningKind::Vanished));
+}
+
+#[test]
 fn malformed_stat_becomes_warning() {
     let tmp = TempDir::new().expect("tempdir");
     let proc = tmp.path().join("proc");

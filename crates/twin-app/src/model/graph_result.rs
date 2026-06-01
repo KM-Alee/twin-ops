@@ -46,7 +46,11 @@ pub enum GraphResult {
 }
 
 impl GraphResult {
-    pub fn list(kind: NodeKind, nodes: Vec<GraphNodeSummary>, parent_edges: Vec<GraphParentEdge>) -> Self {
+    pub fn list(
+        kind: NodeKind,
+        nodes: Vec<GraphNodeSummary>,
+        parent_edges: Vec<GraphParentEdge>,
+    ) -> Self {
         Self::List(GraphListResult {
             kind,
             nodes,
