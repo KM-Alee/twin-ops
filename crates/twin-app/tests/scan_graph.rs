@@ -7,7 +7,9 @@ use twin_collectors::COLLECTOR_NAME;
 use twin_core::{NodeId, NodeKind};
 use twin_store::Store;
 
-use support::IsolatedHome;
+use support::{write_proc_fixture_with_cgroup, write_socket_fd, write_tcp_table, IsolatedHome};
+
+const TCP_HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
 
 fn fixture_proc(home: &support::IsolatedHome) -> PathBuf {
     let proc = home.layout.data_dir.join("fixture-proc");
@@ -206,22 +208,138 @@ fn graph_in_service_target_by_id() {
     assert!(matches!(result, twin_app::GraphResult::Service(_)));
 }
 
+fn fixture_proc_with_listener(home: &IsolatedHome) -> PathBuf {
+    let proc = home.layout.data_dir.join("fixture-proc-listener");
+    std::fs::create_dir_all(&proc).expect("proc");
+    write_proc_fixture_with_cgroup(
+        &proc,
+        1,
+        "1 (systemd) S 0 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t0\t0\t0\t0\n",
+        b"/usr/lib/systemd/systemd\0",
+        None,
+        None,
+    );
+    write_proc_fixture_with_cgroup(
+        &proc,
+        721,
+        "721 (postgres) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t999\t999\t999\t999\n",
+        b"/usr/bin/postgres\0",
+        None,
+        Some("0::/system.slice/postgresql.service\n"),
+    );
+    write_tcp_table(
+        &proc,
+        "tcp",
+        &format!(
+            "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0"
+        ),
+    );
+    write_socket_fd(&proc, 721, 8, 12345);
+    proc
+}
+
 #[test]
-fn graph_in_rejects_unsupported_port_kind() {
+fn scan_in_persists_port_and_listener_edges() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
-    let err = twin_app::graph_in(
+    let proc = fixture_proc_with_listener(&home);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    assert_eq!(result.tcp_listener_count, 1);
+    assert_eq!(result.port_count, 1);
+    assert!(
+        result.socket_owner_inode_count >= 1,
+        "socket_owner_inode_count=0; probe had owners"
+    );
+    assert!(
+        result.process_listens_on_edge_count >= 1,
+        "tcp_listeners={} ports={} unmapped={} owner_inodes={} warnings={:?}",
+        result.tcp_listener_count,
+        result.port_count,
+        result.unmapped_listener_socket_count,
+        result.socket_owner_inode_count,
+        result.warnings
+    );
+    assert!(result.service_listens_on_edge_count >= 1);
+
+    let store = Store::open(&home.layout.db_file()).expect("open");
+    assert!(store
+        .get_node("port:tcp:127.0.0.1:5432")
+        .expect("get")
+        .is_some());
+    let listens: Vec<_> = store
+        .list_edges_by_kind("listens_on")
+        .expect("edges")
+        .into_iter()
+        .filter(|e| e.to_node_id == "port:tcp:127.0.0.1:5432")
+        .collect();
+    assert!(listens.len() >= 2);
+}
+
+#[test]
+fn graph_in_port_neighborhood() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc_with_listener(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let port = NodeId::port_tcp("127.0.0.1", 5432).expect("port");
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            target: Some(port),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let twin_app::GraphResult::Port(view) = result else {
+        panic!("expected port view");
+    };
+    assert!(!view.process_listeners.is_empty());
+    assert!(!view.service_listeners.is_empty());
+    assert!(!view.evidence.is_empty());
+}
+
+#[test]
+fn graph_in_lists_port_nodes() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc_with_listener(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
             kind: Some(NodeKind::Port),
             ..GraphRequest::default()
         },
     )
-    .expect_err("unsupported");
-    assert!(matches!(
-        err,
-        twin_app::AppError::UnsupportedGraphKind { .. }
-    ));
+    .expect("graph");
+    let twin_app::GraphResult::List(list) = result else {
+        panic!("expected list");
+    };
+    assert_eq!(list.kind, NodeKind::Port);
+    assert_eq!(list.nodes.len(), 1);
+}
+
+#[test]
+fn graph_in_service_shows_listening_ports() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc_with_listener(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            target: Some(NodeId::service("postgresql.service")),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let twin_app::GraphResult::Service(service) = result else {
+        panic!("expected service");
+    };
+    assert!(!service.listening_ports.is_empty());
+    assert_eq!(service.listening_ports[0].id, "port:tcp:127.0.0.1:5432");
 }
 
 #[test]

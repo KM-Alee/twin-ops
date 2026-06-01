@@ -8,8 +8,8 @@ pub use error::{AppError, GraphError, ScanError};
 pub use model::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEdgeSummary,
     GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode,
-    GraphParentEdge, GraphResult, GraphServiceResult, InitResult, PermissionMode, ScanResult,
-    ScanWarning, ScanWarningDetail,
+    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, InitResult, PermissionMode,
+    ScanResult, ScanWarning, ScanWarningDetail,
 };
 pub use paths::TwinLayout;
 

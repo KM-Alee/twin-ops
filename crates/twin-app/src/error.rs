@@ -56,6 +56,8 @@ pub enum ScanError {
     Store(#[from] StoreError),
     #[error("observation pipeline error: {0}")]
     Observation(#[from] ObservationError),
+    #[error("invalid port id: {0}")]
+    InvalidPortId(#[from] ParseError),
 }
 
 #[derive(Debug, thiserror::Error)]

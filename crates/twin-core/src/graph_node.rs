@@ -105,6 +105,35 @@ impl GraphNode {
         }
     }
 
+    pub fn tcp_port(
+        ip: &str,
+        port: u16,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Result<Self, crate::error::ParseError> {
+        let id = NodeId::port_tcp(ip, port)?;
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        let display_ip = if ip.contains(':') {
+            format!("[{ip}]")
+        } else {
+            ip.to_string()
+        };
+        Ok(Self {
+            id,
+            kind: NodeKind::Port,
+            label: format!("tcp:{display_ip}:{port}"),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"protocol":"tcp"}"#),
+        })
+    }
+
     pub fn service(unit: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::service(unit);
         let (first_seen, valid_from) = match existing {

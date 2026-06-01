@@ -3,6 +3,6 @@ pub mod process;
 
 pub use error::CollectorError;
 pub use process::{
-    ProcessBatch, ProcessCollector, ProcessRecord, ProcessWarning, ProcessWarningKind,
-    COLLECTOR_NAME,
+    parse_socket_fd_target, parse_tcp_table, ProcessBatch, ProcessCollector, ProcessRecord,
+    ProcessWarning, ProcessWarningKind, SocketOwner, TcpSocketRecord, TcpTableKind, COLLECTOR_NAME,
 };

@@ -4,12 +4,22 @@ use std::path::{Path, PathBuf};
 use crate::error::CollectorError;
 use crate::process::cgroup::parse_cgroup_memberships;
 use crate::process::process_record::ProcessRecord;
+use crate::process::socket::{parse_socket_fd_target, SocketOwner};
 use crate::process::warning::{ProcessWarning, ProcessWarningKind};
 
 pub trait ProcReader {
     fn list_pids(&self, proc_root: &Path) -> Result<Vec<u32>, CollectorError>;
     fn read_file(&self, path: &Path) -> io::Result<Vec<u8>>;
     fn read_link(&self, path: &Path) -> io::Result<PathBuf>;
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
+}
+
+pub(crate) fn read_dir_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(path)? {
+        names.push(entry?.path());
+    }
+    Ok(names)
 }
 
 pub struct StdProcReader;
@@ -26,6 +36,133 @@ impl ProcReader for StdProcReader {
     fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
         std::fs::read_link(path)
     }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        read_dir_paths(path)
+    }
+}
+
+pub(crate) fn read_tcp_table_content(
+    reader: &dyn ProcReader,
+    proc_root: &Path,
+    table: crate::process::socket::TcpTableKind,
+    warnings: &mut Vec<ProcessWarning>,
+) -> Option<String> {
+    let path = proc_root.join("net").join(table.net_file_name());
+    match reader.read_file(&path) {
+        Ok(bytes) => match std::str::from_utf8(&bytes) {
+            Ok(text) => Some(text.to_string()),
+            Err(e) => {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::TcpTableMalformed,
+                    path,
+                    e.to_string(),
+                ));
+                None
+            }
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if table == crate::process::socket::TcpTableKind::Tcp {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::TcpTableMissing,
+                    path,
+                    err.to_string(),
+                ));
+            }
+            None
+        }
+        Err(err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::TcpTableMalformed,
+                path,
+                err.to_string(),
+            ));
+            None
+        }
+    }
+}
+
+pub(crate) fn read_fd_socket_owners(
+    reader: &dyn ProcReader,
+    proc_root: &Path,
+    pid: u32,
+    warnings: &mut Vec<ProcessWarning>,
+) -> Vec<SocketOwner> {
+    let fd_dir = proc_root.join(pid.to_string()).join("fd");
+    let entries = match reader.read_dir(&fd_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) if is_vanished(&err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::FdVanished,
+                fd_dir.clone(),
+                err.to_string(),
+            ));
+            return Vec::new();
+        }
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::FdPermissionDenied,
+                fd_dir,
+                err.to_string(),
+            ));
+            return Vec::new();
+        }
+        Err(err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::FdMalformed,
+                fd_dir,
+                err.to_string(),
+            ));
+            return Vec::new();
+        }
+    };
+
+    let mut owners = Vec::new();
+    for path in entries {
+        let Some(fd_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Ok(fd) = fd_name.parse::<u32>() else {
+            continue;
+        };
+        match reader.read_link(&path) {
+            Ok(target) => {
+                let target_str = target.to_string_lossy();
+                let Some(inode) = parse_socket_fd_target(&target_str) else {
+                    continue;
+                };
+                owners.push(SocketOwner {
+                    pid,
+                    fd,
+                    inode,
+                    fd_path: format!("/proc/{pid}/fd/{fd}"),
+                });
+            }
+            Err(err) if is_vanished(&err) => {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::FdVanished,
+                    path.clone(),
+                    err.to_string(),
+                ));
+            }
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::FdPermissionDenied,
+                    path,
+                    err.to_string(),
+                ));
+            }
+            Err(err) => {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::FdMalformed,
+                    path,
+                    err.to_string(),
+                ));
+            }
+        }
+    }
+    owners
 }
 
 pub(crate) fn list_pids(proc_root: &Path) -> Result<Vec<u32>, CollectorError> {

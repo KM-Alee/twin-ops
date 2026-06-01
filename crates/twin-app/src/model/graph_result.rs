@@ -59,6 +59,15 @@ pub struct GraphServiceResult {
     pub service: GraphNodeSummary,
     pub owned_processes: Vec<GraphOwnedNode>,
     pub owned_cgroups: Vec<GraphOwnedNode>,
+    pub listening_ports: Vec<GraphOwnedNode>,
+    pub evidence: Vec<GraphEvidenceLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphPortResult {
+    pub port: GraphNodeSummary,
+    pub process_listeners: Vec<GraphOwnedNode>,
+    pub service_listeners: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -68,6 +77,7 @@ pub enum GraphResult {
     List(GraphListResult),
     Node(GraphNodeResult),
     Service(GraphServiceResult),
+    Port(GraphPortResult),
 }
 
 impl GraphResult {
@@ -101,12 +111,28 @@ impl GraphResult {
         service: GraphNodeSummary,
         owned_processes: Vec<GraphOwnedNode>,
         owned_cgroups: Vec<GraphOwnedNode>,
+        listening_ports: Vec<GraphOwnedNode>,
         evidence: Vec<GraphEvidenceLine>,
     ) -> Self {
         Self::Service(GraphServiceResult {
             service,
             owned_processes,
             owned_cgroups,
+            listening_ports,
+            evidence,
+        })
+    }
+
+    pub fn port(
+        port: GraphNodeSummary,
+        process_listeners: Vec<GraphOwnedNode>,
+        service_listeners: Vec<GraphOwnedNode>,
+        evidence: Vec<GraphEvidenceLine>,
+    ) -> Self {
+        Self::Port(GraphPortResult {
+            port,
+            process_listeners,
+            service_listeners,
             evidence,
         })
     }

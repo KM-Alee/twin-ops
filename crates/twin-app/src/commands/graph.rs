@@ -44,6 +44,7 @@ fn graph_at(
         return match target.kind() {
             Some(NodeKind::Service) => service_neighborhood(&store, target),
             Some(NodeKind::Process) => process_neighborhood(&store, target),
+            Some(NodeKind::Port) => port_neighborhood(&store, target),
             Some(kind) => Err(AppError::UnsupportedGraphKind {
                 kind: kind.to_string(),
             }),
@@ -135,8 +136,10 @@ fn list_by_kind(store: &Store, kind: NodeKind) -> Result<GraphResult, AppError> 
         .map(|n| node_summary(n.id(), n.label()))
         .collect();
 
-    if kind == NodeKind::Service {
-        return Ok(GraphResult::list(kind, summaries, Vec::new()));
+    if kind == NodeKind::Service || kind == NodeKind::Port {
+        let mut nodes = summaries;
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        return Ok(GraphResult::list(kind, nodes, Vec::new()));
     }
 
     if kind != NodeKind::Process {
@@ -214,6 +217,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     let summary = node_summary(node.id(), node.label());
     let mut owned_processes = Vec::new();
     let mut owned_cgroups = Vec::new();
+    let mut listening_ports = Vec::new();
     let mut evidence = Vec::new();
     let mut seen_evidence = HashSet::new();
 
@@ -222,6 +226,25 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
         .map_err(GraphError::Store)?;
     for row in outgoing {
         let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() == EdgeKind::ListensOn && edge.class() == EdgeClass::Inferred {
+            let peer = edge.to();
+            let peer_node = store
+                .get_node_typed(peer)
+                .map_err(GraphError::Store)?
+                .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
+            let obs_links = store
+                .list_observations_for_edge(edge.id().as_str())
+                .map_err(GraphError::Store)?;
+            let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
+            collect_socket_evidence(store, &observation_ids, &mut evidence, &mut seen_evidence);
+            listening_ports.push(GraphOwnedNode {
+                id: peer.as_str().to_string(),
+                label: peer_node.label().to_string(),
+                edge_class: edge.class().to_string(),
+                observation_ids,
+            });
+            continue;
+        }
         if edge.kind() != EdgeKind::Owns || edge.class() != EdgeClass::Inferred {
             continue;
         }
@@ -251,14 +274,113 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
 
     owned_processes.sort_by_key(|n| n.id.clone());
     owned_cgroups.sort_by_key(|n| n.id.clone());
+    listening_ports.sort_by_key(|n| n.id.clone());
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
     Ok(GraphResult::service(
         summary,
         owned_processes,
         owned_cgroups,
+        listening_ports,
         evidence,
     ))
+}
+
+fn port_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Port {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+
+    let summary = node_summary(node.id(), node.label());
+    let mut process_listeners = Vec::new();
+    let mut service_listeners = Vec::new();
+    let mut evidence = Vec::new();
+    let mut seen_evidence = HashSet::new();
+
+    let incoming = store
+        .list_edges_to(target.as_str())
+        .map_err(GraphError::Store)?;
+    for row in incoming {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::ListensOn {
+            continue;
+        }
+        let listener_id = edge.from();
+        let listener_node = store
+            .get_node_typed(listener_id)
+            .map_err(GraphError::Store)?
+            .ok_or_else(|| GraphError::NodeNotFound {
+                id: listener_id.clone(),
+            })?;
+        let obs_links = store
+            .list_observations_for_edge(edge.id().as_str())
+            .map_err(GraphError::Store)?;
+        let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
+        collect_socket_evidence(store, &observation_ids, &mut evidence, &mut seen_evidence);
+        let listener = GraphOwnedNode {
+            id: listener_id.as_str().to_string(),
+            label: listener_node.label().to_string(),
+            edge_class: edge.class().to_string(),
+            observation_ids,
+        };
+        match edge.class() {
+            EdgeClass::Observed if listener_node.kind() == NodeKind::Process => {
+                process_listeners.push(listener);
+            }
+            EdgeClass::Inferred if listener_node.kind() == NodeKind::Service => {
+                service_listeners.push(listener);
+            }
+            _ => {}
+        }
+    }
+
+    process_listeners.sort_by_key(|n| n.id.clone());
+    service_listeners.sort_by_key(|n| n.id.clone());
+    evidence.sort_by(|a, b| a.source.cmp(&b.source));
+
+    Ok(GraphResult::port(
+        summary,
+        process_listeners,
+        service_listeners,
+        evidence,
+    ))
+}
+
+fn collect_socket_evidence(
+    store: &Store,
+    observation_ids: &[String],
+    evidence: &mut Vec<GraphEvidenceLine>,
+    seen: &mut HashSet<String>,
+) {
+    collect_observation_evidence(store, observation_ids, evidence, seen, socket_evidence_line);
+}
+
+fn socket_evidence_line(obs: &Observation) -> Option<GraphEvidenceLine> {
+    if obs.kind() != ObservationKind::TcpSocketSeen {
+        return None;
+    }
+    let raw_ref = obs.raw_ref()?.as_str();
+    let inode = obs.metadata().get("inode").and_then(|v| v.as_str())?;
+    let fd = obs
+        .metadata()
+        .get("owner_fds")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown fd");
+    Some(GraphEvidenceLine {
+        source: raw_ref.to_string(),
+        statement: format!("inode {inode} joined with {fd} -> socket:[{inode}]"),
+        strength: "high".to_string(),
+        relationship: "process listener observed; service listener inferred from owning process"
+            .to_string(),
+    })
 }
 
 fn collect_cgroup_evidence(
@@ -267,6 +389,16 @@ fn collect_cgroup_evidence(
     evidence: &mut Vec<GraphEvidenceLine>,
     seen: &mut HashSet<String>,
 ) {
+    collect_observation_evidence(store, observation_ids, evidence, seen, cgroup_evidence_line);
+}
+
+fn collect_observation_evidence(
+    store: &Store,
+    observation_ids: &[String],
+    evidence: &mut Vec<GraphEvidenceLine>,
+    seen: &mut HashSet<String>,
+    map_line: fn(&Observation) -> Option<GraphEvidenceLine>,
+) {
     for obs_id in observation_ids {
         let Ok(id) = ObservationId::from_str(obs_id) else {
             continue;
@@ -274,7 +406,7 @@ fn collect_cgroup_evidence(
         let Ok(Some(obs)) = store.get_observation_typed(id) else {
             continue;
         };
-        if let Some(line) = cgroup_evidence_line(&obs) {
+        if let Some(line) = map_line(&obs) {
             let key = format!("{}|{}", line.source, line.statement);
             if seen.insert(key) {
                 evidence.push(line);

@@ -9,6 +9,12 @@ pub enum ProcessWarningKind {
     CgroupMissing,
     CgroupPermissionDenied,
     CgroupMalformed,
+    TcpTableMissing,
+    TcpTableMalformed,
+    FdPermissionDenied,
+    FdMalformed,
+    FdVanished,
+    SocketUnmapped,
 }
 
 impl ProcessWarningKind {
@@ -21,6 +27,12 @@ impl ProcessWarningKind {
             Self::CgroupMissing => "cgroup_missing",
             Self::CgroupPermissionDenied => "cgroup_permission_denied",
             Self::CgroupMalformed => "cgroup_malformed",
+            Self::TcpTableMissing => "tcp_table_missing",
+            Self::TcpTableMalformed => "tcp_table_malformed",
+            Self::FdPermissionDenied => "fd_permission_denied",
+            Self::FdMalformed => "fd_malformed",
+            Self::FdVanished => "fd_vanished",
+            Self::SocketUnmapped => "socket_unmapped",
         }
     }
 
@@ -33,13 +45,24 @@ impl ProcessWarningKind {
             Self::CgroupMissing => "cgroup_missing",
             Self::CgroupPermissionDenied => "cgroup_permission_denied",
             Self::CgroupMalformed => "cgroup_malformed",
+            Self::TcpTableMissing => "tcp_table_missing",
+            Self::TcpTableMalformed => "tcp_table_malformed",
+            Self::FdPermissionDenied => "fd_permission_denied",
+            Self::FdMalformed => "fd_malformed",
+            Self::FdVanished => "fd_vanished",
+            Self::SocketUnmapped => "socket_unmapped",
         }
     }
 
     pub fn includes_json_detail(self) -> bool {
         matches!(
             self,
-            Self::Vanished | Self::Malformed | Self::CgroupMalformed
+            Self::Vanished
+                | Self::Malformed
+                | Self::CgroupMalformed
+                | Self::TcpTableMalformed
+                | Self::FdMalformed
+                | Self::SocketUnmapped
         )
     }
 
@@ -52,6 +75,12 @@ impl ProcessWarningKind {
             "cgroup_missing" => Some(Self::CgroupMissing),
             "cgroup_permission_denied" => Some(Self::CgroupPermissionDenied),
             "cgroup_malformed" => Some(Self::CgroupMalformed),
+            "tcp_table_missing" => Some(Self::TcpTableMissing),
+            "tcp_table_malformed" => Some(Self::TcpTableMalformed),
+            "fd_permission_denied" => Some(Self::FdPermissionDenied),
+            "fd_malformed" => Some(Self::FdMalformed),
+            "fd_vanished" => Some(Self::FdVanished),
+            "socket_unmapped" => Some(Self::SocketUnmapped),
             _ => None,
         }
     }
@@ -65,6 +94,18 @@ impl ProcessWarningKind {
             Self::CgroupMissing => ("cgroup", format!("{count} missing cgroup files")),
             Self::CgroupPermissionDenied => ("cgroup", format!("{count} cgroup permission denied")),
             Self::CgroupMalformed => ("cgroup", format!("{count} malformed cgroup lines")),
+            Self::TcpTableMissing => ("tcp", format!("{count} missing tcp tables")),
+            Self::TcpTableMalformed => ("tcp", format!("{count} malformed tcp rows")),
+            Self::FdPermissionDenied => (
+                "fd",
+                format!("{count} fd directories hidden by permissions"),
+            ),
+            Self::FdMalformed => ("fd", format!("{count} malformed fd entries")),
+            Self::FdVanished => ("fd", format!("{count} vanished fd symlinks")),
+            Self::SocketUnmapped => (
+                "socket",
+                format!("{count} listener sockets could not be mapped to processes"),
+            ),
         }
     }
 }

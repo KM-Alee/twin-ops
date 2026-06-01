@@ -30,12 +30,23 @@ pub fn render(result: &ScanResult) -> String {
     out.tree_leaf(false, "processes", &result.process_count.to_string());
     out.tree_leaf(false, "cgroups", &result.cgroup_count.to_string());
     out.tree_leaf(false, "services", &result.service_count.to_string());
+    out.tree_leaf(false, "ports", &result.port_count.to_string());
     out.tree_leaf(false, "parent-of", &result.parent_edge_count.to_string());
     out.tree_leaf(false, "in-cgroup", &result.in_cgroup_edge_count.to_string());
     out.tree_leaf(
         false,
         "service-owns",
         &result.service_owns_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "process-listens-on",
+        &result.process_listens_on_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-listens-on",
+        &result.service_listens_on_edge_count.to_string(),
     );
     out.tree_leaf(true, "observations", &result.observation_count.to_string());
 

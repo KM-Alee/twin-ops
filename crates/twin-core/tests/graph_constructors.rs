@@ -35,3 +35,28 @@ fn cgroup_edges_use_expected_class_and_kind() {
         .as_str()
         .contains("systemd_cgroup_path"));
 }
+
+#[test]
+fn tcp_port_and_listener_edges() {
+    let t0 = TimestampNs::new(100);
+    let t1 = TimestampNs::new(200);
+    let port_first = GraphNode::tcp_port("127.0.0.1", 5432, t0, None).expect("port");
+    let port_second = GraphNode::tcp_port("127.0.0.1", 5432, t1, Some(&port_first)).expect("port");
+    assert_eq!(port_second.first_seen(), t0);
+    assert_eq!(port_second.label(), "tcp:127.0.0.1:5432");
+
+    let process = NodeId::process(721);
+    let port = NodeId::port_tcp("127.0.0.1", 5432).expect("port id");
+    let service = NodeId::service("postgresql.service");
+
+    let listens = GraphEdge::observed_process_listens_on(&process, &port, t0, None);
+    assert_eq!(listens.kind(), EdgeKind::ListensOn);
+    assert_eq!(listens.class(), EdgeClass::Observed);
+
+    let service_listens = GraphEdge::inferred_service_listens_on(&service, &port, t0, None);
+    assert_eq!(service_listens.class(), EdgeClass::Inferred);
+    assert!(service_listens
+        .metadata()
+        .as_str()
+        .contains("service_owns_listening_process"));
+}

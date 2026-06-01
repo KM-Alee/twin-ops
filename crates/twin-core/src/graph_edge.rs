@@ -48,6 +48,8 @@ impl GraphEdge {
     }
 
     const INFERENCE_METADATA: &str = r#"{"inference":"systemd_cgroup_path"}"#;
+    const PROCESS_LISTENER_METADATA: &str = r#"{"source":"proc_socket_inode_join"}"#;
+    const SERVICE_LISTENER_METADATA: &str = r#"{"inference":"service_owns_listening_process"}"#;
 
     pub fn observed_parent(
         parent: &NodeId,
@@ -117,6 +119,58 @@ impl GraphEdge {
         existing: Option<&Self>,
     ) -> Self {
         Self::inferred_service_owns(service, cgroup, seen_at, existing)
+    }
+
+    pub fn observed_process_listens_on(
+        process: &NodeId,
+        port: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::ListensOn;
+        let id = EdgeId::new(process, kind, port);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: process.clone(),
+            to: port.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::PROCESS_LISTENER_METADATA),
+        }
+    }
+
+    pub fn inferred_service_listens_on(
+        service: &NodeId,
+        port: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::ListensOn;
+        let id = EdgeId::new(service, kind, port);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: service.clone(),
+            to: port.clone(),
+            kind,
+            class: EdgeClass::Inferred,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::SERVICE_LISTENER_METADATA),
+        }
     }
 
     pub fn inferred_service_owns(

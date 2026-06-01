@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use twin_core::{CollectorName, TimestampNs};
 use twin_observation::{
@@ -8,14 +9,21 @@ use twin_observation::{
 
 use crate::error::CollectorError;
 use crate::process::process_record::ProcessRecord;
-use crate::process::procfs::{read_process, ProcReader, StdProcReader};
-use crate::process::warning::ProcessWarning;
+use crate::process::procfs::{
+    read_fd_socket_owners, read_process, read_tcp_table_content, ProcReader, StdProcReader,
+};
+use crate::process::socket::{
+    owners_by_inode, parse_tcp_table, SocketOwner, TcpSocketRecord, TcpTableKind,
+};
+use crate::process::warning::{ProcessWarning, ProcessWarningKind};
 
 pub const COLLECTOR_NAME: &str = "proc_process";
 
 pub struct ProcessBatch {
     observations: Vec<RawObservation>,
     records: Vec<ProcessRecord>,
+    tcp_listeners: Vec<TcpSocketRecord>,
+    owners_by_inode: HashMap<u64, Vec<SocketOwner>>,
     warnings: Vec<ProcessWarning>,
     started_at: TimestampNs,
     ended_at: TimestampNs,
@@ -28,6 +36,14 @@ impl ProcessBatch {
 
     pub fn records(&self) -> &[ProcessRecord] {
         &self.records
+    }
+
+    pub fn tcp_listeners(&self) -> &[TcpSocketRecord] {
+        &self.tcp_listeners
+    }
+
+    pub fn owners_by_inode(&self) -> &HashMap<u64, Vec<SocketOwner>> {
+        &self.owners_by_inode
     }
 
     pub fn warnings(&self) -> &[ProcessWarning] {
@@ -89,13 +105,120 @@ impl<R: ProcReader> ProcessCollector<R> {
             records.push(record);
         }
 
+        let (tcp_listeners, owners_by_inode, socket_observations) = collect_tcp_sockets(
+            &self.reader,
+            &self.proc_root,
+            &records,
+            started_at,
+            &mut warnings,
+        );
+        observations.extend(socket_observations);
+
         Ok(ProcessBatch {
             observations,
             records,
+            tcp_listeners,
+            owners_by_inode,
             warnings,
             started_at,
             ended_at: TimestampNs::now(),
         })
+    }
+}
+
+fn collect_tcp_sockets<R: ProcReader>(
+    reader: &R,
+    proc_root: &Path,
+    records: &[ProcessRecord],
+    started_at: TimestampNs,
+    warnings: &mut Vec<ProcessWarning>,
+) -> (
+    Vec<TcpSocketRecord>,
+    HashMap<u64, Vec<SocketOwner>>,
+    Vec<RawObservation>,
+) {
+    let mut listeners = Vec::new();
+    for table in [TcpTableKind::Tcp, TcpTableKind::Tcp6] {
+        let Some(content) = read_tcp_table_content(reader, proc_root, table, warnings) else {
+            continue;
+        };
+        let (mut rows, parse_warnings) = parse_tcp_table(table, &content);
+        listeners.append(&mut rows);
+        for issue in parse_warnings {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::TcpTableMalformed,
+                proc_root.join("net").join(table.net_file_name()),
+                format!("line {}: {}", issue.line, issue.detail),
+            ));
+        }
+    }
+
+    let mut socket_owners = Vec::new();
+    for record in records {
+        socket_owners.extend(read_fd_socket_owners(
+            reader,
+            proc_root,
+            record.pid(),
+            warnings,
+        ));
+    }
+    let owner_map = owners_by_inode(&socket_owners);
+
+    let mut observations = Vec::new();
+    for listener in &listeners {
+        let owners = owner_map.get(&listener.inode).cloned().unwrap_or_default();
+        let mapped = !owners.is_empty();
+        if !mapped {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::SocketUnmapped,
+                proc_root.join("net").join(listener.table.net_file_name()),
+                format!(
+                    "inode {} listening on {}:{}",
+                    listener.inode, listener.local_ip, listener.local_port
+                ),
+            ));
+        }
+        observations.push(raw_observation_for_listener(listener, &owners, started_at));
+    }
+
+    (listeners, owner_map, observations)
+}
+
+fn raw_observation_for_listener(
+    listener: &TcpSocketRecord,
+    owners: &[SocketOwner],
+    timestamp: TimestampNs,
+) -> RawObservation {
+    let table_name = match listener.table {
+        TcpTableKind::Tcp => "tcp",
+        TcpTableKind::Tcp6 => "tcp6",
+    };
+    let raw_ref = RawEvidenceRef::new(format!("/proc/net/{table_name}:{}", listener.raw_line));
+    let mut meta = ObservationMetadata::new();
+    meta.insert_str("inode", &listener.inode.to_string());
+    meta.insert_str("state", "listen");
+    meta.insert_str("table", table_name);
+    meta.insert_str("local_ip", &listener.local_ip);
+    meta.insert_u32("local_port", listener.local_port as u32);
+    meta.insert_u32("raw_line", listener.raw_line as u32);
+    meta.insert_bool("mapped", !owners.is_empty());
+    let owner_pids: Vec<String> = owners.iter().map(|o| o.pid.to_string()).collect();
+    let owner_fds: Vec<String> = owners.iter().map(|o| o.fd_path.clone()).collect();
+    meta.insert_str_array("owner_pids", &owner_pids);
+    meta.insert_str_array("owner_fds", &owner_fds);
+    RawObservation {
+        source: ObservationSource::ProcNetTcp,
+        kind: ObservationKind::TcpSocketSeen,
+        collector: CollectorName::new(COLLECTOR_NAME),
+        subject: Some(RawIdentity::TcpEndpoint {
+            ip: listener.local_ip.clone(),
+            port: listener.local_port,
+        }),
+        object: None,
+        timestamp,
+        raw_ref: Some(raw_ref),
+        confidence_hint: ConfidenceHint::High,
+        metadata: meta,
     }
 }
 

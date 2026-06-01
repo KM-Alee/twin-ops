@@ -78,6 +78,12 @@ fn scan_render_counts() {
         service_count: 17,
         in_cgroup_edge_count: 141,
         service_owns_edge_count: 62,
+        tcp_listener_count: 6,
+        port_count: 6,
+        process_listens_on_edge_count: 6,
+        service_listens_on_edge_count: 4,
+        unmapped_listener_socket_count: 0,
+        socket_owner_inode_count: 6,
         observation_count: 500,
         warning_count: 0,
         warnings: vec![],
@@ -89,6 +95,8 @@ fn scan_render_counts() {
     assert!(text.contains("parent-of"));
     assert!(text.contains("in-cgroup"));
     assert!(text.contains("service-owns"));
+    assert!(text.contains("ports"));
+    assert!(text.contains("process-listens-on"));
 }
 
 #[test]
@@ -102,6 +110,12 @@ fn scan_render_warning_aggregation() {
         service_count: 0,
         in_cgroup_edge_count: 0,
         service_owns_edge_count: 0,
+        tcp_listener_count: 0,
+        port_count: 0,
+        process_listens_on_edge_count: 0,
+        service_listens_on_edge_count: 0,
+        unmapped_listener_socket_count: 0,
+        socket_owner_inode_count: 0,
         observation_count: 1,
         warning_count: 6,
         warnings: vec![
@@ -168,6 +182,12 @@ fn graph_service_render_inferred_ownership() {
             edge_class: "inferred".to_string(),
             observation_ids: vec![],
         }],
+        vec![GraphOwnedNode {
+            id: "port:tcp:127.0.0.1:5432".to_string(),
+            label: "tcp:127.0.0.1:5432".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec![],
+        }],
         vec![GraphEvidenceLine {
             source: "/proc/1432/cgroup".to_string(),
             statement: "contains /system.slice/nginx.service".to_string(),
@@ -177,6 +197,7 @@ fn graph_service_render_inferred_ownership() {
     );
     let text = output::graph::render(&result);
     assert!(text.contains("owns (inferred)"));
+    assert!(text.contains("listens on (inferred)"));
     assert!(text.contains("/proc/1432/cgroup"));
     assert!(text.contains("service neighborhood"));
 }
@@ -218,6 +239,12 @@ fn scan_json_includes_warning_details_field() {
         service_count: 0,
         in_cgroup_edge_count: 0,
         service_owns_edge_count: 0,
+        tcp_listener_count: 0,
+        port_count: 0,
+        process_listens_on_edge_count: 0,
+        service_listens_on_edge_count: 0,
+        unmapped_listener_socket_count: 0,
+        socket_owner_inode_count: 0,
         observation_count: 1,
         warning_count: 1,
         warnings: vec![ScanWarning {

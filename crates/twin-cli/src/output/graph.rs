@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphListResult, GraphNodeResult, GraphParentEdge, GraphResult, GraphServiceResult,
+    GraphListResult, GraphNodeResult, GraphParentEdge, GraphPortResult, GraphResult,
+    GraphServiceResult,
 };
 
 use crate::output::format::{Lines, Status};
@@ -11,6 +12,7 @@ pub fn render(result: &GraphResult) -> String {
         GraphResult::List(list) => render_list(list),
         GraphResult::Node(node) => render_node(node),
         GraphResult::Service(service) => render_service(service),
+        GraphResult::Port(port) => render_port(port),
     }
 }
 
@@ -18,6 +20,7 @@ fn render_list(list: &GraphListResult) -> String {
     let title = match list.kind {
         twin_core::NodeKind::Process => "Process tree",
         twin_core::NodeKind::Service => "Service list",
+        twin_core::NodeKind::Port => "Port list",
         other => return format!("Unsupported list kind: {other}"),
     };
     let mut out = Lines::new();
@@ -49,7 +52,7 @@ fn render_list(list: &GraphListResult) -> String {
         .collect();
     roots.sort_by_key(|id| peer_pid(id).unwrap_or(u32::MAX));
 
-    if list.kind == twin_core::NodeKind::Service {
+    if list.kind == twin_core::NodeKind::Service || list.kind == twin_core::NodeKind::Port {
         let mut nodes = list.nodes.clone();
         nodes.sort_by_key(|n| n.id.clone());
         for (i, node) in nodes.iter().enumerate() {
@@ -116,17 +119,60 @@ fn render_service(service: &GraphServiceResult) -> String {
             lines.push(format!("{branch} {}", format_peer(id, label)));
         }
     }
-    if !service.evidence.is_empty() {
+    if !service.listening_ports.is_empty() {
         lines.push(String::new());
-        lines.push("evidence".to_string());
-        for (i, line) in service.evidence.iter().enumerate() {
-            let is_last = i + 1 == service.evidence.len();
-            let prefix = if is_last { "└──" } else { "├──" };
-            lines.push(format!("{prefix} {} {}", line.source, line.statement));
-            lines.push(format!("    relationship: {}", line.relationship));
+        lines.push("listens on (inferred)".to_string());
+        for (i, port) in service.listening_ports.iter().enumerate() {
+            let is_last = i + 1 == service.listening_ports.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&port.id, &port.label)));
         }
     }
+    append_evidence_lines(&mut lines, &service.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_port(port: &GraphPortResult) -> String {
+    let mut out = Lines::new();
+    out.title("twin graph");
+    out.status_row(Status::Ok, "view", "port listener neighborhood");
+    out.blank();
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", port.port.id, port.port.label));
+    lines.push(String::new());
+    lines.push("listeners".to_string());
+    let mut listeners: Vec<(&str, &str, &str)> = Vec::new();
+    for node in &port.process_listeners {
+        listeners.push((&node.id, &node.label, "observed"));
+    }
+    for node in &port.service_listeners {
+        listeners.push((&node.id, &node.label, "inferred"));
+    }
+    if listeners.is_empty() {
+        lines.push("└── (no listeners in graph)".to_string());
+    } else {
+        for (i, (id, label, class)) in listeners.iter().enumerate() {
+            let is_last = i + 1 == listeners.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}  {class}", format_peer(id, label)));
+        }
+    }
+    append_evidence_lines(&mut lines, &port.evidence);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn append_evidence_lines(lines: &mut Vec<String>, evidence: &[twin_app::GraphEvidenceLine]) {
+    if evidence.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push("evidence".to_string());
+    for (i, line) in evidence.iter().enumerate() {
+        let is_last = i + 1 == evidence.len();
+        let prefix = if is_last { "└──" } else { "├──" };
+        lines.push(format!("{prefix} {} {}", line.source, line.statement));
+        lines.push(format!("    relationship: {}", line.relationship));
+    }
 }
 
 fn render_node(node: &GraphNodeResult) -> String {

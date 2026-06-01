@@ -56,6 +56,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
 
     let parent_obs_by_child = parent_observation_ids(&observations);
     let cgroup_obs_by_key = cgroup_observation_ids(&observations);
+    let tcp_obs_by_inode = tcp_socket_observation_ids(&observations);
     let scan_time = batch.ended_at();
     let mut process_count = 0usize;
     let mut parent_edge_count = 0usize;
@@ -63,8 +64,26 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
     let mut service_count = 0usize;
     let mut in_cgroup_edge_count = 0usize;
     let mut service_owns_edge_count = 0usize;
+    let mut port_count = 0usize;
+    let mut process_listens_on_edge_count = 0usize;
+    let mut service_listens_on_edge_count = 0usize;
+    let mut unmapped_listener_socket_count = 0usize;
     let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
     let mut seen_services: HashSet<NodeId> = HashSet::new();
+    let mut seen_ports: HashSet<NodeId> = HashSet::new();
+    let mut seen_service_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_process_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+
+    let pid_to_services = services_by_pid(batch.records());
+    let owners_by_inode = batch.owners_by_inode();
+    let listener_by_inode: HashMap<u64, &twin_collectors::TcpSocketRecord> =
+        batch.tcp_listeners().iter().map(|l| (l.inode, l)).collect();
+    let mut resolved_listeners = Vec::new();
+    for listener in batch.tcp_listeners() {
+        let port_id = NodeId::port_tcp(&listener.local_ip, listener.local_port)
+            .map_err(ScanError::InvalidPortId)?;
+        resolved_listeners.push((listener.inode, port_id));
+    }
 
     store
         .with_transaction(|store| {
@@ -184,6 +203,86 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                     )?;
                 }
             }
+
+            for (inode, port_id) in &resolved_listeners {
+                let listener = listener_by_inode[inode];
+                let port_existing = store.get_node_typed(port_id)?;
+                let port_node = GraphNode::tcp_port(
+                    &listener.local_ip,
+                    listener.local_port,
+                    scan_time,
+                    port_existing.as_ref(),
+                )
+                .map_err(|e| StoreError::Decode {
+                    detail: e.to_string(),
+                })?;
+                store.upsert_node_typed(&port_node)?;
+                if seen_ports.insert(port_id.clone()) {
+                    port_count += 1;
+                }
+
+                let owners = owners_by_inode
+                    .get(&listener.inode)
+                    .cloned()
+                    .unwrap_or_default();
+                let socket_obs = tcp_obs_by_inode
+                    .get(&listener.inode)
+                    .map(|id| (id, "direct"));
+                if owners.is_empty() {
+                    unmapped_listener_socket_count += 1;
+                    continue;
+                }
+
+                for owner in &owners {
+                    let process_id = NodeId::process(owner.pid);
+                    let process_existing = store.get_node_typed(&process_id)?;
+                    if process_existing.is_none() {
+                        let label = batch
+                            .records()
+                            .iter()
+                            .find(|r| r.pid() == owner.pid)
+                            .and_then(|r| r.comm().map(str::to_string))
+                            .unwrap_or_else(|| format!("pid:{}", owner.pid));
+                        store.upsert_node_typed(&GraphNode::process(
+                            owner.pid, label, scan_time, None,
+                        ))?;
+                    }
+                    let edge = GraphEdge::observed_process_listens_on(
+                        &process_id,
+                        port_id,
+                        scan_time,
+                        load_existing_edge(store, &process_id, EdgeKind::ListensOn, port_id)?
+                            .as_ref(),
+                    );
+                    upsert_edge_with_link(store, &edge, socket_obs)?;
+                    if seen_process_listeners.insert((process_id.clone(), port_id.clone())) {
+                        process_listens_on_edge_count += 1;
+                    }
+
+                    if let Some(services) = pid_to_services.get(&owner.pid) {
+                        for service_id in services {
+                            if !seen_service_listeners.insert((service_id.clone(), port_id.clone()))
+                            {
+                                continue;
+                            }
+                            let edge = GraphEdge::inferred_service_listens_on(
+                                service_id,
+                                port_id,
+                                scan_time,
+                                load_existing_edge(
+                                    store,
+                                    service_id,
+                                    EdgeKind::ListensOn,
+                                    port_id,
+                                )?
+                                .as_ref(),
+                            );
+                            upsert_edge_with_link(store, &edge, socket_obs)?;
+                            service_listens_on_edge_count += 1;
+                        }
+                    }
+                }
+            }
             Ok(())
         })
         .map_err(ScanError::Store)?;
@@ -198,11 +297,35 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         service_count,
         in_cgroup_edge_count,
         service_owns_edge_count,
+        tcp_listener_count: resolved_listeners.len(),
+        port_count,
+        process_listens_on_edge_count,
+        service_listens_on_edge_count,
+        unmapped_listener_socket_count,
+        socket_owner_inode_count: batch.owners_by_inode().len(),
         observation_count: observations.len(),
         warning_count: collector_warnings.len(),
         warnings: aggregate_warnings(collector_warnings),
         warning_details: detailed_warnings(collector_warnings),
     })
+}
+
+fn services_by_pid(records: &[twin_collectors::ProcessRecord]) -> HashMap<u32, Vec<NodeId>> {
+    let mut map: HashMap<u32, Vec<NodeId>> = HashMap::new();
+    for record in records {
+        for membership in record.cgroup_memberships() {
+            let Some(unit) = &membership.service_unit else {
+                continue;
+            };
+            let service_id = NodeId::service(unit);
+            map.entry(record.pid()).or_default().push(service_id);
+        }
+    }
+    for services in map.values_mut() {
+        services.sort();
+        services.dedup();
+    }
+    map
 }
 
 fn parent_observation_ids(observations: &[Observation]) -> HashMap<u32, ObservationId> {
@@ -247,6 +370,25 @@ fn cgroup_observation_ids(observations: &[Observation]) -> HashMap<(u32, String)
     map
 }
 
+fn tcp_socket_observation_ids(observations: &[Observation]) -> HashMap<u64, ObservationId> {
+    let mut map = HashMap::new();
+    for obs in observations {
+        if obs.kind() != ObservationKind::TcpSocketSeen {
+            continue;
+        }
+        let Some(inode) = obs
+            .metadata()
+            .get("inode")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        map.insert(inode, obs.id());
+    }
+    map
+}
+
 fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut vanished = 0usize;
     let mut permission = 0usize;
@@ -255,6 +397,12 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut cgroup_missing = 0usize;
     let mut cgroup_permission = 0usize;
     let mut cgroup_malformed = 0usize;
+    let mut tcp_table_missing = 0usize;
+    let mut tcp_table_malformed = 0usize;
+    let mut fd_permission = 0usize;
+    let mut fd_malformed = 0usize;
+    let mut fd_vanished = 0usize;
+    let mut socket_unmapped = 0usize;
     for w in warnings {
         match w.kind() {
             ProcessWarningKind::Vanished => vanished += 1,
@@ -264,6 +412,12 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
             ProcessWarningKind::CgroupMissing => cgroup_missing += 1,
             ProcessWarningKind::CgroupPermissionDenied => cgroup_permission += 1,
             ProcessWarningKind::CgroupMalformed => cgroup_malformed += 1,
+            ProcessWarningKind::TcpTableMissing => tcp_table_missing += 1,
+            ProcessWarningKind::TcpTableMalformed => tcp_table_malformed += 1,
+            ProcessWarningKind::FdPermissionDenied => fd_permission += 1,
+            ProcessWarningKind::FdMalformed => fd_malformed += 1,
+            ProcessWarningKind::FdVanished => fd_vanished += 1,
+            ProcessWarningKind::SocketUnmapped => socket_unmapped += 1,
         }
     }
     let mut out = Vec::new();
@@ -281,6 +435,28 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
         &mut out,
         ProcessWarningKind::CgroupMalformed,
         cgroup_malformed,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::TcpTableMissing,
+        tcp_table_missing,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::TcpTableMalformed,
+        tcp_table_malformed,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::FdPermissionDenied,
+        fd_permission,
+    );
+    push_aggregate(&mut out, ProcessWarningKind::FdMalformed, fd_malformed);
+    push_aggregate(&mut out, ProcessWarningKind::FdVanished, fd_vanished);
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::SocketUnmapped,
+        socket_unmapped,
     );
     out
 }

@@ -38,6 +38,30 @@ impl ProcReader for VanishPidReader {
     fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
         self.inner.read_link(path)
     }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.inner.read_dir(path)
+    }
+}
+
+pub fn write_tcp_table(base: &Path, name: &str, content: &str) {
+    let net = base.join("net");
+    std::fs::create_dir_all(&net).expect("net dir");
+    std::fs::write(net.join(name), content).expect("tcp table");
+}
+
+pub fn write_socket_fd(base: &Path, pid: u32, fd: u32, inode: u64) {
+    let fd_dir = base.join(pid.to_string()).join("fd");
+    std::fs::create_dir_all(&fd_dir).expect("fd dir");
+    #[cfg(unix)]
+    {
+        let target = format!("socket:[{inode}]");
+        std::os::unix::fs::symlink(target, fd_dir.join(fd.to_string())).expect("fd symlink");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, fd, inode);
+    }
 }
 
 pub fn write_proc_fixture(
