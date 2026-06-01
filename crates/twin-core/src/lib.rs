@@ -13,6 +13,6 @@ pub use graph_edge::{GraphEdge, GraphEdgeParts};
 pub use graph_metadata::GraphMetadata;
 pub use graph_node::{GraphNode, GraphNodeParts};
 pub use id::{CollectorName, ObservationId, TimestampNs};
-pub use node::{NodeId, NodeKind, NodeState};
+pub use node::{lexical_canonical, NodeId, NodeKind, NodeState};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

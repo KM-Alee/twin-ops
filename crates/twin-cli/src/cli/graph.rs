@@ -1,13 +1,14 @@
 use std::str::FromStr;
 
 use twin_app::{AppError, GraphRequest};
-use twin_core::{NodeId, NodeKind, ParseError};
+use twin_core::{NodeId, NodeKind};
 
 use super::args::GraphArgs;
 
 enum GraphQuery {
     List(NodeKind),
     Node(NodeId),
+    Search(String),
 }
 
 pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
@@ -19,15 +20,17 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
         GraphQuery::List(NodeKind::Process)
     };
 
-    let (kind, target) = match query {
-        GraphQuery::List(kind) => (Some(kind), None),
-        GraphQuery::Node(id) => (None, Some(id)),
+    let (kind, target, target_query) = match query {
+        GraphQuery::List(kind) => (Some(kind), None, None),
+        GraphQuery::Node(id) => (None, Some(id), None),
+        GraphQuery::Search(query) => (None, None, Some(query)),
     };
 
     Ok(GraphRequest {
         config_override: args.config.clone(),
         kind,
         target,
+        target_query,
     })
 }
 
@@ -41,7 +44,7 @@ fn parse_positional(value: &str) -> Result<GraphQuery, AppError> {
     if let Ok(kind) = NodeKind::from_str(value) {
         return Ok(GraphQuery::List(kind));
     }
-    Err(invalid_graph_target(value))
+    Ok(GraphQuery::Search(value.to_string()))
 }
 
 fn parse_kind(value: &str) -> Result<NodeKind, AppError> {
@@ -59,15 +62,6 @@ fn parse_pid_shorthand(value: &str) -> Option<u32> {
         return value.parse().ok();
     }
     None
-}
-
-fn invalid_graph_target(value: &str) -> AppError {
-    AppError::InvalidGraphTarget {
-        value: value.to_string(),
-        source: ParseError::InvalidNodeId {
-            value: value.to_string(),
-        },
-    }
 }
 
 #[cfg(test)]
@@ -124,13 +118,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_target_is_rejected() {
-        let err = graph_request(&GraphArgs {
+    fn service_shorthand_passes_through_as_search() {
+        let req = request(GraphArgs {
             config: None,
             kind: None,
             target: Some("nginx".to_string()),
-        })
-        .expect_err("invalid target");
-        assert!(matches!(err, AppError::InvalidGraphTarget { .. }));
+        });
+        assert_eq!(req.target_query.as_deref(), Some("nginx"));
+        assert!(req.target.is_none());
     }
 }

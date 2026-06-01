@@ -104,8 +104,12 @@ src/
     doctor.rs
     json.rs
 tests/
-  output.rs
+  output.rs           # renderer unit tests (no binary spawn)
+  cli_integration.rs  # end-to-end: spawns `twin` with isolated HOME
+  support/mod.rs      # TwinHome fixture, fake /proc writers
 ```
+
+**CLI integration tests** set `HOME` to a temp dir (real XDG layout under it) and `TWIN_PROC_ROOT` to a fake `/proc` tree so `twin scan` never reads the host. `TWIN_PROC_ROOT` is read only in `twin-cli` `main` when set (test harness); production scans use `/proc`.
 
 ---
 
@@ -147,6 +151,7 @@ Command results (`InitResult`, `DoctorResult`) live in `twin-app/src/model/` and
 | Inject `TwinLayout` | Tests must not set global state or hidden env vars in production code. |
 | Unit tests in-source only for pure logic | Rare in slice 1; prefer crate integration tests. |
 | No host mutation in tests | Use temp dirs and in-memory SQLite; never write under real `~/.config/twin` in CI. |
+| CLI E2E via `CARGO_BIN_EXE_twin` | `twin-cli/tests/cli_integration.rs` exercises init, doctor, scan, graph (human + `--json`). |
 
 Example (`twin-app/tests/init.rs`):
 

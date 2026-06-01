@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use twin_app::{GraphListResult, GraphNodeResult, GraphParentEdge, GraphResult};
+use twin_app::{
+    GraphListResult, GraphNodeResult, GraphParentEdge, GraphResult, GraphServiceResult,
+};
 
 use crate::output::format::{Lines, Status};
 
@@ -8,12 +10,14 @@ pub fn render(result: &GraphResult) -> String {
     match result {
         GraphResult::List(list) => render_list(list),
         GraphResult::Node(node) => render_node(node),
+        GraphResult::Service(service) => render_service(service),
     }
 }
 
 fn render_list(list: &GraphListResult) -> String {
     let title = match list.kind {
         twin_core::NodeKind::Process => "Process tree",
+        twin_core::NodeKind::Service => "Service list",
         other => return format!("Unsupported list kind: {other}"),
     };
     let mut out = Lines::new();
@@ -45,7 +49,15 @@ fn render_list(list: &GraphListResult) -> String {
         .collect();
     roots.sort_by_key(|id| peer_pid(id).unwrap_or(u32::MAX));
 
-    if roots.is_empty() {
+    if list.kind == twin_core::NodeKind::Service {
+        let mut nodes = list.nodes.clone();
+        nodes.sort_by_key(|n| n.id.clone());
+        for (i, node) in nodes.iter().enumerate() {
+            let is_last = i + 1 == nodes.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&node.id, &node.label)));
+        }
+    } else if roots.is_empty() {
         for node in &list.nodes {
             render_tree_branch(
                 &mut lines,
@@ -76,6 +88,44 @@ fn render_list(list: &GraphListResult) -> String {
         }
     }
 
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_service(service: &GraphServiceResult) -> String {
+    let mut out = Lines::new();
+    out.title("twin graph");
+    out.status_row(Status::Ok, "view", "service neighborhood");
+    out.blank();
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", service.service.id, service.service.label));
+    lines.push(String::new());
+    lines.push("owns (inferred)".to_string());
+    if service.owned_processes.is_empty() && service.owned_cgroups.is_empty() {
+        lines.push("└── (no owned processes or cgroups)".to_string());
+    } else {
+        let mut owned: Vec<(&str, &str)> = Vec::new();
+        for node in &service.owned_processes {
+            owned.push((&node.id, &node.label));
+        }
+        for node in &service.owned_cgroups {
+            owned.push((&node.id, &node.label));
+        }
+        for (i, (id, label)) in owned.iter().enumerate() {
+            let is_last = i + 1 == owned.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(id, label)));
+        }
+    }
+    if !service.evidence.is_empty() {
+        lines.push(String::new());
+        lines.push("evidence".to_string());
+        for (i, line) in service.evidence.iter().enumerate() {
+            let is_last = i + 1 == service.evidence.len();
+            let prefix = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{prefix} {} {}", line.source, line.statement));
+            lines.push(format!("    relationship: {}", line.relationship));
+        }
+    }
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 

@@ -72,4 +72,8 @@ pub enum GraphError {
     Store(#[from] StoreError),
     #[error("node not found: {id}")]
     NodeNotFound { id: NodeId },
+    #[error("service not found for query `{query}`{detail}")]
+    ServiceNotFound { query: String, detail: String },
+    #[error("ambiguous service match for `{query}`: {candidates}")]
+    AmbiguousService { query: String, candidates: String },
 }

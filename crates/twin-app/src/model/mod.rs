@@ -7,8 +7,9 @@ pub use doctor_result::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, PermissionMode,
 };
 pub use graph_result::{
-    edge_summary, node_summary, GraphEdgeSummary, GraphListResult, GraphNodeResult,
-    GraphNodeSummary, GraphParentEdge, GraphResult,
+    edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphListResult,
+    GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphResult,
+    GraphServiceResult,
 };
 pub use init_result::InitResult;
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};

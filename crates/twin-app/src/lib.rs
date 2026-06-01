@@ -6,9 +6,10 @@ pub mod paths;
 
 pub use error::{AppError, GraphError, ScanError};
 pub use model::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEdgeSummary, GraphListResult,
-    GraphNodeResult, GraphNodeSummary, GraphParentEdge, GraphResult, InitResult, PermissionMode,
-    ScanResult, ScanWarning, ScanWarningDetail,
+    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEdgeSummary,
+    GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode,
+    GraphParentEdge, GraphResult, GraphServiceResult, InitResult, PermissionMode, ScanResult,
+    ScanWarning, ScanWarningDetail,
 };
 pub use paths::TwinLayout;
 
@@ -69,6 +70,7 @@ pub struct GraphRequest {
     pub config_override: Option<PathBuf>,
     pub kind: Option<NodeKind>,
     pub target: Option<NodeId>,
+    pub target_query: Option<String>,
 }
 
 pub fn graph(request: GraphRequest) -> Result<GraphResult, AppError> {

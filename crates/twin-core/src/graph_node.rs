@@ -86,6 +86,49 @@ impl GraphNode {
         }
     }
 
+    pub fn cgroup(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::cgroup(path);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind: NodeKind::Cgroup,
+            label: path.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"proc_cgroup"}"#),
+        }
+    }
+
+    pub fn service(unit: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::service(unit);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        let label = id
+            .as_str()
+            .strip_prefix("service:")
+            .unwrap_or(unit)
+            .to_string();
+        Self {
+            id,
+            kind: NodeKind::Service,
+            label,
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"systemd_cgroup_inference"}"#),
+        }
+    }
+
     pub fn id(&self) -> &NodeId {
         &self.id
     }

@@ -20,13 +20,14 @@ fn fixture_proc(home: &support::IsolatedHome) -> PathBuf {
         b"/usr/lib/systemd/systemd\0",
         Some(PathBuf::from("/usr/lib/systemd/systemd").as_path()),
     );
-    support::write_proc_fixture(
+    support::write_proc_fixture_with_cgroup(
         &proc,
         42,
         "42 (nginx) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
         "Uid:\t33\t33\t33\t33\n",
         b"/usr/bin/nginx\0",
         Some(PathBuf::from("/usr/bin/nginx").as_path()),
+        Some("0::/system.slice/nginx.service\n"),
     );
     proc
 }
@@ -40,8 +41,8 @@ fn scan_in_persists_process_nodes_and_parent_edges() {
     assert_eq!(result.process_count, 2);
     assert_eq!(result.parent_edge_count, 1);
     let store = Store::open(&home.layout.db_file()).expect("open");
-    assert_eq!(store.count_nodes().expect("nodes"), 4);
-    assert_eq!(store.count_edges().expect("edges"), 1);
+    assert_eq!(store.count_nodes().expect("nodes"), 6);
+    assert!(store.count_edges().expect("edges") >= 1);
 }
 
 #[test]
@@ -117,13 +118,102 @@ fn graph_in_returns_process_neighborhood() {
 }
 
 #[test]
-fn graph_in_rejects_unsupported_kind_cleanly() {
+fn scan_in_persists_service_and_cgroup_graph() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc(&home);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    assert_eq!(result.service_count, 1);
+    assert_eq!(result.cgroup_count, 1);
+    assert!(result.in_cgroup_edge_count >= 1);
+    assert!(result.service_owns_edge_count >= 2);
+
+    let store = Store::open(&home.layout.db_file()).expect("open");
+    assert!(store
+        .get_node("service:nginx.service")
+        .expect("get")
+        .is_some());
+    assert!(store
+        .get_node("cgroup:/system.slice/nginx.service")
+        .expect("get")
+        .is_some());
+    let owns = store
+        .list_edges_by_kind("owns")
+        .expect("owns")
+        .into_iter()
+        .filter(|e| e.from_node_id.starts_with("service:"))
+        .count();
+    assert!(owns >= 2);
+}
+
+#[test]
+fn graph_in_lists_service_nodes() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            kind: Some(NodeKind::Service),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let twin_app::GraphResult::List(list) = result else {
+        panic!("expected list");
+    };
+    assert_eq!(list.kind, NodeKind::Service);
+    assert_eq!(list.nodes.len(), 1);
+}
+
+#[test]
+fn graph_in_service_neighborhood_by_query() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            target_query: Some("nginx".to_string()),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let twin_app::GraphResult::Service(service) = result else {
+        panic!("expected service view");
+    };
+    assert_eq!(service.service.id, "service:nginx.service");
+    assert!(!service.owned_processes.is_empty());
+    assert!(!service.evidence.is_empty());
+}
+
+#[test]
+fn graph_in_service_target_by_id() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc(&home);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            target: Some(NodeId::service("nginx.service")),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    assert!(matches!(result, twin_app::GraphResult::Service(_)));
+}
+
+#[test]
+fn graph_in_rejects_unsupported_port_kind() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let err = twin_app::graph_in(
         &home.layout,
         GraphRequest {
-            kind: Some(NodeKind::Service),
+            kind: Some(NodeKind::Port),
             ..GraphRequest::default()
         },
     )

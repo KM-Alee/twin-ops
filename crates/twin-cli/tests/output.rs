@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use twin_app::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphListResult, GraphNodeResult,
-    GraphResult, InitResult, PermissionMode, ScanResult, ScanWarning,
+    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEvidenceLine,
+    GraphListResult, GraphNodeResult, GraphOwnedNode, GraphResult, InitResult, PermissionMode,
+    ScanResult, ScanWarning,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -73,6 +74,10 @@ fn scan_render_counts() {
         ended_at_ns: 2,
         process_count: 143,
         parent_edge_count: 128,
+        cgroup_count: 24,
+        service_count: 17,
+        in_cgroup_edge_count: 141,
+        service_owns_edge_count: 62,
         observation_count: 500,
         warning_count: 0,
         warnings: vec![],
@@ -82,6 +87,8 @@ fn scan_render_counts() {
     assert!(text.contains("twin scan"));
     assert!(text.contains("143"));
     assert!(text.contains("parent-of"));
+    assert!(text.contains("in-cgroup"));
+    assert!(text.contains("service-owns"));
 }
 
 #[test]
@@ -91,6 +98,10 @@ fn scan_render_warning_aggregation() {
         ended_at_ns: 2,
         process_count: 1,
         parent_edge_count: 0,
+        cgroup_count: 0,
+        service_count: 0,
+        in_cgroup_edge_count: 0,
+        service_owns_edge_count: 0,
         observation_count: 1,
         warning_count: 6,
         warnings: vec![
@@ -139,6 +150,38 @@ fn graph_list_render_stable() {
 }
 
 #[test]
+fn graph_service_render_inferred_ownership() {
+    let result = GraphResult::service(
+        twin_app::GraphNodeSummary {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+        },
+        vec![GraphOwnedNode {
+            id: "process:pid:1432".to_string(),
+            label: "nginx".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec!["obs-1".to_string()],
+        }],
+        vec![GraphOwnedNode {
+            id: "cgroup:/system.slice/nginx.service".to_string(),
+            label: "/system.slice/nginx.service".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec![],
+        }],
+        vec![GraphEvidenceLine {
+            source: "/proc/1432/cgroup".to_string(),
+            statement: "contains /system.slice/nginx.service".to_string(),
+            strength: "high".to_string(),
+            relationship: "service ownership inferred from systemd cgroup path".to_string(),
+        }],
+    );
+    let text = output::graph::render(&result);
+    assert!(text.contains("owns (inferred)"));
+    assert!(text.contains("/proc/1432/cgroup"));
+    assert!(text.contains("service neighborhood"));
+}
+
+#[test]
 fn graph_node_render_parents_children() {
     let result = GraphResult::Node(GraphNodeResult {
         node: twin_app::GraphNodeSummary {
@@ -171,6 +214,10 @@ fn scan_json_includes_warning_details_field() {
         ended_at_ns: 2,
         process_count: 1,
         parent_edge_count: 0,
+        cgroup_count: 0,
+        service_count: 0,
+        in_cgroup_edge_count: 0,
+        service_owns_edge_count: 0,
         observation_count: 1,
         warning_count: 1,
         warnings: vec![ScanWarning {

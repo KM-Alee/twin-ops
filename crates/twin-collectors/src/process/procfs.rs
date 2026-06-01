@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::error::CollectorError;
+use crate::process::cgroup::parse_cgroup_memberships;
 use crate::process::process_record::ProcessRecord;
 use crate::process::warning::{ProcessWarning, ProcessWarningKind};
 
@@ -137,7 +138,76 @@ pub(crate) fn read_process(
         Err(_) => {}
     }
 
+    read_cgroup_into_record(reader, &pid_dir, pid, &mut record, warnings);
+
     Some(record)
+}
+
+fn read_cgroup_into_record(
+    reader: &dyn ProcReader,
+    pid_dir: &Path,
+    pid: u32,
+    record: &mut ProcessRecord,
+    warnings: &mut Vec<ProcessWarning>,
+) {
+    let cgroup_path = pid_dir.join("cgroup");
+    let bytes = match reader.read_file(&cgroup_path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::CgroupMissing,
+                cgroup_path,
+                err.to_string(),
+            ));
+            return;
+        }
+        Err(err) if is_vanished(&err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::Vanished,
+                cgroup_path.clone(),
+                err.to_string(),
+            ));
+            return;
+        }
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::CgroupPermissionDenied,
+                cgroup_path,
+                err.to_string(),
+            ));
+            return;
+        }
+        Err(err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::CgroupMalformed,
+                cgroup_path,
+                err.to_string(),
+            ));
+            return;
+        }
+    };
+
+    let text = match std::str::from_utf8(&bytes) {
+        Ok(text) => text,
+        Err(err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::CgroupMalformed,
+                cgroup_path.clone(),
+                err.to_string(),
+            ));
+            return;
+        }
+    };
+
+    let (memberships, issues) = parse_cgroup_memberships(text);
+    for (line_no, detail) in issues {
+        warnings.push(ProcessWarning::new(
+            ProcessWarningKind::CgroupMalformed,
+            cgroup_path.clone(),
+            format!("pid={pid} line {line_no}: {detail}"),
+        ));
+    }
+    record.cgroup_memberships = memberships;
 }
 
 struct ParsedStat {

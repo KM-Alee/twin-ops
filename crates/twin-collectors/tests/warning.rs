@@ -14,3 +14,14 @@ fn warning_keys_are_stable() {
         Some(ProcessWarningKind::ExeUnreadable)
     );
 }
+
+#[test]
+fn bulk_coverage_gaps_omit_per_pid_json_details() {
+    assert!(!ProcessWarningKind::ExeUnreadable.includes_json_detail());
+    assert!(!ProcessWarningKind::PermissionDenied.includes_json_detail());
+    assert!(!ProcessWarningKind::CgroupMissing.includes_json_detail());
+    assert!(!ProcessWarningKind::CgroupPermissionDenied.includes_json_detail());
+    assert!(ProcessWarningKind::Vanished.includes_json_detail());
+    assert!(ProcessWarningKind::Malformed.includes_json_detail());
+    assert!(ProcessWarningKind::CgroupMalformed.includes_json_detail());
+}

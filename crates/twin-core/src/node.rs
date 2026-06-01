@@ -290,7 +290,7 @@ fn normalize_ipv4(ip: &str) -> Result<String, ParseError> {
     ))
 }
 
-fn lexical_canonical(path: &str) -> String {
+pub fn lexical_canonical(path: &str) -> String {
     let absolute = path.starts_with('/');
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     let mut stack: Vec<&str> = Vec::new();

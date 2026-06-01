@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::process::cgroup::CgroupMembership;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessRecord {
     pid: u32,
@@ -10,6 +12,7 @@ pub struct ProcessRecord {
     pub(crate) gid: Option<u32>,
     pub(crate) argv: Vec<String>,
     pub(crate) exe: Option<PathBuf>,
+    pub(crate) cgroup_memberships: Vec<CgroupMembership>,
 }
 
 impl ProcessRecord {
@@ -23,6 +26,7 @@ impl ProcessRecord {
             gid: None,
             argv: Vec::new(),
             exe: None,
+            cgroup_memberships: Vec::new(),
         }
     }
 
@@ -56,6 +60,10 @@ impl ProcessRecord {
 
     pub fn exe(&self) -> Option<&PathBuf> {
         self.exe.as_ref()
+    }
+
+    pub fn cgroup_memberships(&self) -> &[CgroupMembership] {
+        &self.cgroup_memberships
     }
 
     pub fn label(&self) -> String {

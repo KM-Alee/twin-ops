@@ -47,6 +47,8 @@ impl GraphEdge {
         }
     }
 
+    const INFERENCE_METADATA: &str = r#"{"inference":"systemd_cgroup_path"}"#;
+
     pub fn observed_parent(
         parent: &NodeId,
         child: &NodeId,
@@ -70,6 +72,76 @@ impl GraphEdge {
             first_seen,
             last_seen: seen_at,
             metadata: GraphMetadata::empty(),
+        }
+    }
+
+    pub fn observed_in_cgroup(
+        process: &NodeId,
+        cgroup: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::InCgroup;
+        let id = EdgeId::new(process, kind, cgroup);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: process.clone(),
+            to: cgroup.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::empty(),
+        }
+    }
+
+    pub fn inferred_service_owns_process(
+        service: &NodeId,
+        process: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        Self::inferred_service_owns(service, process, seen_at, existing)
+    }
+
+    pub fn inferred_service_owns_cgroup(
+        service: &NodeId,
+        cgroup: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        Self::inferred_service_owns(service, cgroup, seen_at, existing)
+    }
+
+    pub fn inferred_service_owns(
+        service: &NodeId,
+        owned: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::Owns;
+        let id = EdgeId::new(service, kind, owned);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: service.clone(),
+            to: owned.clone(),
+            kind,
+            class: EdgeClass::Inferred,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::INFERENCE_METADATA),
         }
     }
 

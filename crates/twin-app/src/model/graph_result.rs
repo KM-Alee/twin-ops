@@ -39,10 +39,35 @@ pub struct GraphNodeResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GraphOwnedNode {
+    pub id: String,
+    pub label: String,
+    pub edge_class: String,
+    pub observation_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphEvidenceLine {
+    pub source: String,
+    pub statement: String,
+    pub strength: String,
+    pub relationship: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphServiceResult {
+    pub service: GraphNodeSummary,
+    pub owned_processes: Vec<GraphOwnedNode>,
+    pub owned_cgroups: Vec<GraphOwnedNode>,
+    pub evidence: Vec<GraphEvidenceLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum GraphResult {
     List(GraphListResult),
     Node(GraphNodeResult),
+    Service(GraphServiceResult),
 }
 
 impl GraphResult {
@@ -69,6 +94,20 @@ impl GraphResult {
             outgoing,
             incoming,
             evidence_refs,
+        })
+    }
+
+    pub fn service(
+        service: GraphNodeSummary,
+        owned_processes: Vec<GraphOwnedNode>,
+        owned_cgroups: Vec<GraphOwnedNode>,
+        evidence: Vec<GraphEvidenceLine>,
+    ) -> Self {
+        Self::Service(GraphServiceResult {
+            service,
+            owned_processes,
+            owned_cgroups,
+            evidence,
         })
     }
 }

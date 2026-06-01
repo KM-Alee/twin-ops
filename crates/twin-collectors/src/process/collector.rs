@@ -191,5 +191,35 @@ fn raw_observations_for_record(
         }
     }
 
+    for membership in record.cgroup_memberships() {
+        let mut meta = ObservationMetadata::new();
+        meta.insert_u32("pid", record.pid());
+        meta.insert_str("cgroup_path", &membership.path);
+        meta.insert_str("hierarchy_id", &membership.hierarchy_id);
+        if !membership.controllers.is_empty() {
+            meta.insert_str_array("controllers", &membership.controllers);
+        }
+        if let Some(unit) = &membership.service_unit {
+            meta.insert_str("service_unit", unit);
+            meta.insert_bool("service_inference", true);
+        }
+        out.push(RawObservation {
+            source: ObservationSource::ProcCgroup,
+            kind: ObservationKind::ProcessBelongsToCgroup,
+            collector: CollectorName::new(COLLECTOR_NAME),
+            subject: Some(RawIdentity::Process { pid: record.pid() }),
+            object: Some(RawIdentity::Cgroup {
+                path: membership.path.clone(),
+            }),
+            timestamp,
+            raw_ref: Some(RawEvidenceRef::new(format!(
+                "/proc/{}/cgroup",
+                record.pid()
+            ))),
+            confidence_hint: ConfidenceHint::High,
+            metadata: meta,
+        });
+    }
+
     out
 }

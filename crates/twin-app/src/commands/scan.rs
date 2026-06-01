@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::path::Path;
 
@@ -6,8 +6,8 @@ use twin_collectors::{
     ProcessBatch, ProcessCollector, ProcessWarning, ProcessWarningKind, COLLECTOR_NAME,
 };
 use twin_core::{EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, ObservationId, TimestampNs};
-use twin_observation::{Observation, ObservationKind, Pipeline};
-use twin_store::{CollectorRunRow, Store};
+use twin_observation::{Observation, ObservationKind};
+use twin_store::{CollectorRunRow, Store, StoreError};
 
 use crate::error::{AppError, ScanError};
 use crate::model::{ScanResult, ScanWarning, ScanWarningDetail};
@@ -48,16 +48,23 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         return Err(ScanError::DatabaseNotInitialized.into());
     }
 
-    let pipeline = Pipeline::default();
+    let pipeline = twin_observation::Pipeline::default();
     let mut observations: Vec<Observation> = Vec::new();
     for raw in batch.drain_observations() {
         observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
 
     let parent_obs_by_child = parent_observation_ids(&observations);
+    let cgroup_obs_by_key = cgroup_observation_ids(&observations);
     let scan_time = batch.ended_at();
     let mut process_count = 0usize;
     let mut parent_edge_count = 0usize;
+    let mut cgroup_count = 0usize;
+    let mut service_count = 0usize;
+    let mut in_cgroup_edge_count = 0usize;
+    let mut service_owns_edge_count = 0usize;
+    let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
+    let mut seen_services: HashSet<NodeId> = HashSet::new();
 
     store
         .with_transaction(|store| {
@@ -90,6 +97,55 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                     let file_existing = store.get_node_typed(&file_id)?;
                     let file_node = GraphNode::file(&exe_str, scan_time, file_existing.as_ref());
                     store.upsert_node_typed(&file_node)?;
+                }
+
+                let process_id = NodeId::process(record.pid());
+                for membership in record.cgroup_memberships() {
+                    let cgroup_id = NodeId::cgroup(&membership.path);
+                    if upsert_node_once(store, &mut seen_cgroups, cgroup_id.clone(), |existing| {
+                        GraphNode::cgroup(&membership.path, scan_time, existing)
+                    })? {
+                        cgroup_count += 1;
+                    }
+
+                    let cgroup_obs_id =
+                        cgroup_obs_by_key.get(&(record.pid(), membership.path.clone()));
+                    let cgroup_obs_support = cgroup_obs_id.map(|id| (id, "support"));
+                    let cgroup_obs_direct = cgroup_obs_id.map(|id| (id, "direct"));
+
+                    if let Some(unit) = &membership.service_unit {
+                        let service_id = NodeId::service(unit);
+                        if upsert_node_once(
+                            store,
+                            &mut seen_services,
+                            service_id.clone(),
+                            |existing| GraphNode::service(unit, scan_time, existing),
+                        )? {
+                            service_count += 1;
+                        }
+
+                        for owned in [&process_id, &cgroup_id] {
+                            let edge = GraphEdge::inferred_service_owns(
+                                &service_id,
+                                owned,
+                                scan_time,
+                                load_existing_edge(store, &service_id, EdgeKind::Owns, owned)?
+                                    .as_ref(),
+                            );
+                            upsert_edge_with_link(store, &edge, cgroup_obs_support)?;
+                            service_owns_edge_count += 1;
+                        }
+                    }
+
+                    let in_cgroup = GraphEdge::observed_in_cgroup(
+                        &process_id,
+                        &cgroup_id,
+                        scan_time,
+                        load_existing_edge(store, &process_id, EdgeKind::InCgroup, &cgroup_id)?
+                            .as_ref(),
+                    );
+                    upsert_edge_with_link(store, &in_cgroup, cgroup_obs_direct)?;
+                    in_cgroup_edge_count += 1;
                 }
 
                 let Some(ppid) = record.ppid() else {
@@ -138,6 +194,10 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         ended_at_ns: batch.ended_at().as_i64(),
         process_count,
         parent_edge_count,
+        cgroup_count,
+        service_count,
+        in_cgroup_edge_count,
+        service_owns_edge_count,
         observation_count: observations.len(),
         warning_count: collector_warnings.len(),
         warnings: aggregate_warnings(collector_warnings),
@@ -162,17 +222,48 @@ fn parent_observation_ids(observations: &[Observation]) -> HashMap<u32, Observat
     map
 }
 
+fn cgroup_observation_ids(observations: &[Observation]) -> HashMap<(u32, String), ObservationId> {
+    let mut map = HashMap::new();
+    for obs in observations {
+        if obs.kind() != ObservationKind::ProcessBelongsToCgroup {
+            continue;
+        }
+        let Some(subject) = obs.subject() else {
+            continue;
+        };
+        let Some(pid) = subject.process_pid() else {
+            continue;
+        };
+        let path = obs
+            .metadata()
+            .get("cgroup_path")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let Some(path) = path else {
+            continue;
+        };
+        map.insert((pid, path), obs.id());
+    }
+    map
+}
+
 fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut vanished = 0usize;
     let mut permission = 0usize;
     let mut malformed = 0usize;
     let mut exe = 0usize;
+    let mut cgroup_missing = 0usize;
+    let mut cgroup_permission = 0usize;
+    let mut cgroup_malformed = 0usize;
     for w in warnings {
         match w.kind() {
             ProcessWarningKind::Vanished => vanished += 1,
             ProcessWarningKind::PermissionDenied => permission += 1,
             ProcessWarningKind::Malformed => malformed += 1,
             ProcessWarningKind::ExeUnreadable => exe += 1,
+            ProcessWarningKind::CgroupMissing => cgroup_missing += 1,
+            ProcessWarningKind::CgroupPermissionDenied => cgroup_permission += 1,
+            ProcessWarningKind::CgroupMalformed => cgroup_malformed += 1,
         }
     }
     let mut out = Vec::new();
@@ -180,6 +271,17 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     push_aggregate(&mut out, ProcessWarningKind::PermissionDenied, permission);
     push_aggregate(&mut out, ProcessWarningKind::Malformed, malformed);
     push_aggregate(&mut out, ProcessWarningKind::ExeUnreadable, exe);
+    push_aggregate(&mut out, ProcessWarningKind::CgroupMissing, cgroup_missing);
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::CgroupPermissionDenied,
+        cgroup_permission,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::CgroupMalformed,
+        cgroup_malformed,
+    );
     out
 }
 
@@ -204,15 +306,41 @@ fn detailed_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarningDetail> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use twin_collectors::ProcessWarningKind;
-
-    #[test]
-    fn bulk_coverage_gaps_omit_per_pid_json_details() {
-        assert!(!ProcessWarningKind::ExeUnreadable.includes_json_detail());
-        assert!(!ProcessWarningKind::PermissionDenied.includes_json_detail());
-        assert!(ProcessWarningKind::Vanished.includes_json_detail());
-        assert!(ProcessWarningKind::Malformed.includes_json_detail());
+fn upsert_node_once(
+    store: &mut Store,
+    seen: &mut HashSet<NodeId>,
+    id: NodeId,
+    build: impl FnOnce(Option<&GraphNode>) -> GraphNode,
+) -> Result<bool, StoreError> {
+    if !seen.insert(id.clone()) {
+        return Ok(false);
     }
+    let existing = store.get_node_typed(&id)?;
+    store.upsert_node_typed(&build(existing.as_ref()))?;
+    Ok(true)
+}
+
+fn load_existing_edge(
+    store: &Store,
+    from: &NodeId,
+    kind: EdgeKind,
+    to: &NodeId,
+) -> Result<Option<GraphEdge>, StoreError> {
+    let id = EdgeId::new(from, kind, to);
+    Ok(store
+        .get_edge(id.as_str())?
+        .as_ref()
+        .and_then(|row| GraphEdge::try_from(row).ok()))
+}
+
+fn upsert_edge_with_link(
+    store: &mut Store,
+    edge: &GraphEdge,
+    link: Option<(&ObservationId, &str)>,
+) -> Result<(), StoreError> {
+    store.upsert_edge_typed(edge)?;
+    if let Some((obs_id, role)) = link {
+        store.link_edge_observation(edge.id().as_str(), &obs_id.to_string(), role)?;
+    }
+    Ok(())
 }

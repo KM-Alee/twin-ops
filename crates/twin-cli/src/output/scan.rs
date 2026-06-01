@@ -16,8 +16,8 @@ pub fn render(result: &ScanResult) -> String {
         status,
         "result",
         &format!(
-            "{} processes, {} parent edges",
-            result.process_count, result.parent_edge_count
+            "{} processes, {} services, {} parent edges",
+            result.process_count, result.service_count, result.parent_edge_count
         ),
     );
     out.status_row(
@@ -28,7 +28,15 @@ pub fn render(result: &ScanResult) -> String {
     out.blank();
     out.section("persisted");
     out.tree_leaf(false, "processes", &result.process_count.to_string());
+    out.tree_leaf(false, "cgroups", &result.cgroup_count.to_string());
+    out.tree_leaf(false, "services", &result.service_count.to_string());
     out.tree_leaf(false, "parent-of", &result.parent_edge_count.to_string());
+    out.tree_leaf(false, "in-cgroup", &result.in_cgroup_edge_count.to_string());
+    out.tree_leaf(
+        false,
+        "service-owns",
+        &result.service_owns_edge_count.to_string(),
+    );
     out.tree_leaf(true, "observations", &result.observation_count.to_string());
 
     if result.warning_count > 0 {

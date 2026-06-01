@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process;
 
 use clap::Parser;
@@ -54,7 +55,20 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     let request = ScanRequest {
         config_override: args.config.clone(),
     };
-    match twin_app::scan(request) {
+    let result = match std::env::var_os("TWIN_PROC_ROOT") {
+        Some(root) => {
+            let proc_root = Path::new(&root);
+            match twin_app::paths::resolve_command_paths(request.config_override.as_deref()) {
+                Ok(paths) => twin_app::scan_in(&paths.layout, request, proc_root),
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            }
+        }
+        None => twin_app::scan(request),
+    };
+    match result {
         Ok(result) => {
             emit(global.json, &result, output::scan::render);
             0
