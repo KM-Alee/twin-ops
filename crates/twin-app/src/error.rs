@@ -24,6 +24,12 @@ pub enum AppError {
         #[source]
         source: ParseError,
     },
+    #[error("invalid impact target `{value}`: {source}")]
+    InvalidImpactTarget {
+        value: String,
+        #[source]
+        source: ParseError,
+    },
     #[error("unsupported graph kind: {kind}")]
     UnsupportedGraphKind { kind: String },
 }
@@ -60,6 +66,8 @@ pub enum ScanError {
     Observation(#[from] ObservationError),
     #[error("invalid port id: {0}")]
     InvalidPortId(#[from] ParseError),
+    #[error("fake /proc scan lock poisoned")]
+    FakeProcScanLockPoisoned,
 }
 
 #[derive(Debug, thiserror::Error)]

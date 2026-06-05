@@ -9,7 +9,11 @@ use twin_core::ParseError;
 pub enum ObservationSource {
     Proc,
     ProcNetTcp,
+    ProcNetUnix,
     ProcCgroup,
+    SystemdUnitFile,
+    SystemdDBus,
+    SystemdEnableSymlink,
 }
 
 impl fmt::Display for ObservationSource {
@@ -17,7 +21,11 @@ impl fmt::Display for ObservationSource {
         f.write_str(match self {
             Self::Proc => "proc",
             Self::ProcNetTcp => "proc_net_tcp",
+            Self::ProcNetUnix => "proc_net_unix",
             Self::ProcCgroup => "proc_cgroup",
+            Self::SystemdUnitFile => "systemd_unit_file",
+            Self::SystemdDBus => "systemd_dbus",
+            Self::SystemdEnableSymlink => "systemd_enable_symlink",
         })
     }
 }
@@ -29,7 +37,11 @@ impl FromStr for ObservationSource {
         match s {
             "proc" => Ok(Self::Proc),
             "proc_net_tcp" => Ok(Self::ProcNetTcp),
+            "proc_net_unix" => Ok(Self::ProcNetUnix),
             "proc_cgroup" => Ok(Self::ProcCgroup),
+            "systemd_unit_file" => Ok(Self::SystemdUnitFile),
+            "systemd_dbus" => Ok(Self::SystemdDBus),
+            "systemd_enable_symlink" => Ok(Self::SystemdEnableSymlink),
             other => Err(ParseError::Enum {
                 kind: "ObservationSource",
                 value: other.to_string(),
@@ -46,7 +58,17 @@ pub enum ObservationKind {
     ProcessParentSeen,
     TcpSocketSeen,
     TcpConnectionSeen,
+    UnixSocketSeen,
+    UnixConnectionSeen,
     ProcessBelongsToCgroup,
+    SystemdUnitSeen,
+    SystemdUnitRequires,
+    SystemdUnitWants,
+    SystemdUnitStateSeen,
+    SystemdUnitWantedBy,
+    SystemdSocketSeen,
+    SystemdSocketActivates,
+    SystemdCgroupCorrection,
 }
 
 impl fmt::Display for ObservationKind {
@@ -58,7 +80,17 @@ impl fmt::Display for ObservationKind {
             Self::ProcessParentSeen => "process_parent_seen",
             Self::TcpSocketSeen => "tcp_socket_seen",
             Self::TcpConnectionSeen => "tcp_connection_seen",
+            Self::UnixSocketSeen => "unix_socket_seen",
+            Self::UnixConnectionSeen => "unix_connection_seen",
             Self::ProcessBelongsToCgroup => "process_belongs_to_cgroup",
+            Self::SystemdUnitSeen => "systemd_unit_seen",
+            Self::SystemdUnitRequires => "systemd_unit_requires",
+            Self::SystemdUnitWants => "systemd_unit_wants",
+            Self::SystemdUnitStateSeen => "systemd_unit_state_seen",
+            Self::SystemdUnitWantedBy => "systemd_unit_wanted_by",
+            Self::SystemdSocketSeen => "systemd_socket_seen",
+            Self::SystemdSocketActivates => "systemd_socket_activates",
+            Self::SystemdCgroupCorrection => "systemd_cgroup_correction",
         })
     }
 }
@@ -74,7 +106,17 @@ impl FromStr for ObservationKind {
             "process_parent_seen" => Ok(Self::ProcessParentSeen),
             "tcp_socket_seen" => Ok(Self::TcpSocketSeen),
             "tcp_connection_seen" => Ok(Self::TcpConnectionSeen),
+            "unix_socket_seen" => Ok(Self::UnixSocketSeen),
+            "unix_connection_seen" => Ok(Self::UnixConnectionSeen),
             "process_belongs_to_cgroup" => Ok(Self::ProcessBelongsToCgroup),
+            "systemd_unit_seen" => Ok(Self::SystemdUnitSeen),
+            "systemd_unit_requires" => Ok(Self::SystemdUnitRequires),
+            "systemd_unit_wants" => Ok(Self::SystemdUnitWants),
+            "systemd_unit_state_seen" => Ok(Self::SystemdUnitStateSeen),
+            "systemd_unit_wanted_by" => Ok(Self::SystemdUnitWantedBy),
+            "systemd_socket_seen" => Ok(Self::SystemdSocketSeen),
+            "systemd_socket_activates" => Ok(Self::SystemdSocketActivates),
+            "systemd_cgroup_correction" => Ok(Self::SystemdCgroupCorrection),
             other => Err(ParseError::Enum {
                 kind: "ObservationKind",
                 value: other.to_string(),

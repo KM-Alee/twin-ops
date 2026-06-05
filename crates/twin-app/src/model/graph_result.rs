@@ -43,6 +43,8 @@ pub struct GraphOwnedNode {
     pub id: String,
     pub label: String,
     pub edge_class: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
     pub observation_ids: Vec<String>,
 }
 
@@ -60,9 +62,13 @@ pub struct GraphServiceResult {
     pub owned_processes: Vec<GraphOwnedNode>,
     pub owned_cgroups: Vec<GraphOwnedNode>,
     pub listening_ports: Vec<GraphOwnedNode>,
+    pub listening_unix: Vec<GraphOwnedNode>,
     pub connected_ports: Vec<GraphOwnedNode>,
+    pub connected_unix: Vec<GraphOwnedNode>,
     pub dependencies: Vec<GraphOwnedNode>,
     pub dependents: Vec<GraphOwnedNode>,
+    pub socket_activation: Vec<GraphOwnedNode>,
+    pub configured_dependents: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -77,12 +83,23 @@ pub struct GraphPortResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GraphUnixSocketResult {
+    pub unix_socket: GraphNodeSummary,
+    pub process_listeners: Vec<GraphOwnedNode>,
+    pub service_listeners: Vec<GraphOwnedNode>,
+    pub process_callers: Vec<GraphOwnedNode>,
+    pub service_callers: Vec<GraphOwnedNode>,
+    pub evidence: Vec<GraphEvidenceLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum GraphResult {
     List(GraphListResult),
     Node(GraphNodeResult),
     Service(GraphServiceResult),
     Port(GraphPortResult),
+    UnixSocket(GraphUnixSocketResult),
 }
 
 impl GraphResult {
@@ -126,6 +143,24 @@ impl GraphResult {
     ) -> Self {
         Self::Port(GraphPortResult {
             port,
+            process_listeners,
+            service_listeners,
+            process_callers,
+            service_callers,
+            evidence,
+        })
+    }
+
+    pub fn unix_socket(
+        unix_socket: GraphNodeSummary,
+        process_listeners: Vec<GraphOwnedNode>,
+        service_listeners: Vec<GraphOwnedNode>,
+        process_callers: Vec<GraphOwnedNode>,
+        service_callers: Vec<GraphOwnedNode>,
+        evidence: Vec<GraphEvidenceLine>,
+    ) -> Self {
+        Self::UnixSocket(GraphUnixSocketResult {
+            unix_socket,
             process_listeners,
             service_listeners,
             process_callers,

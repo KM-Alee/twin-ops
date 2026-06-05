@@ -1,15 +1,19 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::env;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use twin_collectors::{
-    ProcessBatch, ProcessCollector, ProcessWarning, ProcessWarningKind, COLLECTOR_NAME,
+    ProcessBatch, ProcessCollector, ProcessWarning, ProcessWarningKind, SystemdRuntimeBatch,
+    SystemdRuntimeCollector, SystemdUnitBatch, SystemdUnitCollector, SystemdWarning,
+    SystemdWarningKind, COLLECTOR_NAME,
 };
 use twin_core::{
-    EdgeClass, EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId,
-    TimestampNs,
+    EdgeClass, EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId, TimestampNs,
 };
 use twin_observation::{Observation, ObservationKind};
 use twin_store::{CollectorRunRow, Store, StoreError};
@@ -42,27 +46,135 @@ fn scan_at(
     if !db_path.exists() {
         return Err(ScanError::DatabaseNotInitialized.into());
     }
-    let started_at = TimestampNs::now();
-    let batch = ProcessCollector::new(proc_root).collect(started_at)?;
-    persist_scan(db_path, batch)
+    let samples = request.samples.clamp(1, 30);
+    let interval_secs = request.interval_secs.max(1);
+    let overall_started = TimestampNs::now();
+    let mut edges_first_seen_by_sample = Vec::with_capacity(samples as usize);
+    let mut last_result: Option<ScanResult> = None;
+    for sample_index in 0..samples {
+        if sample_index > 0 {
+            std::thread::sleep(Duration::from_secs(interval_secs));
+        }
+        let sample_proc = proc_root_for_sample(proc_root, sample_index);
+        let (result, edges_new) =
+            run_scan_pass(layout, request, sample_proc.as_ref(), db_path, sample_index, samples)?;
+        edges_first_seen_by_sample.push(edges_new);
+        last_result = Some(result);
+    }
+    let mut result = last_result.unwrap_or_default();
+    result.samples_requested = samples;
+    result.samples_completed = samples;
+    result.interval_secs = interval_secs;
+    result.edges_first_seen_by_sample = edges_first_seen_by_sample;
+    result.started_at_ns = overall_started.as_i64();
+    Ok(result)
 }
 
-fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, AppError> {
+fn proc_root_for_sample(proc_root: &Path, sample_index: u32) -> Cow<'_, Path> {
+    let sub = proc_root.join(format!("sample-{}", sample_index + 1));
+    if sub.is_dir() {
+        Cow::Owned(sub)
+    } else {
+        Cow::Borrowed(proc_root)
+    }
+}
+
+fn run_scan_pass(
+    _layout: &TwinLayout,
+    _request: &ScanRequest,
+    proc_root: &Path,
+    db_path: &Path,
+    sample_index: u32,
+    samples_total: u32,
+) -> Result<(ScanResult, usize), AppError> {
+    let started_at = TimestampNs::now();
+    let batch = ProcessCollector::new(proc_root).collect(started_at)?;
+    let unit_roots = systemd_unit_roots(proc_root);
+    let unit_batch = SystemdUnitCollector::new(unit_roots.clone()).collect(started_at)?;
+    let runtime_batch = collect_systemd_runtime(unit_roots, started_at)?;
+    persist_scan(
+        db_path,
+        batch,
+        unit_batch,
+        runtime_batch,
+        sample_index,
+        samples_total,
+    )
+}
+
+fn collect_systemd_runtime(
+    unit_roots: Vec<PathBuf>,
+    started_at: TimestampNs,
+) -> Result<SystemdRuntimeBatch, twin_collectors::CollectorError> {
+    if let Ok(json) = env::var("TWIN_SYSTEMD_CGROUP_MAP") {
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&json) {
+            if !map.is_empty() {
+                return SystemdRuntimeCollector::with_dbus_and_cgroup_fixture(
+                    unit_roots,
+                    Vec::new(),
+                    map,
+                )
+                .collect(started_at);
+            }
+        }
+    }
+    SystemdRuntimeCollector::new(unit_roots).collect(started_at)
+}
+
+fn systemd_unit_roots(proc_root: &Path) -> Vec<PathBuf> {
+    if proc_root == Path::new("/proc") {
+        return twin_collectors::default_search_paths();
+    }
+    if let Ok(root) = env::var("TWIN_SYSTEMD_UNIT_ROOT") {
+        let path = PathBuf::from(root);
+        if proc_root
+            .parent()
+            .is_some_and(|parent| path.starts_with(parent))
+        {
+            return vec![path];
+        }
+    }
+    Vec::new()
+}
+
+fn persist_scan(
+    db_path: &Path,
+    mut batch: ProcessBatch,
+    mut unit_batch: SystemdUnitBatch,
+    mut runtime_batch: SystemdRuntimeBatch,
+    sample_index: u32,
+    samples_total: u32,
+) -> Result<(ScanResult, usize), AppError> {
     let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
     if !store.is_initialized().map_err(ScanError::Store)? {
         return Err(ScanError::DatabaseNotInitialized.into());
     }
 
+    let edges_before = store.count_edges().map_err(ScanError::Store)?;
+    let sample_at = batch.started_at();
     let pipeline = twin_observation::Pipeline::default();
     let mut observations: Vec<Observation> = Vec::new();
-    for raw in batch.drain_observations() {
+    for mut raw in batch.drain_observations() {
+        tag_sample(&mut raw, sample_index, sample_at);
         observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
+    }
+    let mut unit_observations: Vec<Observation> = Vec::new();
+    for mut raw in unit_batch.drain_observations() {
+        tag_sample(&mut raw, sample_index, sample_at);
+        unit_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
+    }
+    let mut runtime_observations: Vec<Observation> = Vec::new();
+    for mut raw in runtime_batch.drain_observations() {
+        tag_sample(&mut raw, sample_index, sample_at);
+        runtime_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
 
     let parent_obs_by_child = parent_observation_ids(&observations);
     let cgroup_obs_by_key = cgroup_observation_ids(&observations);
     let tcp_obs_by_inode = tcp_socket_observation_ids(&observations);
     let tcp_conn_obs_by_key = tcp_connection_observation_ids(&observations);
+    let unix_obs_by_inode = unix_socket_observation_ids(&observations);
+    let unix_conn_obs_by_key = unix_connection_observation_ids(&observations);
     let scan_time = batch.ended_at();
     let mut process_count = 0usize;
     let mut parent_edge_count = 0usize;
@@ -78,7 +190,22 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
     let mut process_connects_to_edge_count = 0usize;
     let mut service_connects_to_edge_count = 0usize;
     let mut service_depends_on_edge_count = 0usize;
+    let mut declared_depends_on_edge_count = 0usize;
+    let mut systemd_unit_count = 0usize;
+    let mut enable_depends_on_edge_count = 0usize;
+    let mut dbus_depends_on_edge_count = 0usize;
+    let mut unix_listener_count = 0usize;
+    let mut unix_socket_count = 0usize;
+    let mut process_listens_on_unix_edge_count = 0usize;
+    let mut service_listens_on_unix_edge_count = 0usize;
+    let mut unmapped_unix_listener_count = 0usize;
+    let mut unix_connection_count = 0usize;
+    let mut process_connects_to_unix_edge_count = 0usize;
+    let mut service_connects_to_unix_edge_count = 0usize;
+    let mut service_depends_on_unix_edge_count = 0usize;
     let mut unmapped_active_socket_count = 0usize;
+    let mut socket_activation_edge_count = 0usize;
+    let mut cgroup_correction_count = 0usize;
     let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
     let mut seen_services: HashSet<NodeId> = HashSet::new();
     let mut seen_ports: HashSet<NodeId> = HashSet::new();
@@ -88,7 +215,16 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
     let mut seen_service_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut seen_service_depends: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut listeners_by_port: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    let mut listeners_by_unix_path: HashMap<String, Vec<NodeId>> = HashMap::new();
     let mut service_connect_targets: Vec<(NodeId, String, u16, Option<ObservationId>)> = Vec::new();
+    let mut service_unix_connect_targets: Vec<(NodeId, String, Option<ObservationId>)> = Vec::new();
+    let mut seen_unix_sockets: HashSet<NodeId> = HashSet::new();
+    let mut seen_process_unix_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_service_unix_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_process_unix_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_service_unix_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut listener_obs_by_unix_path: HashMap<String, ObservationId> = HashMap::new();
+    let mut expected_service_owns: HashSet<(NodeId, NodeId)> = HashSet::new();
 
     let pid_to_services = services_by_pid(batch.records());
     let owners_by_inode = batch.owners_by_inode();
@@ -101,6 +237,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         resolved_listeners.push((listener.inode, port_id));
     }
 
+    let live_cgroup_reader = super::scan_cgroup_validate::dbus_reader_for_scan();
     store
         .with_transaction(|store| {
             let mut listener_obs_by_port: HashMap<NodeId, ObservationId> = HashMap::new();
@@ -113,6 +250,9 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                 observation_count: observations.len() as i64,
                 warning_count: batch.warnings().len() as i64,
                 error_message: None,
+                metadata_json: super::scan_quality::warning_metadata_from_process_warnings(
+                    batch.warnings(),
+                ),
             })?;
 
             for obs in &observations {
@@ -161,6 +301,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                         }
 
                         for owned in [&process_id, &cgroup_id] {
+                            expected_service_owns.insert((service_id.clone(), owned.clone()));
                             let edge = GraphEdge::inferred_service_owns(
                                 &service_id,
                                 owned,
@@ -219,6 +360,17 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                         "support",
                     )?;
                 }
+            }
+
+            for record in batch.records() {
+                prune_stale_service_owns(
+                    store,
+                    &NodeId::process(record.pid()),
+                    &expected_service_owns,
+                )?;
+            }
+            for cgroup_id in &seen_cgroups {
+                prune_stale_service_owns(store, cgroup_id, &expected_service_owns)?;
             }
 
             for (inode, port_id) in &resolved_listeners {
@@ -432,6 +584,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                                 listener_obs_from_store(store, &listener_port, target_service)
                             });
                         let conn_obs = conn_obs_id.as_ref().map(|id| (id, "direct"));
+                        let pair = (source_service.clone(), target_service.clone());
                         let edge = GraphEdge::inferred_service_depends_on(
                             source_service,
                             target_service,
@@ -444,7 +597,235 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                             )?
                             .as_ref(),
                         );
+                        let first_pair = seen_service_depends.insert(pair);
                         upsert_edge_with_link(store, &edge, conn_obs)?;
+                        if first_pair {
+                            if let Some(link) = listener_obs {
+                                store.link_edge_observation(
+                                    edge.id().as_str(),
+                                    &link.0.to_string(),
+                                    link.1,
+                                )?;
+                            }
+                            service_depends_on_edge_count += 1;
+                        }
+                    }
+                }
+            }
+
+            for listener in batch.unix_listeners() {
+                unix_listener_count += 1;
+                let unix_id =
+                    NodeId::unix_socket(&listener.path).map_err(|e| StoreError::Decode {
+                        detail: e.to_string(),
+                    })?;
+                let unix_existing = store.get_node_typed(&unix_id)?;
+                let unix_node =
+                    GraphNode::unix_socket(&listener.path, scan_time, unix_existing.as_ref())
+                        .map_err(|e| StoreError::Decode {
+                            detail: e.to_string(),
+                        })?;
+                store.upsert_node_typed(&unix_node)?;
+                if seen_unix_sockets.insert(unix_id.clone()) {
+                    unix_socket_count += 1;
+                }
+
+                let owners = owners_by_inode
+                    .get(&listener.inode)
+                    .cloned()
+                    .unwrap_or_default();
+                let socket_obs = unix_obs_by_inode
+                    .get(&listener.inode)
+                    .map(|id| (id, "direct"));
+                if let Some(obs_id) = unix_obs_by_inode.get(&listener.inode) {
+                    listener_obs_by_unix_path.insert(listener.path.clone(), *obs_id);
+                }
+                if owners.is_empty() {
+                    unmapped_unix_listener_count += 1;
+                    continue;
+                }
+
+                for owner in &owners {
+                    let process_id = NodeId::process(owner.pid);
+                    let process_existing = store.get_node_typed(&process_id)?;
+                    if process_existing.is_none() {
+                        let label = batch
+                            .records()
+                            .iter()
+                            .find(|r| r.pid() == owner.pid)
+                            .and_then(|r| r.comm().map(str::to_string))
+                            .unwrap_or_else(|| format!("pid:{}", owner.pid));
+                        store.upsert_node_typed(&GraphNode::process(
+                            owner.pid, label, scan_time, None,
+                        ))?;
+                    }
+                    let edge = GraphEdge::observed_process_listens_on(
+                        &process_id,
+                        &unix_id,
+                        scan_time,
+                        load_existing_edge(store, &process_id, EdgeKind::ListensOn, &unix_id)?
+                            .as_ref(),
+                    );
+                    upsert_edge_with_link(store, &edge, socket_obs)?;
+                    if seen_process_unix_listeners.insert((process_id.clone(), unix_id.clone())) {
+                        process_listens_on_unix_edge_count += 1;
+                    }
+
+                    if let Some(services) = pid_to_services.get(&owner.pid) {
+                        for service_id in services {
+                            if !seen_service_unix_listeners
+                                .insert((service_id.clone(), unix_id.clone()))
+                            {
+                                continue;
+                            }
+                            let edge = GraphEdge::inferred_service_listens_on(
+                                service_id,
+                                &unix_id,
+                                scan_time,
+                                load_existing_edge(
+                                    store,
+                                    service_id,
+                                    EdgeKind::ListensOn,
+                                    &unix_id,
+                                )?
+                                .as_ref(),
+                            );
+                            upsert_edge_with_link(store, &edge, socket_obs)?;
+                            service_listens_on_unix_edge_count += 1;
+                            listeners_by_unix_path
+                                .entry(listener.path.clone())
+                                .or_default()
+                                .push(service_id.clone());
+                        }
+                    }
+                }
+            }
+
+            for connection in batch.unix_connections() {
+                if connection.path.is_empty() {
+                    continue;
+                }
+                unix_connection_count += 1;
+                let unix_id =
+                    NodeId::unix_socket(&connection.path).map_err(|e| StoreError::Decode {
+                        detail: e.to_string(),
+                    })?;
+                let unix_existing = store.get_node_typed(&unix_id)?;
+                let unix_node =
+                    GraphNode::unix_socket(&connection.path, scan_time, unix_existing.as_ref())
+                        .map_err(|e| StoreError::Decode {
+                            detail: e.to_string(),
+                        })?;
+                store.upsert_node_typed(&unix_node)?;
+                if seen_unix_sockets.insert(unix_id.clone()) {
+                    unix_socket_count += 1;
+                }
+
+                let conn_key = UnixConnectionObservationKey {
+                    inode: connection.inode,
+                    path: connection.path.clone(),
+                    raw_line: connection.raw_line,
+                };
+                let conn_obs = unix_conn_obs_by_key.get(&conn_key).map(|id| (id, "direct"));
+
+                let owners = owners_by_inode
+                    .get(&connection.inode)
+                    .cloned()
+                    .unwrap_or_default();
+                if owners.is_empty() {
+                    continue;
+                }
+
+                for owner in &owners {
+                    let process_id = NodeId::process(owner.pid);
+                    let process_existing = store.get_node_typed(&process_id)?;
+                    if process_existing.is_none() {
+                        let label = batch
+                            .records()
+                            .iter()
+                            .find(|r| r.pid() == owner.pid)
+                            .and_then(|r| r.comm().map(str::to_string))
+                            .unwrap_or_else(|| format!("pid:{}", owner.pid));
+                        store.upsert_node_typed(&GraphNode::process(
+                            owner.pid, label, scan_time, None,
+                        ))?;
+                    }
+                    let edge = GraphEdge::observed_process_connects_to(
+                        &process_id,
+                        &unix_id,
+                        scan_time,
+                        load_existing_edge(store, &process_id, EdgeKind::ConnectsTo, &unix_id)?
+                            .as_ref(),
+                    );
+                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    if seen_process_unix_connects.insert((process_id.clone(), unix_id.clone())) {
+                        process_connects_to_unix_edge_count += 1;
+                    }
+
+                    if let Some(services) = pid_to_services.get(&owner.pid) {
+                        for service_id in services {
+                            let edge = GraphEdge::inferred_service_connects_to(
+                                service_id,
+                                &unix_id,
+                                scan_time,
+                                load_existing_edge(
+                                    store,
+                                    service_id,
+                                    EdgeKind::ConnectsTo,
+                                    &unix_id,
+                                )?
+                                .as_ref(),
+                            );
+                            upsert_edge_with_link(
+                                store,
+                                &edge,
+                                conn_obs.map(|(id, _)| (id, "support")),
+                            )?;
+                            if seen_service_unix_connects
+                                .insert((service_id.clone(), unix_id.clone()))
+                            {
+                                service_connects_to_unix_edge_count += 1;
+                                service_unix_connect_targets.push((
+                                    service_id.clone(),
+                                    connection.path.clone(),
+                                    conn_obs.map(|(id, _)| *id),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (source_service, unix_path, conn_obs_id) in &service_unix_connect_targets {
+                let target_services = listeners_by_unix_path
+                    .get(unix_path)
+                    .cloned()
+                    .unwrap_or_default();
+                for target_service in &target_services {
+                    if source_service == target_service {
+                        continue;
+                    }
+                    let listener_obs = listener_obs_by_unix_path
+                        .get(unix_path)
+                        .copied()
+                        .map(|id| (id, "support"));
+                    let conn_obs = conn_obs_id.as_ref().map(|id| (id, "direct"));
+                    let pair = (source_service.clone(), target_service.clone());
+                    let edge = GraphEdge::inferred_service_depends_on_unix(
+                        source_service,
+                        target_service,
+                        scan_time,
+                        load_existing_edge(
+                            store,
+                            source_service,
+                            EdgeKind::DependsOn,
+                            target_service,
+                        )?
+                        .as_ref(),
+                    );
+                    let first_pair = seen_service_depends.insert(pair);
+                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    if first_pair {
                         if let Some(link) = listener_obs {
                             store.link_edge_observation(
                                 edge.id().as_str(),
@@ -452,21 +833,91 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                                 link.1,
                             )?;
                         }
-                        if seen_service_depends
-                            .insert((source_service.clone(), target_service.clone()))
-                        {
-                            service_depends_on_edge_count += 1;
-                        }
+                        service_depends_on_unix_edge_count += 1;
                     }
                 }
             }
+
+            systemd_unit_count = super::scan_systemd::persist_systemd_in_scan(
+                store,
+                &unit_batch,
+                &unit_observations,
+                scan_time,
+                &mut declared_depends_on_edge_count,
+                &mut seen_service_depends,
+            )?;
+
+            socket_activation_edge_count = super::scan_systemd_socket::persist_socket_activation_in_scan(
+                store,
+                &unit_observations,
+                scan_time,
+                &mut seen_service_depends,
+            )?;
+
+            super::scan_systemd_runtime::persist_runtime_in_scan(
+                store,
+                &runtime_batch,
+                &runtime_observations,
+                scan_time,
+                &mut enable_depends_on_edge_count,
+                &mut dbus_depends_on_edge_count,
+                &mut seen_service_depends,
+            )?;
+
+            let cgroup_reader: Option<&dyn twin_collectors::SystemdDBusReader> = runtime_batch
+                .cgroup_dbus_reader()
+                .map(|r| r as &dyn twin_collectors::SystemdDBusReader)
+                .or_else(|| {
+                    live_cgroup_reader
+                        .as_ref()
+                        .map(|r| r.as_ref() as &dyn twin_collectors::SystemdDBusReader)
+                });
+            cgroup_correction_count =
+                super::scan_cgroup_validate::apply_cgroup_corrections(
+                store,
+                batch.records(),
+                scan_time,
+                cgroup_reader,
+            )?;
+
+            store.update_collector_run_metadata(
+                run_id,
+                &super::scan_quality::process_collector_metadata(
+                    super::scan_quality::ProcessCollectorMetadataInput {
+                        warnings: batch.warnings(),
+                        sample_index,
+                        samples_total,
+                        tcp_connection_count,
+                        unmapped_active_socket_count,
+                    },
+                ),
+            )?;
 
             Ok(())
         })
         .map_err(ScanError::Store)?;
 
-    let collector_warnings = batch.warnings();
-    Ok(ScanResult {
+    let edges_after = store.count_edges().map_err(ScanError::Store)?;
+    let edges_new = (edges_after - edges_before).max(0) as usize;
+
+    let process_warnings = batch.warnings();
+    let systemd_warnings = unit_batch.warnings();
+    let runtime_warnings = runtime_batch.warnings();
+    let mut warnings = aggregate_warnings(process_warnings);
+    warnings.extend(aggregate_systemd_warnings(systemd_warnings));
+    warnings.extend(aggregate_systemd_warnings(runtime_warnings));
+    warnings.sort_by(|a, b| a.kind.cmp(&b.kind));
+    let warning_count = process_warnings.len() + systemd_warnings.len() + runtime_warnings.len();
+    let total_observations =
+        observations.len() + unit_observations.len() + runtime_observations.len();
+    Ok((
+        ScanResult {
+        samples_requested: 1,
+        samples_completed: 1,
+        interval_secs: 0,
+        edges_first_seen_by_sample: vec![edges_new],
+        socket_activation_edge_count,
+        cgroup_correction_count,
         started_at_ns: batch.started_at().as_i64(),
         ended_at_ns: batch.ended_at().as_i64(),
         process_count,
@@ -484,13 +935,151 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         process_connects_to_edge_count,
         service_connects_to_edge_count,
         service_depends_on_edge_count,
+        declared_depends_on_edge_count,
+        systemd_unit_count,
+        enable_depends_on_edge_count,
+        dbus_depends_on_edge_count,
+        dbus_available: runtime_batch.dbus_available(),
+        unix_listener_count,
+        unix_socket_count,
+        process_listens_on_unix_edge_count,
+        service_listens_on_unix_edge_count,
+        unmapped_unix_listener_count,
+        unix_connection_count,
+        process_connects_to_unix_edge_count,
+        service_connects_to_unix_edge_count,
+        service_depends_on_unix_edge_count,
         unmapped_active_socket_count,
         socket_owner_inode_count: batch.owners_by_inode().len(),
-        observation_count: observations.len(),
-        warning_count: collector_warnings.len(),
-        warnings: aggregate_warnings(collector_warnings),
-        warning_details: detailed_warnings(collector_warnings),
-    })
+        observation_count: total_observations,
+        warning_count,
+        warnings,
+        warning_details: detailed_warnings(process_warnings),
+        },
+        edges_new,
+    ))
+}
+
+fn tag_sample(raw: &mut twin_observation::RawObservation, sample_index: u32, sample_at: TimestampNs) {
+    raw.metadata.insert_u32("sample_index", sample_index);
+    raw.metadata
+        .insert_str("sample_at_ns", &sample_at.as_i64().to_string());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct UnixConnectionObservationKey {
+    inode: u64,
+    path: String,
+    raw_line: usize,
+}
+
+fn unix_socket_observation_ids(observations: &[Observation]) -> HashMap<u64, ObservationId> {
+    let mut map = HashMap::new();
+    for obs in observations {
+        if obs.kind() != ObservationKind::UnixSocketSeen {
+            continue;
+        }
+        let Some(inode) = obs
+            .metadata()
+            .get("inode")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        map.insert(inode, obs.id());
+    }
+    map
+}
+
+fn unix_connection_observation_ids(
+    observations: &[Observation],
+) -> HashMap<UnixConnectionObservationKey, ObservationId> {
+    let mut map = HashMap::new();
+    for obs in observations {
+        if obs.kind() != ObservationKind::UnixConnectionSeen {
+            continue;
+        }
+        let Some(inode) = obs
+            .metadata()
+            .get("inode")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let path = obs
+            .metadata()
+            .get("path")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let raw_line = obs
+            .metadata()
+            .get("raw_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let Some(raw_line) = raw_line else {
+            continue;
+        };
+        map.insert(
+            UnixConnectionObservationKey {
+                inode,
+                path,
+                raw_line,
+            },
+            obs.id(),
+        );
+    }
+    map
+}
+
+fn aggregate_systemd_warnings(warnings: &[SystemdWarning]) -> Vec<ScanWarning> {
+    let mut path_unreadable = 0usize;
+    let mut parse_error = 0usize;
+    let mut glob_skipped = 0usize;
+    let mut masked_empty = 0usize;
+    for w in warnings {
+        match w.kind() {
+            SystemdWarningKind::PathUnreadable => path_unreadable += 1,
+            SystemdWarningKind::ParseError => parse_error += 1,
+            SystemdWarningKind::GlobInstanceSkipped => glob_skipped += 1,
+            SystemdWarningKind::MaskedEmpty => masked_empty += 1,
+            SystemdWarningKind::DbusUnavailable => {}
+        }
+    }
+    let mut out = Vec::new();
+    push_systemd_aggregate(
+        &mut out,
+        SystemdWarningKind::PathUnreadable,
+        path_unreadable,
+    );
+    push_systemd_aggregate(&mut out, SystemdWarningKind::ParseError, parse_error);
+    push_systemd_aggregate(
+        &mut out,
+        SystemdWarningKind::GlobInstanceSkipped,
+        glob_skipped,
+    );
+    push_systemd_aggregate(&mut out, SystemdWarningKind::MaskedEmpty, masked_empty);
+    let dbus_unavailable = warnings
+        .iter()
+        .filter(|w| w.kind() == SystemdWarningKind::DbusUnavailable)
+        .count();
+    push_systemd_aggregate(
+        &mut out,
+        SystemdWarningKind::DbusUnavailable,
+        dbus_unavailable,
+    );
+    out
+}
+
+fn push_systemd_aggregate(out: &mut Vec<ScanWarning>, kind: SystemdWarningKind, count: usize) {
+    if count > 0 {
+        out.push(ScanWarning {
+            kind: kind.aggregate_key().to_string(),
+            count,
+        });
+    }
 }
 
 fn services_by_pid(records: &[twin_collectors::ProcessRecord]) -> HashMap<u32, Vec<NodeId>> {
@@ -709,6 +1298,10 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut fd_vanished = 0usize;
     let mut socket_unmapped = 0usize;
     let mut active_socket_unmapped = 0usize;
+    let mut unix_table_missing = 0usize;
+    let mut unix_table_malformed = 0usize;
+    let mut unix_socket_unmapped = 0usize;
+    let mut unix_connection_unmapped = 0usize;
     for w in warnings {
         match w.kind() {
             ProcessWarningKind::Vanished => vanished += 1,
@@ -725,6 +1318,10 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
             ProcessWarningKind::FdVanished => fd_vanished += 1,
             ProcessWarningKind::SocketUnmapped => socket_unmapped += 1,
             ProcessWarningKind::ActiveSocketUnmapped => active_socket_unmapped += 1,
+            ProcessWarningKind::UnixTableMissing => unix_table_missing += 1,
+            ProcessWarningKind::UnixTableMalformed => unix_table_malformed += 1,
+            ProcessWarningKind::UnixSocketUnmapped => unix_socket_unmapped += 1,
+            ProcessWarningKind::UnixConnectionUnmapped => unix_connection_unmapped += 1,
         }
     }
     let mut out = Vec::new();
@@ -770,6 +1367,26 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
         ProcessWarningKind::ActiveSocketUnmapped,
         active_socket_unmapped,
     );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UnixTableMissing,
+        unix_table_missing,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UnixTableMalformed,
+        unix_table_malformed,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UnixSocketUnmapped,
+        unix_socket_unmapped,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UnixConnectionUnmapped,
+        unix_connection_unmapped,
+    );
     out
 }
 
@@ -794,6 +1411,30 @@ fn detailed_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarningDetail> {
         .collect()
 }
 
+fn prune_stale_service_owns(
+    store: &mut Store,
+    target: &NodeId,
+    expected: &HashSet<(NodeId, NodeId)>,
+) -> Result<(), StoreError> {
+    for row in store.list_edges_to(target.as_str())? {
+        let Ok(edge) = GraphEdge::try_from(&row) else {
+            continue;
+        };
+        if edge.kind() != EdgeKind::Owns || edge.class() != EdgeClass::Inferred {
+            continue;
+        }
+        let service_id = edge.from();
+        if service_id.kind() != Some(NodeKind::Service) {
+            continue;
+        }
+        if expected.contains(&(service_id.clone(), target.clone())) {
+            continue;
+        }
+        store.delete_edge(edge.id().as_str())?;
+    }
+    Ok(())
+}
+
 fn upsert_node_once(
     store: &mut Store,
     seen: &mut HashSet<NodeId>,
@@ -808,7 +1449,7 @@ fn upsert_node_once(
     Ok(true)
 }
 
-fn load_existing_edge(
+pub(crate) fn load_existing_edge(
     store: &Store,
     from: &NodeId,
     kind: EdgeKind,
@@ -821,7 +1462,7 @@ fn load_existing_edge(
         .and_then(|row| GraphEdge::try_from(row).ok()))
 }
 
-fn upsert_edge_with_link(
+pub(crate) fn upsert_edge_with_link(
     store: &mut Store,
     edge: &GraphEdge,
     link: Option<(&ObservationId, &str)>,

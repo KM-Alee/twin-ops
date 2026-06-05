@@ -6,13 +6,16 @@ pub mod paths;
 
 pub use error::{AppError, GraphError, ImpactError, ScanError};
 pub use model::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEdgeSummary,
-    GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode,
-    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, ImpactDependent,
-    ImpactEvidenceLine, ImpactResult, InitResult, PermissionMode, ScanResult, ScanWarning,
-    ScanWarningDetail,
+    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EvidenceStrengthView,
+    GraphEdgeSummary, GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary,
+    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
+    GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
+    InitResult, PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult,
+    ScanWarning, ScanWarningDetail,
 };
 pub use paths::TwinLayout;
+
+pub use crate::commands::scan_quality::assess_scan_quality;
 
 use std::path::{Path, PathBuf};
 
@@ -49,9 +52,30 @@ pub fn read_config(
     config_io::read(path)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ScanRequest {
     pub config_override: Option<PathBuf>,
+    pub samples: u32,
+    pub interval_secs: u64,
+}
+
+impl Default for ScanRequest {
+    fn default() -> Self {
+        Self {
+            config_override: None,
+            samples: 1,
+            interval_secs: 2,
+        }
+    }
+}
+
+impl ScanRequest {
+    pub fn default_with_config(config_override: Option<PathBuf>) -> Self {
+        Self {
+            config_override,
+            ..Self::default()
+        }
+    }
 }
 
 pub fn scan(request: ScanRequest) -> Result<ScanResult, AppError> {

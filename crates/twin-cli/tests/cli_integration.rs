@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use support::{
     init_and_scan, stderr_utf8, stdout_utf8, twin_bin, write_ambiguous_services_fixture,
-    write_malformed_cgroup_fixture, write_non_systemd_cgroup_fixture, write_slice5_fixture,
-    TwinHome,
+    write_malformed_cgroup_fixture, write_non_systemd_cgroup_fixture,
+    write_proc_fixture_with_active_connection, write_slice5_fixture, TwinHome,
 };
 use twin_store::Store;
 
@@ -129,6 +129,19 @@ fn graph_default_lists_process_tree() {
     assert!(text.contains("Process tree"));
     assert!(text.contains("systemd"));
     assert!(text.contains("nginx"));
+}
+
+#[test]
+fn graph_rescans_before_view_without_explicit_scan() {
+    let home = TwinHome::new();
+    write_slice5_fixture(&home.proc_root);
+    assert!(home.run(&["init"]).status.success());
+    let out = home.run(&["graph"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("twin graph"));
+    assert!(text.contains("nginx"));
+    assert!(!text.contains("twin scan"));
 }
 
 #[test]
@@ -435,4 +448,48 @@ fn graph_invalid_target_exits_nonzero() {
     assert!(
         stderr_utf8(&out).contains("invalid graph target") || stderr_utf8(&out).contains("Error")
     );
+}
+
+#[test]
+fn impact_service_after_scan_shows_risk() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["impact", "postgresql.service"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("twin impact"));
+    assert!(text.contains("risk"));
+    assert!(text.contains("evidence strength"));
+}
+
+#[test]
+fn impact_port_after_scan_shows_callers_and_listeners() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["impact", "port:tcp:127.0.0.1:5432"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("owned by"));
+    assert!(text.contains("direct dependents"));
+}
+
+#[test]
+fn impact_missing_service_exits_nonzero() {
+    let home = TwinHome::new();
+    init_and_scan(&home);
+    let out = home.run(&["impact", "missing.service"]);
+    assert!(!out.status.success());
+    assert!(stderr_utf8(&out).contains("not found") || stderr_utf8(&out).contains("Error"));
+}
+
+#[test]
+fn impact_before_init_exits_nonzero() {
+    let home = TwinHome::new();
+    let out = home.run_without_proc(&["impact", "nginx.service"]);
+    assert!(!out.status.success());
+    assert!(stderr_utf8(&out).contains("not initialized") || stderr_utf8(&out).contains("Error"));
 }

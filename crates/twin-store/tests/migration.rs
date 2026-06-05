@@ -35,6 +35,33 @@ fn upgrades_existing_v1_database() {
 }
 
 #[test]
+fn upgrades_v2_adds_collector_run_metadata_json() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("twin.db");
+    let store = support::open_v2_only(&path);
+    assert!(
+        !support::column_exists(&path, "collector_runs", "metadata_json"),
+        "v2 schema should not have metadata_json yet"
+    );
+    store.initialize().expect("migrate to v3");
+    assert_eq!(store.schema_version().expect("version"), LATEST_VERSION);
+    assert!(support::column_exists(
+        &path,
+        "collector_runs",
+        "metadata_json"
+    ));
+    let mut store = Store::open(&path).expect("reopen");
+    store
+        .insert_collector_run(&support::collector_run_row("proc_process", 1, 2))
+        .expect("insert");
+    let run = store
+        .latest_collector_run("proc_process")
+        .expect("latest")
+        .expect("run");
+    assert_eq!(run.metadata_json, "{}");
+}
+
+#[test]
 fn initialize_twice_is_idempotent() {
     let store = Store::open_in_memory().expect("open");
     store.initialize().expect("first");

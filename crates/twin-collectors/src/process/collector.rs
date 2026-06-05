@@ -10,21 +10,32 @@ use twin_observation::{
 use crate::error::CollectorError;
 use crate::process::process_record::ProcessRecord;
 use crate::process::procfs::{
-    read_fd_socket_owners, read_process, read_tcp_table_content, ProcReader, StdProcReader,
+    read_fd_socket_owners, read_process, read_tcp_table_content, read_unix_table_content,
+    ProcReader, StdProcReader,
 };
 use crate::process::socket::{
     owners_by_inode, parse_tcp_table, SocketOwner, TcpConnectionRecord, TcpSocketRecord,
     TcpTableKind,
 };
+use crate::process::unix::{parse_unix_table, UnixConnectionRecord, UnixSocketRecord};
 use crate::process::warning::{ProcessWarning, ProcessWarningKind};
 
 pub const COLLECTOR_NAME: &str = "proc_process";
+
+type UnixSocketCollectOutput = (
+    Vec<UnixSocketRecord>,
+    Vec<UnixConnectionRecord>,
+    Vec<RawObservation>,
+    HashMap<u64, Vec<SocketOwner>>,
+);
 
 pub struct ProcessBatch {
     observations: Vec<RawObservation>,
     records: Vec<ProcessRecord>,
     tcp_listeners: Vec<TcpSocketRecord>,
     tcp_connections: Vec<TcpConnectionRecord>,
+    unix_listeners: Vec<UnixSocketRecord>,
+    unix_connections: Vec<UnixConnectionRecord>,
     owners_by_inode: HashMap<u64, Vec<SocketOwner>>,
     warnings: Vec<ProcessWarning>,
     started_at: TimestampNs,
@@ -46,6 +57,14 @@ impl ProcessBatch {
 
     pub fn tcp_connections(&self) -> &[TcpConnectionRecord] {
         &self.tcp_connections
+    }
+
+    pub fn unix_listeners(&self) -> &[UnixSocketRecord] {
+        &self.unix_listeners
+    }
+
+    pub fn unix_connections(&self) -> &[UnixConnectionRecord] {
+        &self.unix_connections
     }
 
     pub fn owners_by_inode(&self) -> &HashMap<u64, Vec<SocketOwner>> {
@@ -111,7 +130,7 @@ impl<R: ProcReader> ProcessCollector<R> {
             records.push(record);
         }
 
-        let (tcp_listeners, tcp_connections, owners_by_inode, socket_observations) =
+        let (tcp_listeners, tcp_connections, mut owners_by_inode, tcp_observations) =
             collect_tcp_sockets(
                 &self.reader,
                 &self.proc_root,
@@ -119,13 +138,29 @@ impl<R: ProcReader> ProcessCollector<R> {
                 started_at,
                 &mut warnings,
             );
-        observations.extend(socket_observations);
+        observations.extend(tcp_observations);
+
+        let (unix_listeners, unix_connections, unix_observations, mut unix_owners) =
+            collect_unix_sockets(
+                &self.reader,
+                &self.proc_root,
+                &records,
+                started_at,
+                &owners_by_inode,
+                &mut warnings,
+            );
+        observations.extend(unix_observations);
+        for (inode, owners) in unix_owners.drain() {
+            owners_by_inode.entry(inode).or_default().extend(owners);
+        }
 
         Ok(ProcessBatch {
             observations,
             records,
             tcp_listeners,
             tcp_connections,
+            unix_listeners,
+            unix_connections,
             owners_by_inode,
             warnings,
             started_at,
@@ -164,6 +199,10 @@ fn collect_tcp_sockets<R: ProcReader>(
                 format!("line {}: {}", issue.line, issue.detail),
             ));
         }
+    }
+
+    if listeners.is_empty() && connections.is_empty() {
+        return (listeners, connections, HashMap::new(), Vec::new());
     }
 
     let mut socket_owners = Vec::new();
@@ -215,6 +254,163 @@ fn collect_tcp_sockets<R: ProcReader>(
     }
 
     (listeners, connections, owner_map, observations)
+}
+
+fn collect_unix_sockets<R: ProcReader>(
+    reader: &R,
+    proc_root: &Path,
+    records: &[ProcessRecord],
+    started_at: TimestampNs,
+    existing_owners: &HashMap<u64, Vec<SocketOwner>>,
+    warnings: &mut Vec<ProcessWarning>,
+) -> UnixSocketCollectOutput {
+    let mut listeners = Vec::new();
+    let mut connections = Vec::new();
+    let Some(content) = read_unix_table_content(reader, proc_root, warnings) else {
+        return (listeners, connections, Vec::new(), HashMap::new());
+    };
+    let parsed = parse_unix_table(&content);
+    listeners.extend(parsed.listeners);
+    connections.extend(parsed.connections);
+    for issue in parsed.warnings {
+        warnings.push(ProcessWarning::new(
+            ProcessWarningKind::UnixTableMalformed,
+            proc_root.join("net").join("unix"),
+            format!("line {}: {}", issue.line, issue.detail),
+        ));
+    }
+
+    if listeners.is_empty() && connections.is_empty() {
+        return (listeners, connections, Vec::new(), HashMap::new());
+    }
+
+    let (inode_owner_map, supplemental_owners) = if existing_owners.is_empty() {
+        let mut socket_owners = Vec::new();
+        for record in records {
+            socket_owners.extend(read_fd_socket_owners(
+                reader,
+                proc_root,
+                record.pid(),
+                warnings,
+            ));
+        }
+        let map = owners_by_inode(&socket_owners);
+        (map.clone(), map)
+    } else {
+        (existing_owners.clone(), HashMap::new())
+    };
+
+    let mut observations = Vec::new();
+    for listener in &listeners {
+        let owners = inode_owner_map
+            .get(&listener.inode)
+            .cloned()
+            .unwrap_or_default();
+        if owners.is_empty() {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::UnixSocketUnmapped,
+                proc_root.join("net").join("unix"),
+                format!("inode {} listening on {}", listener.inode, listener.path),
+            ));
+        }
+        observations.push(raw_observation_for_unix_listener(
+            listener, &owners, started_at,
+        ));
+    }
+
+    for connection in &connections {
+        let owners = inode_owner_map
+            .get(&connection.inode)
+            .cloned()
+            .unwrap_or_default();
+        if owners.is_empty() {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::UnixConnectionUnmapped,
+                proc_root.join("net").join("unix"),
+                format!(
+                    "inode {} connected on {}",
+                    connection.inode,
+                    if connection.path.is_empty() {
+                        "(no path)"
+                    } else {
+                        &connection.path
+                    }
+                ),
+            ));
+        }
+        observations.push(raw_observation_for_unix_connection(
+            connection, &owners, started_at,
+        ));
+    }
+
+    (listeners, connections, observations, supplemental_owners)
+}
+
+fn raw_observation_for_unix_listener(
+    listener: &UnixSocketRecord,
+    owners: &[SocketOwner],
+    timestamp: TimestampNs,
+) -> RawObservation {
+    let raw_ref = RawEvidenceRef::new(format!("/proc/net/unix:{}", listener.raw_line));
+    let mut meta = ObservationMetadata::new();
+    meta.insert_str("inode", &listener.inode.to_string());
+    meta.insert_str("state", "listen");
+    meta.insert_str("path", &listener.path);
+    meta.insert_u32("raw_line", listener.raw_line as u32);
+    meta.insert_bool("mapped", !owners.is_empty());
+    let owner_pids: Vec<String> = owners.iter().map(|o| o.pid.to_string()).collect();
+    let owner_fds: Vec<String> = owners.iter().map(|o| o.fd_path.clone()).collect();
+    meta.insert_str_array("owner_pids", &owner_pids);
+    meta.insert_str_array("owner_fds", &owner_fds);
+    RawObservation {
+        source: ObservationSource::ProcNetUnix,
+        kind: ObservationKind::UnixSocketSeen,
+        collector: CollectorName::new(COLLECTOR_NAME),
+        subject: Some(RawIdentity::UnixSocket {
+            path: listener.path.clone(),
+        }),
+        object: None,
+        timestamp,
+        raw_ref: Some(raw_ref),
+        confidence_hint: ConfidenceHint::High,
+        metadata: meta,
+    }
+}
+
+fn raw_observation_for_unix_connection(
+    connection: &UnixConnectionRecord,
+    owners: &[SocketOwner],
+    timestamp: TimestampNs,
+) -> RawObservation {
+    let raw_ref = RawEvidenceRef::new(format!("/proc/net/unix:{}", connection.raw_line));
+    let mut meta = ObservationMetadata::new();
+    meta.insert_str("inode", &connection.inode.to_string());
+    meta.insert_str("state", "connected");
+    meta.insert_str("path", &connection.path);
+    meta.insert_u32("raw_line", connection.raw_line as u32);
+    meta.insert_bool("mapped", !owners.is_empty());
+    let owner_pids: Vec<String> = owners.iter().map(|o| o.pid.to_string()).collect();
+    let owner_fds: Vec<String> = owners.iter().map(|o| o.fd_path.clone()).collect();
+    meta.insert_str_array("owner_pids", &owner_pids);
+    meta.insert_str_array("owner_fds", &owner_fds);
+    let subject = if connection.path.is_empty() {
+        None
+    } else {
+        Some(RawIdentity::UnixSocket {
+            path: connection.path.clone(),
+        })
+    };
+    RawObservation {
+        source: ObservationSource::ProcNetUnix,
+        kind: ObservationKind::UnixConnectionSeen,
+        collector: CollectorName::new(COLLECTOR_NAME),
+        subject,
+        object: None,
+        timestamp,
+        raw_ref: Some(raw_ref),
+        confidence_hint: ConfidenceHint::High,
+        metadata: meta,
+    }
 }
 
 fn raw_observation_for_connection(

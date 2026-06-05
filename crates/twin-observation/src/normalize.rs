@@ -12,6 +12,7 @@ impl Normalizer {
             RawIdentity::Process { pid } => NodeId::process(*pid),
             RawIdentity::Service { unit } => NodeId::service(unit),
             RawIdentity::TcpEndpoint { ip, port } => NodeId::port_tcp(ip, *port)?,
+            RawIdentity::UnixSocket { path } => NodeId::unix_socket(path)?,
             RawIdentity::File { path } => NodeId::file(path),
             RawIdentity::Cgroup { path } => NodeId::cgroup(path),
         })

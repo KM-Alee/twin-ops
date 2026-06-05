@@ -12,7 +12,7 @@ impl Store {
     ) -> Result<(), StoreError> {
         self.conn
             .execute(
-                "INSERT INTO edge_observations (edge_id, observation_id, role)
+                "INSERT OR IGNORE INTO edge_observations (edge_id, observation_id, role)
                  VALUES (?1, ?2, ?3)",
                 params![edge_id, observation_id, role],
             )

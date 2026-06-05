@@ -81,6 +81,7 @@ pub fn collector_run_row(collector: &str, started: i64, ended: i64) -> Collector
         observation_count: 0,
         warning_count: 0,
         error_message: None,
+        metadata_json: "{}".to_string(),
     }
 }
 
@@ -99,6 +100,23 @@ pub fn open_v1_only(path: &Path) -> Store {
     store.apply_migrations_through(1).expect("v1");
     assert_eq!(store.schema_version().expect("version"), 1);
     store
+}
+
+pub fn open_v2_only(path: &Path) -> Store {
+    let store = Store::open(path).expect("open");
+    store.apply_migrations_through(2).expect("v2");
+    assert_eq!(store.schema_version().expect("version"), 2);
+    store
+}
+
+pub fn column_exists(path: &Path, table: &str, column: &str) -> bool {
+    let conn = rusqlite::Connection::open(path).expect("open");
+    conn.query_row(
+        "SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2",
+        [table, column],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 pub fn assert_foreign_key_err(err: StoreError) {

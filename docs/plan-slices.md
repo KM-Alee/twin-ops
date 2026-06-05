@@ -577,6 +577,25 @@ Unknowns:
 
 ---
 
+# Slice 8.5: Declared systemd Dependencies and Scoped Impact Unknowns
+
+## Goal
+
+Detect service dependencies from systemd unit files and make impact reports trustworthy on unprivileged desktop scans.
+
+## Working Demo
+
+`twin scan` → `twin impact containerd.service` shows docker; `twin doctor` shows scan quality.
+
+## Acceptance
+
+* unit-file Requires/Wants → observed depends_on edges
+* impact includes declared + runtime dependents
+* global socket gaps no longer force unknown risk on unrelated services
+* doctor reports scan_quality
+
+---
+
 # Slice 9: Overlay Emulation MVP
 
 ## Goal

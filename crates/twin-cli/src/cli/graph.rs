@@ -35,6 +35,13 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
 }
 
 fn parse_positional(value: &str) -> Result<GraphQuery, AppError> {
+    if value.starts_with("port:tcp:") || value.starts_with("unix:") {
+        let id = NodeId::from_str(value).map_err(|source| AppError::InvalidGraphTarget {
+            value: value.to_string(),
+            source,
+        })?;
+        return Ok(GraphQuery::Node(id));
+    }
     if let Ok(id) = NodeId::from_str(value) {
         return Ok(GraphQuery::Node(id));
     }
@@ -115,6 +122,17 @@ mod tests {
             target: None,
         });
         assert_eq!(req.kind, Some(NodeKind::Process));
+    }
+
+    #[test]
+    fn invalid_port_target_errors() {
+        let err = graph_request(&GraphArgs {
+            config: None,
+            kind: None,
+            target: Some("port:tcp:invalid:80".to_string()),
+        })
+        .expect_err("invalid port");
+        assert!(matches!(err, AppError::InvalidGraphTarget { .. }));
     }
 
     #[test]

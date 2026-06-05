@@ -59,7 +59,7 @@ pub fn infer_service_unit(cgroup_path: &str) -> Option<String> {
     cgroup_path
         .split('/')
         .filter(|seg| !seg.is_empty())
-        .find(|seg| seg.ends_with(".service"))
+        .rfind(|seg| seg.ends_with(".service"))
         .map(str::to_string)
 }
 
@@ -91,6 +91,12 @@ mod tests {
     fn infers_service_from_nested_path() {
         let unit = infer_service_unit("/system.slice/docker.service/container.scope");
         assert_eq!(unit.as_deref(), Some("docker.service"));
+    }
+
+    #[test]
+    fn infers_deepest_service_in_path() {
+        let unit = infer_service_unit("/system.slice/NetworkManager.service/upower.service");
+        assert_eq!(unit.as_deref(), Some("upower.service"));
     }
 
     #[test]

@@ -47,6 +47,20 @@ fn port_ipv6_bracketed() {
 }
 
 #[test]
+fn unix_socket_roundtrip() {
+    let id = NodeId::unix_socket("/run/dbus/system_bus_socket").expect("unix");
+    assert_eq!(id.as_str(), "unix:/run/dbus/system_bus_socket");
+    assert_eq!(id.kind(), Some(NodeKind::UnixSocket));
+    assert_eq!(NodeId::from_str(id.as_str()).expect("parse"), id);
+}
+
+#[test]
+fn unix_socket_abstract() {
+    let id = NodeId::unix_socket("@dbus").expect("unix");
+    assert_eq!(id.as_str(), "unix:@dbus");
+}
+
+#[test]
 fn from_str_rejects_non_canonical() {
     let err = NodeId::from_str("not-a-node").expect_err("bad");
     assert!(matches!(err, ParseError::InvalidNodeId { .. }));

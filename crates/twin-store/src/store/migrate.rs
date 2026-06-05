@@ -52,6 +52,7 @@ impl Store {
         let sql = match version {
             1 => migration::MIGRATION_001,
             2 => migration::MIGRATION_002,
+            3 => migration::MIGRATION_003,
             _ => {
                 return Err(StoreError::Migration {
                     version,

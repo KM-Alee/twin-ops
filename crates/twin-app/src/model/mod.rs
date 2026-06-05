@@ -2,6 +2,7 @@ mod doctor_result;
 mod graph_result;
 mod impact_result;
 mod init_result;
+mod scan_quality;
 mod scan_result;
 
 pub use doctor_result::{
@@ -10,8 +11,12 @@ pub use doctor_result::{
 pub use graph_result::{
     edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphListResult,
     GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
-pub use impact_result::{ImpactDependent, ImpactEvidenceLine, ImpactResult};
+pub use impact_result::{
+    EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPathStep,
+    ImpactResult, ImpactUnknown, RiskAssessment,
+};
 pub use init_result::InitResult;
+pub use scan_quality::{ScanQuality, ScanQualityAssessment};
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};

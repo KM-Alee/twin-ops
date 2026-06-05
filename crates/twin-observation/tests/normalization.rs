@@ -50,6 +50,14 @@ fn each_identity() {
         .as_str(),
         "cgroup:/sys/fs/cgroup/system.slice"
     );
+    assert_eq!(
+        n.normalize(&RawIdentity::UnixSocket {
+            path: "/run/dbus/system_bus_socket".to_string()
+        })
+        .expect("unix")
+        .as_str(),
+        "unix:/run/dbus/system_bus_socket"
+    );
 }
 
 #[test]

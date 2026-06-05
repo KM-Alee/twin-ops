@@ -113,5 +113,55 @@ pub fn render(result: &DoctorResult) -> String {
         ),
     );
 
+    if matches!(result.permissions.mode, PermissionMode::Partial) {
+        out.blank();
+        out.section("notes");
+        out.tree_leaf(
+            true,
+            "listeners",
+            "partial /proc access hides other users' fd dirs; run `sudo twin scan` to map all TCP listeners",
+        );
+    }
+
+    if let Some(quality) = &result.scan_quality {
+        out.blank();
+        let status = match quality.quality {
+            twin_app::ScanQuality::Good => Status::Ok,
+            twin_app::ScanQuality::Partial => Status::Warn,
+            twin_app::ScanQuality::Degraded => Status::Bad,
+        };
+        out.status_row(
+            status,
+            "scan quality",
+            quality.quality.as_str().to_uppercase().as_str(),
+        );
+        if !quality.reasons.is_empty() {
+            out.section("scan quality reasons");
+            for (i, reason) in quality.reasons.iter().enumerate() {
+                let is_last = i + 1 == quality.reasons.len();
+                out.tree_leaf(is_last, "reason", reason);
+            }
+        }
+        if !quality.impact_reliable {
+            out.blank();
+            out.tree_leaf(
+                true,
+                "impact",
+                "runtime-only impact conclusions may be incomplete; declared systemd deps still available",
+            );
+        }
+        if quality.ephemeral_capture_recommended {
+            out.blank();
+            out.tree_leaf(
+                true,
+                "ephemeral capture",
+                "re-run `twin scan --samples 5 --interval 2` to merge short-lived connections across samples",
+            );
+        }
+    } else if let Some(err) = &result.scan_quality_error {
+        out.blank();
+        out.tree_leaf(true, "scan quality", &format!("unavailable ({err})"));
+    }
+
     out.into_string()
 }

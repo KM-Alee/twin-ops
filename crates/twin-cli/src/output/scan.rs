@@ -1,5 +1,5 @@
 use twin_app::ScanResult;
-use twin_collectors::ProcessWarningKind;
+use twin_collectors::{ProcessWarningKind, SystemdWarningKind};
 
 use crate::output::format::{format_duration_ns, Lines, Status};
 
@@ -25,6 +25,24 @@ pub fn render(result: &ScanResult) -> String {
         "duration",
         &format_duration_ns(result.started_at_ns, result.ended_at_ns),
     );
+    if result.samples_requested > 1 {
+        out.status_row(
+            Status::Neutral,
+            "samples",
+            &format!(
+                "{}/{} · interval {}s",
+                result.samples_completed, result.samples_requested, result.interval_secs
+            ),
+        );
+        let new_edges: usize = result.edges_first_seen_by_sample.iter().sum();
+        if new_edges > 0 {
+            out.status_row(
+                Status::Neutral,
+                "new edges",
+                &format!("{new_edges} edge(s) first seen across samples"),
+            );
+        }
+    }
     out.blank();
     out.section("persisted");
     out.tree_leaf(false, "processes", &result.process_count.to_string());
@@ -68,6 +86,72 @@ pub fn render(result: &ScanResult) -> String {
         "service-depends-on",
         &result.service_depends_on_edge_count.to_string(),
     );
+    out.tree_leaf(
+        false,
+        "declared-depends-on",
+        &result.declared_depends_on_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "systemd-units",
+        &result.systemd_unit_count.to_string(),
+    );
+    out.tree_leaf(false, "unix-sockets", &result.unix_socket_count.to_string());
+    out.tree_leaf(
+        false,
+        "unix-listeners",
+        &result.unix_listener_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "process-listens-on-unix",
+        &result.process_listens_on_unix_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-listens-on-unix",
+        &result.service_listens_on_unix_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "unmapped-unix-listeners",
+        &result.unmapped_unix_listener_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "unix-connections",
+        &result.unix_connection_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "process-connects-to-unix",
+        &result.process_connects_to_unix_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-connects-to-unix",
+        &result.service_connects_to_unix_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-depends-on-unix",
+        &result.service_depends_on_unix_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "enable-depends-on",
+        &result.enable_depends_on_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "dbus-depends-on",
+        &result.dbus_depends_on_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "dbus-available",
+        if result.dbus_available { "yes" } else { "no" },
+    );
     out.tree_leaf(true, "observations", &result.observation_count.to_string());
 
     if result.warning_count > 0 {
@@ -86,6 +170,9 @@ pub fn render(result: &ScanResult) -> String {
 
 fn warning_parts(kind: &str, count: usize) -> (&'static str, String) {
     if let Some(kind) = ProcessWarningKind::from_aggregate_key(kind) {
+        return kind.cli_summary(count);
+    }
+    if let Some(kind) = SystemdWarningKind::from_aggregate_key(kind) {
         return kind.cli_summary(count);
     }
     ("other", format!("{count} {}", kind.replace('_', " ")))

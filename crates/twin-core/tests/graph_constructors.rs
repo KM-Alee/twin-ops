@@ -93,4 +93,25 @@ fn connection_and_dependency_edges() {
         .metadata()
         .as_str()
         .contains("active_connection_to_listening_service"));
+
+    let declared = GraphEdge::observed_service_depends_on_declared(
+        &django,
+        &postgres,
+        t0,
+        None,
+        "Requires",
+        "/usr/lib/systemd/system/django.service",
+    );
+    assert_eq!(declared.class(), EdgeClass::Observed);
+    assert!(declared.metadata().as_str().contains("systemd_unit_file"));
+
+    let escaped = GraphEdge::observed_service_depends_on_declared(
+        &django,
+        &postgres,
+        t0,
+        None,
+        "Requires",
+        r#"/usr/lib/systemd/system/with"quote.service"#,
+    );
+    assert!(escaped.metadata().as_str().contains(r#"with\"quote"#));
 }

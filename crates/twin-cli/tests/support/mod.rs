@@ -127,6 +127,58 @@ pub fn write_malformed_cgroup_fixture(proc_root: &Path) {
     );
 }
 
+const TCP_HEADER: &str = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
+
+pub fn write_tcp_table(base: &Path, name: &str, content: &str) {
+    let net = base.join("net");
+    std::fs::create_dir_all(&net).expect("net dir");
+    std::fs::write(net.join(name), content).expect("tcp table");
+}
+
+pub fn write_socket_fd(base: &Path, pid: u32, fd: u32, inode: u64) {
+    let fd_dir = base.join(pid.to_string()).join("fd");
+    std::fs::create_dir_all(&fd_dir).expect("fd dir");
+    #[cfg(unix)]
+    {
+        let socket = format!("socket:[{inode}]");
+        std::os::unix::fs::symlink(&socket, fd_dir.join(fd.to_string())).expect("fd symlink");
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (fd, inode);
+    }
+}
+
+pub fn write_proc_fixture_with_active_connection(proc_root: &Path) {
+    write_proc_fixture_with_cgroup(
+        proc_root,
+        721,
+        "721 (postgres) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t999\t999\t999\t999\n",
+        b"/usr/bin/postgres\0",
+        Some(Path::new("/usr/bin/postgres")),
+        Some("0::/system.slice/postgresql.service\n"),
+    );
+    write_proc_fixture_with_cgroup(
+        proc_root,
+        8841,
+        "8841 (gunicorn) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t1000\t1000\t1000\t1000\n",
+        b"/usr/bin/gunicorn\0",
+        Some(Path::new("/usr/bin/gunicorn")),
+        Some("0::/system.slice/django.service\n"),
+    );
+    write_tcp_table(
+        proc_root,
+        "tcp",
+        &format!(
+            "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0\n   1: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0"
+        ),
+    );
+    write_socket_fd(proc_root, 721, 8, 12345);
+    write_socket_fd(proc_root, 8841, 12, 456);
+}
+
 pub fn write_ambiguous_services_fixture(proc_root: &Path) {
     write_slice5_fixture(proc_root);
     write_proc_fixture_with_cgroup(

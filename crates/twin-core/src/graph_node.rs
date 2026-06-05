@@ -105,6 +105,34 @@ impl GraphNode {
         }
     }
 
+    pub fn unix_socket(
+        path: &str,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Result<Self, crate::error::ParseError> {
+        let id = NodeId::unix_socket(path)?;
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        let label = id
+            .as_str()
+            .strip_prefix("unix:")
+            .unwrap_or(path)
+            .to_string();
+        Ok(Self {
+            id,
+            kind: NodeKind::UnixSocket,
+            label,
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"protocol":"unix"}"#),
+        })
+    }
+
     pub fn tcp_port(
         ip: &str,
         port: u16,

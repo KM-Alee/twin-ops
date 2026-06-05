@@ -90,4 +90,8 @@ CREATE TABLE IF NOT EXISTS edge_observations (
 CREATE INDEX IF NOT EXISTS idx_edge_obs_role ON edge_observations(role);
 ";
 
-pub const LATEST_VERSION: i64 = 2;
+pub const MIGRATION_003: &str = r"
+ALTER TABLE collector_runs ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
+";
+
+pub const LATEST_VERSION: i64 = 3;

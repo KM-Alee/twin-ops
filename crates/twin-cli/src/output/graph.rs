@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphListResult, GraphNodeResult, GraphParentEdge, GraphPortResult, GraphResult,
-    GraphServiceResult,
+    GraphListResult, GraphNodeResult, GraphOwnedNode, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
 use crate::output::format::{Lines, Status};
@@ -13,6 +13,7 @@ pub fn render(result: &GraphResult) -> String {
         GraphResult::Node(node) => render_node(node),
         GraphResult::Service(service) => render_service(service),
         GraphResult::Port(port) => render_port(port),
+        GraphResult::UnixSocket(unix) => render_unix_socket(unix),
     }
 }
 
@@ -128,6 +129,15 @@ fn render_service(service: &GraphServiceResult) -> String {
             lines.push(format!("{branch} {}", format_peer(&port.id, &port.label)));
         }
     }
+    if !service.listening_unix.is_empty() {
+        lines.push(String::new());
+        lines.push("listens on unix (inferred)".to_string());
+        for (i, sock) in service.listening_unix.iter().enumerate() {
+            let is_last = i + 1 == service.listening_unix.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&sock.id, &sock.label)));
+        }
+    }
     if !service.connected_ports.is_empty() {
         lines.push(String::new());
         lines.push("connects to (inferred from active TCP)".to_string());
@@ -137,26 +147,66 @@ fn render_service(service: &GraphServiceResult) -> String {
             lines.push(format!("{branch} {}", format_peer(&port.id, &port.label)));
         }
     }
-    if !service.dependencies.is_empty() {
+    if !service.connected_unix.is_empty() {
         lines.push(String::new());
-        lines.push("depends on (inferred)".to_string());
-        for (i, dep) in service.dependencies.iter().enumerate() {
-            let is_last = i + 1 == service.dependencies.len();
+        lines.push("connects to unix (inferred)".to_string());
+        for (i, sock) in service.connected_unix.iter().enumerate() {
+            let is_last = i + 1 == service.connected_unix.len();
             let branch = if is_last { "└──" } else { "├──" };
-            lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
+            lines.push(format!("{branch} {}", format_peer(&sock.id, &sock.label)));
         }
     }
-    if !service.dependents.is_empty() {
-        lines.push(String::new());
-        lines.push("depended on by (inferred)".to_string());
-        for (i, dep) in service.dependents.iter().enumerate() {
-            let is_last = i + 1 == service.dependents.len();
-            let branch = if is_last { "└──" } else { "├──" };
-            lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
-        }
-    }
+    render_dependency_section(
+        &mut lines,
+        "depends on (declared)",
+        service
+            .dependencies
+            .iter()
+            .filter(|d| d.tag.as_deref() == Some("declared")),
+    );
+    render_dependency_section(
+        &mut lines,
+        "depends on (runtime inferred)",
+        service
+            .dependencies
+            .iter()
+            .filter(|d| d.tag.as_deref() != Some("declared")),
+    );
+    render_dependency_section(
+        &mut lines,
+        "socket activation",
+        service.socket_activation.iter(),
+    );
+    render_dependency_section(
+        &mut lines,
+        "depended on by (runtime)",
+        service.dependents.iter(),
+    );
+    render_dependency_section(
+        &mut lines,
+        "depended on by (configured inactive)",
+        service.configured_dependents.iter(),
+    );
     append_evidence_lines(&mut lines, &service.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_dependency_section<'a>(
+    lines: &mut Vec<String>,
+    title: &str,
+    deps: impl Iterator<Item = &'a GraphOwnedNode>,
+) {
+    let deps: Vec<_> = deps.collect();
+    if deps.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push(title.to_string());
+    for (i, dep) in deps.iter().enumerate() {
+        let is_last = i + 1 == deps.len();
+        let branch = if is_last { "└──" } else { "├──" };
+        lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
+    }
 }
 
 fn render_port(port: &GraphPortResult) -> String {
@@ -201,6 +251,54 @@ fn render_port(port: &GraphPortResult) -> String {
         }
     }
     append_evidence_lines(&mut lines, &port.evidence);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_unix_socket(unix: &GraphUnixSocketResult) -> String {
+    let mut out = Lines::new();
+    out.title("twin graph");
+    out.status_row(Status::Ok, "view", "unix socket neighborhood");
+    out.blank();
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{}  {}",
+        unix.unix_socket.id, unix.unix_socket.label
+    ));
+    lines.push(String::new());
+    lines.push("listeners".to_string());
+    let mut listeners: Vec<(&str, &str, &str)> = Vec::new();
+    for node in &unix.process_listeners {
+        listeners.push((&node.id, &node.label, "observed"));
+    }
+    for node in &unix.service_listeners {
+        listeners.push((&node.id, &node.label, "inferred"));
+    }
+    if listeners.is_empty() {
+        lines.push("└── (no listeners in graph)".to_string());
+    } else {
+        for (i, (id, label, class)) in listeners.iter().enumerate() {
+            let is_last = i + 1 == listeners.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}  {class}", format_peer(id, label)));
+        }
+    }
+    let mut callers: Vec<(&str, &str, &str)> = Vec::new();
+    for node in &unix.process_callers {
+        callers.push((&node.id, &node.label, "observed"));
+    }
+    for node in &unix.service_callers {
+        callers.push((&node.id, &node.label, "inferred"));
+    }
+    if !callers.is_empty() {
+        lines.push(String::new());
+        lines.push("callers".to_string());
+        for (i, (id, label, class)) in callers.iter().enumerate() {
+            let is_last = i + 1 == callers.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}  {class}", format_peer(id, label)));
+        }
+    }
+    append_evidence_lines(&mut lines, &unix.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 

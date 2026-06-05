@@ -82,6 +82,43 @@ pub(crate) fn read_tcp_table_content(
     }
 }
 
+pub(crate) fn read_unix_table_content(
+    reader: &dyn ProcReader,
+    proc_root: &Path,
+    warnings: &mut Vec<ProcessWarning>,
+) -> Option<String> {
+    let path = proc_root.join("net").join("unix");
+    match reader.read_file(&path) {
+        Ok(bytes) => match std::str::from_utf8(&bytes) {
+            Ok(text) => Some(text.to_string()),
+            Err(e) => {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::UnixTableMalformed,
+                    path,
+                    e.to_string(),
+                ));
+                None
+            }
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::UnixTableMissing,
+                path,
+                err.to_string(),
+            ));
+            None
+        }
+        Err(err) => {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::UnixTableMalformed,
+                path,
+                err.to_string(),
+            ));
+            None
+        }
+    }
+}
+
 pub(crate) fn read_fd_socket_owners(
     reader: &dyn ProcReader,
     proc_root: &Path,

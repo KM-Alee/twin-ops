@@ -12,6 +12,7 @@ pub enum NodeKind {
     Process,
     Service,
     Port,
+    UnixSocket,
     File,
     Cgroup,
 }
@@ -23,6 +24,7 @@ impl fmt::Display for NodeKind {
             Self::Process => "process",
             Self::Service => "service",
             Self::Port => "port",
+            Self::UnixSocket => "unix_socket",
             Self::File => "file",
             Self::Cgroup => "cgroup",
         })
@@ -38,6 +40,7 @@ impl FromStr for NodeKind {
             "process" => Ok(Self::Process),
             "service" => Ok(Self::Service),
             "port" => Ok(Self::Port),
+            "unix_socket" => Ok(Self::UnixSocket),
             "file" => Ok(Self::File),
             "cgroup" => Ok(Self::Cgroup),
             other => Err(ParseError::Enum {
@@ -107,6 +110,21 @@ impl NodeId {
         Ok(Self(id))
     }
 
+    pub fn unix_socket(path: &str) -> Result<Self, ParseError> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Err(ParseError::InvalidNodeId {
+                value: "unix:".to_string(),
+            });
+        }
+        let canonical = if path.starts_with('@') {
+            path.to_string()
+        } else {
+            lexical_canonical(path)
+        };
+        Ok(Self(format!("unix:{canonical}")))
+    }
+
     pub fn file(path: &str) -> Self {
         Self(format!("file:{}", lexical_canonical(path)))
     }
@@ -128,6 +146,9 @@ impl NodeId {
         }
         if s.starts_with("port:tcp:") {
             return Some(NodeKind::Port);
+        }
+        if s.starts_with("unix:") && s.len() > "unix:".len() {
+            return Some(NodeKind::UnixSocket);
         }
         if s.starts_with("file:") && s.len() > "file:".len() {
             return Some(NodeKind::File);
@@ -210,6 +231,17 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
         let rest = s.strip_prefix("port:tcp:").ok_or_else(invalid)?;
         let (ip, port) = split_port_host_port(rest).map_err(|_| invalid())?;
         let canonical = NodeId::port_tcp(&ip, port).map_err(|_| invalid())?;
+        if canonical.as_str() != s {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(path) = s.strip_prefix("unix:") {
+        if path.is_empty() {
+            return Err(invalid());
+        }
+        let canonical = NodeId::unix_socket(path).map_err(|_| invalid())?;
         if canonical.as_str() != s {
             return Err(invalid());
         }

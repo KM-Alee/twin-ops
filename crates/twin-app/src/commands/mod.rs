@@ -1,5 +1,12 @@
 pub mod doctor;
+mod evidence;
 pub mod graph;
 pub mod impact;
 pub mod init;
+mod resolve_service;
 pub mod scan;
+pub(crate) mod scan_quality;
+mod scan_cgroup_validate;
+mod scan_systemd;
+mod scan_systemd_runtime;
+mod scan_systemd_socket;

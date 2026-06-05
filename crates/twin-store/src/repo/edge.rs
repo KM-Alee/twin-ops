@@ -150,6 +150,19 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .map_err(|source| StoreError::Query { source })
     }
+
+    pub fn delete_edge(&mut self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM edge_observations WHERE edge_id = ?1",
+                params![id],
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        self.conn
+            .execute("DELETE FROM edges WHERE id = ?1", params![id])
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(())
+    }
 }
 
 fn row_from_edge(row: &Row<'_>) -> Result<EdgeRow, rusqlite::Error> {

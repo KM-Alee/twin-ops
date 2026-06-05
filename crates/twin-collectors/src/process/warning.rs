@@ -16,6 +16,10 @@ pub enum ProcessWarningKind {
     FdVanished,
     SocketUnmapped,
     ActiveSocketUnmapped,
+    UnixTableMissing,
+    UnixTableMalformed,
+    UnixSocketUnmapped,
+    UnixConnectionUnmapped,
 }
 
 impl ProcessWarningKind {
@@ -35,6 +39,10 @@ impl ProcessWarningKind {
             Self::FdVanished => "fd_vanished",
             Self::SocketUnmapped => "socket_unmapped",
             Self::ActiveSocketUnmapped => "active_socket_unmapped",
+            Self::UnixTableMissing => "unix_table_missing",
+            Self::UnixTableMalformed => "unix_table_malformed",
+            Self::UnixSocketUnmapped => "unix_socket_unmapped",
+            Self::UnixConnectionUnmapped => "unix_connection_unmapped",
         }
     }
 
@@ -54,6 +62,10 @@ impl ProcessWarningKind {
             Self::FdVanished => "fd_vanished",
             Self::SocketUnmapped => "socket_unmapped",
             Self::ActiveSocketUnmapped => "active_socket_unmapped",
+            Self::UnixTableMissing => "unix_table_missing",
+            Self::UnixTableMalformed => "unix_table_malformed",
+            Self::UnixSocketUnmapped => "unix_socket_unmapped",
+            Self::UnixConnectionUnmapped => "unix_connection_unmapped",
         }
     }
 
@@ -67,6 +79,9 @@ impl ProcessWarningKind {
                 | Self::FdMalformed
                 | Self::SocketUnmapped
                 | Self::ActiveSocketUnmapped
+                | Self::UnixTableMalformed
+                | Self::UnixSocketUnmapped
+                | Self::UnixConnectionUnmapped
         )
     }
 
@@ -86,6 +101,10 @@ impl ProcessWarningKind {
             "fd_vanished" => Some(Self::FdVanished),
             "socket_unmapped" => Some(Self::SocketUnmapped),
             "active_socket_unmapped" => Some(Self::ActiveSocketUnmapped),
+            "unix_table_missing" => Some(Self::UnixTableMissing),
+            "unix_table_malformed" => Some(Self::UnixTableMalformed),
+            "unix_socket_unmapped" => Some(Self::UnixSocketUnmapped),
+            "unix_connection_unmapped" => Some(Self::UnixConnectionUnmapped),
             _ => None,
         }
     }
@@ -114,6 +133,16 @@ impl ProcessWarningKind {
             Self::ActiveSocketUnmapped => (
                 "socket",
                 format!("{count} active sockets could not be mapped to processes"),
+            ),
+            Self::UnixTableMissing => ("unix", format!("{count} missing /proc/net/unix")),
+            Self::UnixTableMalformed => ("unix", format!("{count} malformed unix rows")),
+            Self::UnixSocketUnmapped => (
+                "unix",
+                format!("{count} unix listeners could not be mapped to processes"),
+            ),
+            Self::UnixConnectionUnmapped => (
+                "unix",
+                format!("{count} unix connections could not be mapped to processes"),
             ),
         }
     }

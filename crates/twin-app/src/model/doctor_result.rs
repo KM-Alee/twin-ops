@@ -2,11 +2,15 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use super::ScanQualityAssessment;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DoctorResult {
     pub core: DoctorCore,
     pub database: DoctorDatabase,
     pub permissions: DoctorPermissions,
+    pub scan_quality: Option<ScanQualityAssessment>,
+    pub scan_quality_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

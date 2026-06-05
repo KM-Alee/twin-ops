@@ -54,6 +54,74 @@ impl GraphEdge {
     const SERVICE_CONNECTION_METADATA: &str = r#"{"inference":"service_owns_connected_process"}"#;
     const SERVICE_DEPENDENCY_METADATA: &str =
         r#"{"inference":"active_connection_to_listening_service"}"#;
+    const SERVICE_UNIX_DEPENDENCY_METADATA: &str =
+        r#"{"inference":"unix_connection_to_listener_service"}"#;
+    pub fn observed_socket_activates_service(
+        socket_unit: &NodeId,
+        service_unit: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        unit_path: &str,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(socket_unit, kind, service_unit);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "source": "systemd_socket_unit",
+            "socket_activation": true,
+            "unit_path": unit_path,
+        })
+        .to_string();
+        Self {
+            id,
+            from: socket_unit.clone(),
+            to: service_unit.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
+    pub fn observed_service_depends_on_declared(
+        source_service: &NodeId,
+        target_service: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        dependency_key: &str,
+        unit_path: &str,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(source_service, kind, target_service);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "source": "systemd_unit_file",
+            "key": dependency_key,
+            "unit_path": unit_path,
+        })
+        .to_string();
+        Self {
+            id,
+            from: source_service.clone(),
+            to: target_service.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
 
     pub fn observed_parent(
         parent: &NodeId,
@@ -229,6 +297,72 @@ impl GraphEdge {
         }
     }
 
+    pub fn observed_service_depends_on_dbus(
+        source_service: &NodeId,
+        target_service: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        dependency_key: &str,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(source_service, kind, target_service);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "source": "systemd_dbus",
+            "key": dependency_key,
+        })
+        .to_string();
+        Self {
+            id,
+            from: source_service.clone(),
+            to: target_service.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
+    pub fn observed_service_depends_on_enable(
+        source_service: &NodeId,
+        target_service: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        enable_kind: &str,
+        symlink_path: &str,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(source_service, kind, target_service);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "source": "systemd_enable_symlink",
+            "enable_kind": enable_kind,
+            "symlink_path": symlink_path,
+        })
+        .to_string();
+        Self {
+            id,
+            from: source_service.clone(),
+            to: target_service.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
     pub fn inferred_service_depends_on(
         source_service: &NodeId,
         target_service: &NodeId,
@@ -241,17 +375,51 @@ impl GraphEdge {
             Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
             None => (seen_at, 1),
         };
+        let class = match existing {
+            Some(edge) if edge.class() == EdgeClass::Observed => EdgeClass::Observed,
+            _ => EdgeClass::Inferred,
+        };
         Self {
             id,
             from: source_service.clone(),
             to: target_service.clone(),
             kind,
-            class: EdgeClass::Inferred,
+            class,
             state: EdgeState::Active,
             evidence_count,
             first_seen,
             last_seen: seen_at,
             metadata: GraphMetadata::from_json(Self::SERVICE_DEPENDENCY_METADATA),
+        }
+    }
+
+    pub fn inferred_service_depends_on_unix(
+        source_service: &NodeId,
+        target_service: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(source_service, kind, target_service);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let class = match existing {
+            Some(edge) if edge.class() == EdgeClass::Observed => EdgeClass::Observed,
+            _ => EdgeClass::Inferred,
+        };
+        Self {
+            id,
+            from: source_service.clone(),
+            to: target_service.clone(),
+            kind,
+            class,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::SERVICE_UNIX_DEPENDENCY_METADATA),
         }
     }
 

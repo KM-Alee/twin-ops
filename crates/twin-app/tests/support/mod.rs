@@ -36,6 +36,10 @@ pub fn write_tcp_table(base: &std::path::Path, name: &str, content: &str) {
     std::fs::write(net.join(name), content).expect("tcp table");
 }
 
+pub fn write_unix_table(base: &std::path::Path, content: &str) {
+    write_tcp_table(base, "unix", content);
+}
+
 pub fn write_socket_fd(base: &std::path::Path, pid: u32, fd: u32, inode: u64) {
     let fd_dir = base.join(pid.to_string()).join("fd");
     std::fs::create_dir_all(&fd_dir).expect("fd dir");

@@ -25,6 +25,20 @@ fn dispatch(cli: Cli) -> i32 {
     }
 }
 
+fn refresh_scan(config_override: Option<std::path::PathBuf>) -> Result<(), AppError> {
+    let request = ScanRequest::default_with_config(config_override);
+    match std::env::var_os("TWIN_PROC_ROOT") {
+        Some(root) => {
+            let paths = twin_app::paths::resolve_command_paths(request.config_override.as_deref())?;
+            twin_app::scan_in(&paths.layout, request, Path::new(&root))?;
+        }
+        None => {
+            twin_app::scan(request)?;
+        }
+    }
+    Ok(())
+}
+
 fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
     let request = InitRequest {
         force: args.force,
@@ -58,6 +72,8 @@ fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
 fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     let request = ScanRequest {
         config_override: args.config.clone(),
+        samples: args.samples.clamp(1, 30),
+        interval_secs: args.interval.max(1),
     };
     let result = match std::env::var_os("TWIN_PROC_ROOT") {
         Some(root) => {
@@ -85,7 +101,17 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
 }
 
 fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
-    let request = impact::impact_request(args);
+    if let Err(error) = refresh_scan(args.config.clone()) {
+        eprintln!("Error: {error}");
+        return 1;
+    }
+    let request = match impact::impact_request(args) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
     match twin_app::impact(request) {
         Ok(result) => {
             emit(global.json, &result, output::impact::render);
@@ -99,6 +125,10 @@ fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
 }
 
 fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
+    if let Err(error) = refresh_scan(args.config.clone()) {
+        eprint_graph_error(&error);
+        return 1;
+    }
     let request = match graph::graph_request(args) {
         Ok(request) => request,
         Err(error) => {

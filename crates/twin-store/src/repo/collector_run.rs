@@ -14,6 +14,7 @@ pub struct CollectorRunRow {
     pub observation_count: i64,
     pub warning_count: i64,
     pub error_message: Option<String>,
+    pub metadata_json: String,
 }
 
 impl Store {
@@ -22,8 +23,8 @@ impl Store {
             .execute(
                 "INSERT INTO collector_runs (
                     collector, started_at_ns, ended_at_ns, status,
-                    observation_count, warning_count, error_message
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    observation_count, warning_count, error_message, metadata_json
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     run.collector,
                     run.started_at_ns,
@@ -32,6 +33,7 @@ impl Store {
                     run.observation_count,
                     run.warning_count,
                     run.error_message,
+                    run.metadata_json,
                 ],
             )
             .map_err(|source| StoreError::Insert { source })?;
@@ -48,7 +50,7 @@ impl Store {
                     .conn
                     .prepare(
                         "SELECT id, collector, started_at_ns, ended_at_ns, status,
-                                observation_count, warning_count, error_message
+                                observation_count, warning_count, error_message, metadata_json
                          FROM collector_runs WHERE collector = ?1
                          ORDER BY started_at_ns",
                     )
@@ -63,7 +65,7 @@ impl Store {
                     .conn
                     .prepare(
                         "SELECT id, collector, started_at_ns, ended_at_ns, status,
-                                observation_count, warning_count, error_message
+                                observation_count, warning_count, error_message, metadata_json
                          FROM collector_runs ORDER BY started_at_ns",
                     )
                     .map_err(|source| StoreError::Query { source })?;
@@ -75,6 +77,20 @@ impl Store {
         }
     }
 
+    pub fn update_collector_run_metadata(
+        &mut self,
+        run_id: i64,
+        metadata_json: &str,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "UPDATE collector_runs SET metadata_json = ?1 WHERE id = ?2",
+                params![metadata_json, run_id],
+            )
+            .map_err(|source| StoreError::Insert { source })?;
+        Ok(())
+    }
+
     pub fn latest_collector_run(
         &self,
         collector: &str,
@@ -83,7 +99,7 @@ impl Store {
             .conn
             .prepare(
                 "SELECT id, collector, started_at_ns, ended_at_ns, status,
-                        observation_count, warning_count, error_message
+                        observation_count, warning_count, error_message, metadata_json
                  FROM collector_runs
                  WHERE collector = ?1
                  ORDER BY started_at_ns DESC
@@ -114,5 +130,6 @@ fn row_from_collector_run(row: &Row<'_>) -> Result<CollectorRunRow, rusqlite::Er
         observation_count: row.get(5)?,
         warning_count: row.get(6)?,
         error_message: row.get(7)?,
+        metadata_json: row.get(8)?,
     })
 }

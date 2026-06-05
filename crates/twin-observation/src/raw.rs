@@ -9,6 +9,7 @@ pub enum RawIdentity {
     Process { pid: u32 },
     Service { unit: String },
     TcpEndpoint { ip: String, port: u16 },
+    UnixSocket { path: String },
     File { path: String },
     Cgroup { path: String },
 }
@@ -20,6 +21,7 @@ impl RawIdentity {
             Self::Process { .. } => NodeKind::Process,
             Self::Service { .. } => NodeKind::Service,
             Self::TcpEndpoint { .. } => NodeKind::Port,
+            Self::UnixSocket { .. } => NodeKind::UnixSocket,
             Self::File { .. } => NodeKind::File,
             Self::Cgroup { .. } => NodeKind::Cgroup,
         }

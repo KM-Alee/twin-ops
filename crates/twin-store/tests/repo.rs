@@ -149,6 +149,47 @@ fn link_edge_observation_roundtrip() {
 }
 
 #[test]
+fn link_edge_observation_duplicate_is_noop() {
+    let mut store = support::blank_store();
+    seed_ab_nodes(&mut store);
+    store
+        .upsert_edge(&edge_row("e1", "a", "b", "depends_on", TS))
+        .expect("edge");
+    store
+        .insert_observation(&observation_row("obs-1", "proc", "A", TS))
+        .expect("obs");
+    store
+        .link_edge_observation("e1", "obs-1", "direct")
+        .expect("link1");
+    store
+        .link_edge_observation("e1", "obs-1", "direct")
+        .expect("link2");
+    let links = store.list_observations_for_edge("e1").expect("list");
+    assert_eq!(links.len(), 1);
+}
+
+#[test]
+fn delete_edge_removes_edge_and_links() {
+    let mut store = support::blank_store();
+    seed_ab_nodes(&mut store);
+    store
+        .upsert_edge(&edge_row("e1", "a", "b", "depends_on", TS))
+        .expect("edge");
+    store
+        .insert_observation(&observation_row("obs-1", "proc", "A", TS))
+        .expect("obs");
+    store
+        .link_edge_observation("e1", "obs-1", "direct")
+        .expect("link");
+    store.delete_edge("e1").expect("delete");
+    assert!(store.get_edge("e1").expect("get").is_none());
+    assert!(store
+        .list_observations_for_edge("e1")
+        .expect("list")
+        .is_empty());
+}
+
+#[test]
 fn collector_run_insert_list_and_latest() {
     let mut store = support::blank_store();
     let id = store

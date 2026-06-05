@@ -147,6 +147,7 @@ Last verified: workspace tests passing (171 tests), clippy clean, fmt clean.
 - Removed unused `Tcp6UnsupportedRow` warning variant.
 - `TcpTableKind::net_file_name()` replaces repeated `tcp`/`tcp6` matches; dropped unused `path()`.
 - `collect_tcp_sockets` returns `owners_by_inode` once (no second HashMap build).
+- `collect_tcp_sockets` skips `/proc/<pid>/fd` ownership walking when parsed TCP tables contain no LISTEN or ESTABLISHED rows; there are no socket inodes to join in that case.
 - `process_listens_on_edge_count` dedupes per `(process, port)`; avoids multi-FD over-count.
 - Scan persist: borrow `owners_by_inode`, index listeners by inode, no full listener clones.
 - Graph evidence: shared `collect_observation_evidence`; CLI `append_evidence_lines`.
