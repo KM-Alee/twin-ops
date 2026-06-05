@@ -8,6 +8,7 @@ use twin_store::{Store, StoreError};
 
 pub(crate) fn persist_socket_activation_in_scan(
     store: &mut Store,
+    edge_cache: &mut super::scan::ScanEdgeCache,
     observations: &[Observation],
     scan_time: TimestampNs,
     seen_service_depends: &mut HashSet<(NodeId, NodeId)>,
@@ -33,20 +34,22 @@ pub(crate) fn persist_socket_activation_in_scan(
         for unit in [socket_unit, service_unit] {
             upsert_service_unit_node(store, unit, scan_time)?;
         }
-        let existing_edge = super::scan::load_existing_edge(
+        super::scan_systemd_groups::persist_depends_on_group(
             store,
+            edge_cache,
             &socket_id,
-            twin_core::EdgeKind::DependsOn,
             &service_id,
+            super::scan_systemd_groups::EdgeObservationLink::Single(&obs.id(), "direct"),
+            |existing| {
+                twin_core::GraphEdge::observed_socket_activates_service(
+                    &socket_id,
+                    &service_id,
+                    scan_time,
+                    existing,
+                    unit_path,
+                )
+            },
         )?;
-        let edge = twin_core::GraphEdge::observed_socket_activates_service(
-            &socket_id,
-            &service_id,
-            scan_time,
-            existing_edge.as_ref(),
-            unit_path,
-        );
-        super::scan::upsert_edge_with_link(store, &edge, Some((&obs.id(), "direct")))?;
         if seen_service_depends.insert((socket_id.clone(), service_id.clone())) {
             count += 1;
         }

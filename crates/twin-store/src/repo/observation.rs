@@ -236,7 +236,7 @@ fn decode_observation_row(row: &ObservationRow) -> Result<Observation, StoreErro
     ))
 }
 
-fn row_from_observation(row: &Row<'_>) -> Result<ObservationRow, rusqlite::Error> {
+pub(crate) fn row_from_observation(row: &Row<'_>) -> Result<ObservationRow, rusqlite::Error> {
     Ok(ObservationRow {
         id: row.get(0)?,
         source: row.get(1)?,

@@ -15,6 +15,17 @@ impl GraphMetadata {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub fn bool_field(&self, key: &str) -> bool {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&self.0) else {
+            return false;
+        };
+        value.get(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    }
+
+    pub fn socket_activation(&self) -> bool {
+        self.bool_field("socket_activation")
+    }
 }
 
 impl fmt::Display for GraphMetadata {

@@ -227,12 +227,15 @@ fn persist_scan(
     let mut seen_unix_sockets: HashSet<NodeId> = HashSet::new();
     let mut seen_process_unix_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut seen_service_unix_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut edge_cache = ScanEdgeCache::new();
     let mut seen_process_unix_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut seen_service_unix_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut listener_obs_by_unix_path: HashMap<String, ObservationId> = HashMap::new();
     let mut expected_service_owns: HashSet<(NodeId, NodeId)> = HashSet::new();
 
     let pid_to_services = services_by_pid(batch.records());
+    let records_by_pid: HashMap<u32, &twin_collectors::ProcessRecord> =
+        batch.records().iter().map(|r| (r.pid(), r)).collect();
     let owners_by_inode = batch.owners_by_inode();
     let listener_by_inode: HashMap<u64, &twin_collectors::TcpSocketRecord> =
         batch.tcp_listeners().iter().map(|l| (l.inode, l)).collect();
@@ -312,7 +315,7 @@ fn persist_scan(
                                 &service_id,
                                 owned,
                                 scan_time,
-                                load_existing_edge(store, &service_id, EdgeKind::Owns, owned)?
+                                load_existing_edge(store, &mut edge_cache, &service_id, EdgeKind::Owns, owned)?
                                     .as_ref(),
                             );
                             upsert_edge_with_link(store, &edge, cgroup_obs_support)?;
@@ -324,7 +327,7 @@ fn persist_scan(
                         &process_id,
                         &cgroup_id,
                         scan_time,
-                        load_existing_edge(store, &process_id, EdgeKind::InCgroup, &cgroup_id)?
+                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::InCgroup, &cgroup_id)?
                             .as_ref(),
                     );
                     upsert_edge_with_link(store, &in_cgroup, cgroup_obs_direct)?;
@@ -415,10 +418,8 @@ fn persist_scan(
                     let process_id = NodeId::process(owner.pid);
                     let process_existing = store.get_node_typed(&process_id)?;
                     if process_existing.is_none() {
-                        let label = batch
-                            .records()
-                            .iter()
-                            .find(|r| r.pid() == owner.pid)
+                        let label = records_by_pid
+                            .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
                         store.upsert_node_typed(&GraphNode::process(
@@ -429,7 +430,7 @@ fn persist_scan(
                         &process_id,
                         port_id,
                         scan_time,
-                        load_existing_edge(store, &process_id, EdgeKind::ListensOn, port_id)?
+                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ListensOn, port_id)?
                             .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, socket_obs)?;
@@ -449,6 +450,7 @@ fn persist_scan(
                                 scan_time,
                                 load_existing_edge(
                                     store,
+                                    &mut edge_cache,
                                     service_id,
                                     EdgeKind::ListensOn,
                                     port_id,
@@ -511,10 +513,8 @@ fn persist_scan(
                     let process_id = NodeId::process(owner.pid);
                     let process_existing = store.get_node_typed(&process_id)?;
                     if process_existing.is_none() {
-                        let label = batch
-                            .records()
-                            .iter()
-                            .find(|r| r.pid() == owner.pid)
+                        let label = records_by_pid
+                            .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
                         store.upsert_node_typed(&GraphNode::process(
@@ -527,6 +527,7 @@ fn persist_scan(
                         scan_time,
                         load_existing_edge(
                             store,
+                            &mut edge_cache,
                             &process_id,
                             EdgeKind::ConnectsTo,
                             &remote_port_id,
@@ -546,6 +547,7 @@ fn persist_scan(
                                 scan_time,
                                 load_existing_edge(
                                     store,
+                                    &mut edge_cache,
                                     service_id,
                                     EdgeKind::ConnectsTo,
                                     &remote_port_id,
@@ -577,7 +579,7 @@ fn persist_scan(
                 let candidate_ports = listener_port_candidates(remote_ip, *remote_port);
                 for listener_port in candidate_ports {
                     let target_services =
-                        listener_services_for_port(store, &listeners_by_port, &listener_port)?;
+                        listener_services_for_port(&listeners_by_port, &listener_port)?;
                     for target_service in &target_services {
                         if source_service == target_service {
                             continue;
@@ -597,6 +599,7 @@ fn persist_scan(
                             scan_time,
                             load_existing_edge(
                                 store,
+                                &mut edge_cache,
                                 source_service,
                                 EdgeKind::DependsOn,
                                 target_service,
@@ -655,10 +658,8 @@ fn persist_scan(
                     let process_id = NodeId::process(owner.pid);
                     let process_existing = store.get_node_typed(&process_id)?;
                     if process_existing.is_none() {
-                        let label = batch
-                            .records()
-                            .iter()
-                            .find(|r| r.pid() == owner.pid)
+                        let label = records_by_pid
+                            .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
                         store.upsert_node_typed(&GraphNode::process(
@@ -669,7 +670,7 @@ fn persist_scan(
                         &process_id,
                         &unix_id,
                         scan_time,
-                        load_existing_edge(store, &process_id, EdgeKind::ListensOn, &unix_id)?
+                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ListensOn, &unix_id)?
                             .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, socket_obs)?;
@@ -690,6 +691,7 @@ fn persist_scan(
                                 scan_time,
                                 load_existing_edge(
                                     store,
+                                    &mut edge_cache,
                                     service_id,
                                     EdgeKind::ListensOn,
                                     &unix_id,
@@ -746,10 +748,8 @@ fn persist_scan(
                     let process_id = NodeId::process(owner.pid);
                     let process_existing = store.get_node_typed(&process_id)?;
                     if process_existing.is_none() {
-                        let label = batch
-                            .records()
-                            .iter()
-                            .find(|r| r.pid() == owner.pid)
+                        let label = records_by_pid
+                            .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
                         store.upsert_node_typed(&GraphNode::process(
@@ -760,7 +760,7 @@ fn persist_scan(
                         &process_id,
                         &unix_id,
                         scan_time,
-                        load_existing_edge(store, &process_id, EdgeKind::ConnectsTo, &unix_id)?
+                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ConnectsTo, &unix_id)?
                             .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, conn_obs)?;
@@ -776,6 +776,7 @@ fn persist_scan(
                                 scan_time,
                                 load_existing_edge(
                                     store,
+                                    &mut edge_cache,
                                     service_id,
                                     EdgeKind::ConnectsTo,
                                     &unix_id,
@@ -823,6 +824,7 @@ fn persist_scan(
                         scan_time,
                         load_existing_edge(
                             store,
+                            &mut edge_cache,
                             source_service,
                             EdgeKind::DependsOn,
                             target_service,
@@ -846,6 +848,7 @@ fn persist_scan(
 
             systemd_unit_count = super::scan_systemd::persist_systemd_in_scan(
                 store,
+                &mut edge_cache,
                 &unit_batch,
                 &unit_observations,
                 scan_time,
@@ -856,6 +859,7 @@ fn persist_scan(
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
                     store,
+                    &mut edge_cache,
                     &unit_observations,
                     scan_time,
                     &mut seen_service_depends,
@@ -863,12 +867,15 @@ fn persist_scan(
 
             super::scan_systemd_runtime::persist_runtime_in_scan(
                 store,
+                &mut edge_cache,
                 &runtime_batch,
                 &runtime_observations,
                 scan_time,
-                &mut enable_depends_on_edge_count,
-                &mut dbus_depends_on_edge_count,
-                &mut seen_service_depends,
+                super::scan_systemd_runtime::RuntimeDependsOnCounts {
+                    enable: &mut enable_depends_on_edge_count,
+                    dbus: &mut dbus_depends_on_edge_count,
+                    seen: &mut seen_service_depends,
+                },
             )?;
 
             let cgroup_reader: Option<&dyn twin_collectors::SystemdDBusReader> = runtime_batch
@@ -881,6 +888,7 @@ fn persist_scan(
                 });
             cgroup_correction_count = super::scan_cgroup_validate::apply_cgroup_corrections(
                 store,
+                &mut edge_cache,
                 batch.records(),
                 scan_time,
                 cgroup_reader,
@@ -1217,24 +1225,10 @@ fn tcp_connection_observation_ids(
 }
 
 fn listener_services_for_port(
-    store: &Store,
     listeners_by_port: &HashMap<NodeId, Vec<NodeId>>,
     port_id: &NodeId,
 ) -> Result<Vec<NodeId>, StoreError> {
-    let mut out = listeners_by_port.get(port_id).cloned().unwrap_or_default();
-    for row in store.list_edges_to(port_id.as_str())? {
-        let Ok(edge) = GraphEdge::try_from(&row) else {
-            continue;
-        };
-        if edge.kind() != EdgeKind::ListensOn || edge.class() != EdgeClass::Inferred {
-            continue;
-        }
-        let service_id = edge.from();
-        if service_id.kind() == Some(NodeKind::Service) && !out.contains(service_id) {
-            out.push(service_id.clone());
-        }
-    }
-    Ok(out)
+    Ok(listeners_by_port.get(port_id).cloned().unwrap_or_default())
 }
 
 fn listener_obs_from_store(
@@ -1459,17 +1453,37 @@ fn upsert_node_once(
     Ok(true)
 }
 
+pub(crate) struct ScanEdgeCache {
+    edges: HashMap<String, GraphEdge>,
+}
+
+impl ScanEdgeCache {
+    pub fn new() -> Self {
+        Self {
+            edges: HashMap::new(),
+        }
+    }
+}
+
 pub(crate) fn load_existing_edge(
     store: &Store,
+    cache: &mut ScanEdgeCache,
     from: &NodeId,
     kind: EdgeKind,
     to: &NodeId,
 ) -> Result<Option<GraphEdge>, StoreError> {
     let id = EdgeId::new(from, kind, to);
-    Ok(store
+    if let Some(edge) = cache.edges.get(id.as_str()) {
+        return Ok(Some(edge.clone()));
+    }
+    let loaded = store
         .get_edge(id.as_str())?
         .as_ref()
-        .and_then(|row| GraphEdge::try_from(row).ok()))
+        .and_then(|row| GraphEdge::try_from(row).ok());
+    if let Some(ref edge) = loaded {
+        cache.edges.insert(id.to_string(), edge.clone());
+    }
+    Ok(loaded)
 }
 
 pub(crate) fn upsert_edge_with_link(

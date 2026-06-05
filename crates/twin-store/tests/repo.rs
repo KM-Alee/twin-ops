@@ -78,6 +78,28 @@ fn upsert_node_preserves_first_seen_updates_last_seen() {
 }
 
 #[test]
+fn batch_get_nodes_and_observations_by_ids() {
+    let mut store = support::blank_store();
+    seed_ab_nodes(&mut store);
+    store
+        .insert_observation(&observation_row("obs-a", "proc", "ProcessSeen", TS))
+        .expect("obs");
+    store
+        .insert_observation(&observation_row("obs-b", "proc", "ProcessSeen", TS + 1))
+        .expect("obs");
+
+    assert_eq!(store.count_nodes_by_kind("process").expect("count"), 2);
+    let nodes = store.get_nodes_by_ids(&["a", "missing"]).expect("nodes");
+    assert_eq!(nodes.len(), 1);
+    assert!(nodes.contains_key("a"));
+
+    let obs = store
+        .get_observations_by_ids(&["obs-a", "obs-b"])
+        .expect("obs");
+    assert_eq!(obs.len(), 2);
+}
+
+#[test]
 fn upsert_edge_uses_row_values_on_conflict() {
     let mut store = support::blank_store();
     seed_ab_nodes(&mut store);

@@ -1,5 +1,5 @@
 use serde::Serialize;
-use twin_core::EvidenceStrength;
+use twin_core::{EvidenceStrength, RiskLevel};
 
 use super::graph_result::GraphOwnedNode;
 
@@ -61,7 +61,7 @@ pub struct ImpactUnknown {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RiskAssessment {
-    pub level: String,
+    pub level: RiskLevel,
     pub reasons: Vec<String>,
 }
 

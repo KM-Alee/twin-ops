@@ -1,6 +1,7 @@
 mod collector;
 mod dbus;
 mod enable_symlinks;
+mod observation;
 mod runtime_collector;
 mod test_env;
 mod unit_parse;

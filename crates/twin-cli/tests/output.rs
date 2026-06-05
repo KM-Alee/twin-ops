@@ -475,7 +475,7 @@ fn sample_impact_result() -> ImpactResult {
         target: "service:postgresql.service".to_string(),
         target_label: "postgresql.service".to_string(),
         risk: twin_app::RiskAssessment {
-            level: "high".to_string(),
+            level: twin_core::RiskLevel::High,
             reasons: vec!["1 direct dependent is known".to_string()],
         },
         evidence_strength: twin_app::EvidenceStrengthView {

@@ -103,7 +103,7 @@ impl Store {
     }
 }
 
-fn row_from_node(row: &Row<'_>) -> Result<NodeRow, rusqlite::Error> {
+pub(crate) fn row_from_node(row: &Row<'_>) -> Result<NodeRow, rusqlite::Error> {
     Ok(NodeRow {
         id: row.get(0)?,
         kind: row.get(1)?,

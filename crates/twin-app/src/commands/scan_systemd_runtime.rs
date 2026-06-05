@@ -2,22 +2,35 @@ use std::collections::{HashMap, HashSet};
 
 use twin_collectors::{SystemdRuntimeBatch, RUNTIME_COLLECTOR_NAME};
 use twin_core::{
-    EdgeKind, GraphEdge, GraphMetadata, GraphNode, GraphNodeParts, NodeId, NodeKind, NodeState,
+    GraphEdge, GraphMetadata, GraphNode, GraphNodeParts, NodeId, NodeKind, NodeState,
     ObservationId, TimestampNs,
 };
 use twin_observation::{Observation, ObservationKind, ObservationSource};
 use twin_store::{CollectorRunRow, Store, StoreError};
 
+pub(crate) struct RuntimeDependsOnCounts<'a> {
+    pub enable: &'a mut usize,
+    pub dbus: &'a mut usize,
+    pub seen: &'a mut HashSet<(NodeId, NodeId)>,
+}
+
 pub(crate) fn persist_runtime_in_scan(
     store: &mut Store,
+    edge_cache: &mut super::scan::ScanEdgeCache,
     batch: &SystemdRuntimeBatch,
     observations: &[Observation],
     scan_time: TimestampNs,
-    enable_depends_on_edge_count: &mut usize,
-    dbus_depends_on_edge_count: &mut usize,
-    seen_service_depends: &mut HashSet<(NodeId, NodeId)>,
+    counts: RuntimeDependsOnCounts<'_>,
 ) -> Result<(), StoreError> {
-    let dep_groups = runtime_dependency_groups(observations);
+    let dep_groups = super::scan_systemd_groups::group_unit_dep_observations(observations, |obs| {
+        match obs.kind() {
+            ObservationKind::SystemdUnitRequires | ObservationKind::SystemdUnitWants => {
+                obs.metadata().get("source").and_then(|v| v.as_str()) == Some("systemd_dbus")
+            }
+            ObservationKind::SystemdUnitWantedBy => true,
+            _ => false,
+        }
+    });
     let obs_by_id: HashMap<ObservationId, &Observation> =
         observations.iter().map(|o| (o.id(), o)).collect();
 
@@ -76,10 +89,7 @@ pub(crate) fn persist_runtime_in_scan(
             .get("key")
             .and_then(|v| v.as_str())
             .unwrap_or("Requires");
-        let existing_edge =
-            super::scan::load_existing_edge(store, &source_id, EdgeKind::DependsOn, &target_id)?;
-
-        let edge = match primary.kind() {
+        match primary.kind() {
             ObservationKind::SystemdUnitWantedBy => {
                 let symlink_path = primary
                     .metadata()
@@ -91,71 +101,53 @@ pub(crate) fn persist_runtime_in_scan(
                     .get("enable_kind")
                     .and_then(|v| v.as_str())
                     .unwrap_or("wants");
-                GraphEdge::observed_service_depends_on_enable(
+                super::scan_systemd_groups::persist_depends_on_group(
+                    store,
+                    edge_cache,
                     &source_id,
                     &target_id,
-                    scan_time,
-                    existing_edge.as_ref(),
-                    enable_kind,
-                    symlink_path,
-                )
+                    super::scan_systemd_groups::EdgeObservationLink::AllIds(obs_ids),
+                    |existing| {
+                        GraphEdge::observed_service_depends_on_enable(
+                            &source_id,
+                            &target_id,
+                            scan_time,
+                            existing,
+                            enable_kind,
+                            symlink_path,
+                        )
+                    },
+                )?;
             }
             _ if primary.source() == ObservationSource::SystemdDBus => {
-                GraphEdge::observed_service_depends_on_dbus(
+                super::scan_systemd_groups::persist_depends_on_group(
+                    store,
+                    edge_cache,
                     &source_id,
                     &target_id,
-                    scan_time,
-                    existing_edge.as_ref(),
-                    dep_key,
-                )
+                    super::scan_systemd_groups::EdgeObservationLink::AllIds(obs_ids),
+                    |existing| {
+                        GraphEdge::observed_service_depends_on_dbus(
+                            &source_id,
+                            &target_id,
+                            scan_time,
+                            existing,
+                            dep_key,
+                        )
+                    },
+                )?;
             }
             _ => continue,
-        };
-
-        super::scan::upsert_edge_with_link(store, &edge, None)?;
-        for obs_id in obs_ids {
-            store.link_edge_observation(edge.id().as_str(), &obs_id.to_string(), "direct")?;
         }
-        if seen_service_depends.insert((source_id.clone(), target_id.clone())) {
+        if counts.seen.insert((source_id.clone(), target_id.clone())) {
             match primary.kind() {
-                ObservationKind::SystemdUnitWantedBy => *enable_depends_on_edge_count += 1,
-                _ => *dbus_depends_on_edge_count += 1,
+                ObservationKind::SystemdUnitWantedBy => *counts.enable += 1,
+                _ => *counts.dbus += 1,
             }
         }
     }
 
     Ok(())
-}
-
-fn runtime_dependency_groups(
-    observations: &[Observation],
-) -> HashMap<(String, String), Vec<ObservationId>> {
-    let mut map: HashMap<(String, String), Vec<ObservationId>> = HashMap::new();
-    for obs in observations {
-        let group = match obs.kind() {
-            ObservationKind::SystemdUnitRequires | ObservationKind::SystemdUnitWants => {
-                if obs.metadata().get("source").and_then(|v| v.as_str()) != Some("systemd_dbus") {
-                    continue;
-                }
-                true
-            }
-            ObservationKind::SystemdUnitWantedBy => true,
-            _ => false,
-        };
-        if !group {
-            continue;
-        }
-        let Some(from_unit) = obs.metadata().get("from_unit").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let Some(to_unit) = obs.metadata().get("to_unit").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        map.entry((from_unit.to_string(), to_unit.to_string()))
-            .or_default()
-            .push(obs.id());
-    }
-    map
 }
 
 fn upsert_service_state_node(

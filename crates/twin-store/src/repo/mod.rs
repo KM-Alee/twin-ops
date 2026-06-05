@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod collector_run;
 pub(crate) mod decode;
 pub mod edge;

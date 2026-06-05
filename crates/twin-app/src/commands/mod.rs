@@ -8,5 +8,6 @@ pub mod scan;
 mod scan_cgroup_validate;
 pub(crate) mod scan_quality;
 mod scan_systemd;
+mod scan_systemd_groups;
 mod scan_systemd_runtime;
 mod scan_systemd_socket;

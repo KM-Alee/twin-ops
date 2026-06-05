@@ -141,7 +141,7 @@ fn emit_dependencies(
 ) {
     for target in targets {
         *dependency_count += 1;
-        observations.push(raw_dependency_obs(unit, target, key, kind, timestamp));
+        observations.push(unit_dependency_obs(unit, target, key, kind, timestamp));
     }
 }
 
@@ -196,36 +196,27 @@ fn raw_unit_seen(unit: &EffectiveUnit, timestamp: TimestampNs) -> RawObservation
     }
 }
 
-fn raw_dependency_obs(
+fn unit_dependency_obs(
     unit: &EffectiveUnit,
     target_unit: &str,
     key: &str,
     kind: ObservationKind,
     timestamp: TimestampNs,
 ) -> RawObservation {
-    let raw_ref = RawEvidenceRef::new(unit.main_path.display().to_string());
-    let mut meta = ObservationMetadata::new();
-    meta.insert_str("from_unit", &unit.unit_name);
-    meta.insert_str("to_unit", target_unit);
-    meta.insert_str("key", key);
-    meta.insert_str("unit_path", &unit.main_path.display().to_string());
-    RawObservation {
+    super::observation::unit_dependency_raw(super::observation::UnitDependencyRawInput {
         source: ObservationSource::SystemdUnitFile,
+        collector: COLLECTOR_NAME,
         kind,
-        collector: CollectorName::new(COLLECTOR_NAME),
-        subject: Some(RawIdentity::Service {
-            unit: unit.unit_name.clone(),
-        }),
-        object: Some(RawIdentity::Service {
-            unit: target_unit.to_string(),
-        }),
+        from_unit: &unit.unit_name,
+        to_unit: target_unit,
+        key,
         timestamp,
-        raw_ref: Some(raw_ref),
-        confidence_hint: if key == "Wants" {
+        raw_ref: RawEvidenceRef::new(unit.main_path.display().to_string()),
+        hint: if key == "Wants" {
             ConfidenceHint::Moderate
         } else {
             ConfidenceHint::High
         },
-        metadata: meta,
-    }
+        extra_metadata: &[("unit_path", &unit.main_path.display().to_string())],
+    })
 }

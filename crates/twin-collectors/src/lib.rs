@@ -11,7 +11,7 @@ pub use process::{
 };
 pub use systemd::{
     default_search_paths, should_skip_live_dbus, try_connect_dbus, FixtureSystemdDBusReader,
-    SystemdDBusReader, SystemdRuntimeBatch, SystemdRuntimeCollector, SystemdUnitBatch,
-    SystemdUnitCollector, SystemdWarning, SystemdWarningKind, UnitDBusSnapshot, UnitFileReader,
-    COLLECTOR_NAME as SYSTEMD_UNIT_COLLECTOR_NAME, RUNTIME_COLLECTOR_NAME,
+    SystemdDBusError, SystemdDBusReader, SystemdRuntimeBatch, SystemdRuntimeCollector,
+    SystemdUnitBatch, SystemdUnitCollector, SystemdWarning, SystemdWarningKind, UnitDBusSnapshot,
+    UnitFileReader, COLLECTOR_NAME as SYSTEMD_UNIT_COLLECTOR_NAME, RUNTIME_COLLECTOR_NAME,
 };

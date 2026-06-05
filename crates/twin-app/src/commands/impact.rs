@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
@@ -87,7 +87,9 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
     let mut seen_evidence = HashSet::new();
     let tcp_cache = unmapped_tcp_observations(store)?;
     let unix_cache = unmapped_unix_observations(store)?;
-    let mut unknowns = target_unknowns_for_service(store, target, &tcp_cache, &unix_cache)?;
+    let tcp_index = TcpUnmappedIndex::build(&tcp_cache);
+    let unix_index = UnixUnmappedIndex::build(&unix_cache);
+    let mut unknowns = target_unknowns_for_service(store, target, &tcp_index, &unix_index)?;
 
     let incoming = store
         .list_edges_to(target.as_str())
@@ -127,7 +129,7 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
             &mut seen_evidence,
             relationship,
         );
-        let reason = service_dependent_reason(&edge, &dependent_evidence, target, label);
+        let reason = service_dependent_reason(store, &edge, &observation_ids, label);
         let impact_kind = classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
         let dependent = build_dependent(DependentInput {
             dependent_id,
@@ -199,7 +201,9 @@ fn port_impact(
     let mut seen_evidence = HashSet::new();
     let tcp_cache = unmapped_tcp_observations(store)?;
     let unix_cache = unmapped_unix_observations(store)?;
-    let mut unknowns = target_unknowns_for_socket(target, target_kind, &tcp_cache, &unix_cache)?;
+    let tcp_index = TcpUnmappedIndex::build(&tcp_cache);
+    let unix_index = UnixUnmappedIndex::build(&unix_cache);
+    let mut unknowns = target_unknowns_for_socket(target, target_kind, &tcp_index, &unix_index)?;
 
     let incoming = store
         .list_edges_to(target.as_str())
@@ -351,57 +355,93 @@ fn is_active_edge(edge: &GraphEdge) -> bool {
 }
 
 fn service_dependent_reason(
+    store: &Store,
     edge: &GraphEdge,
-    evidence: &[ImpactEvidenceLine],
-    _target: &NodeId,
+    observation_ids: &[String],
     target_label: &str,
 ) -> String {
     if edge.class() == EdgeClass::Observed {
-        for line in evidence {
-            if let Some((key, to_unit)) = configured_dep_from_statement(&line.statement) {
-                return format!("{key}={to_unit} in unit file");
-            }
+        if let Some(reason) = configured_dep_reason_from_observations(store, observation_ids) {
+            return reason;
         }
         return format!("declared dependency on {target_label} in unit file");
     }
-    dependent_reason(evidence, target_label)
-}
-
-fn configured_dep_from_statement(statement: &str) -> Option<(&str, &str)> {
-    let rest = statement.split("Configured: ").nth(1)?;
-    let key = rest.split('=').next()?;
-    if !matches!(key, "Requires" | "Wants" | "BindsTo") {
-        return None;
-    }
-    let after_key = rest.strip_prefix(key)?.strip_prefix('=')?;
-    let to_unit = after_key.split_whitespace().next()?;
-    Some((key, to_unit))
-}
-
-fn dependent_reason(evidence: &[ImpactEvidenceLine], target_label: &str) -> String {
-    for line in evidence {
-        if let Some(endpoint) = connection_endpoint_from_statement(&line.statement) {
-            return format!("active connection to {endpoint}");
-        }
+    if let Some(endpoint) = connection_endpoint_from_observations(store, observation_ids) {
+        return format!("active connection to {endpoint}");
     }
     format!("active connection to {target_label}")
 }
 
-fn connection_endpoint_from_statement(statement: &str) -> Option<String> {
-    if let Some(rest) = statement.split(" connected on ").nth(1) {
-        let endpoint = rest.split(" joined").next()?.trim();
-        if endpoint == "(no path)" {
-            return None;
+fn configured_dep_reason_from_observations(
+    store: &Store,
+    observation_ids: &[String],
+) -> Option<String> {
+    for obs_id in observation_ids {
+        let Ok(id) = ObservationId::from_str(obs_id) else {
+            continue;
+        };
+        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+            continue;
+        };
+        if !matches!(
+            obs.kind(),
+            ObservationKind::SystemdUnitRequires | ObservationKind::SystemdUnitWants
+        ) {
+            continue;
         }
-        return Some(endpoint.to_string());
+        let key = obs
+            .metadata()
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Requires");
+        let to_unit = obs.metadata().get("to_unit").and_then(|v| v.as_str())?;
+        return Some(format!("{key}={to_unit} in unit file"));
     }
-    let marker = " to ";
-    let after = statement.split(marker).nth(1)?;
-    let endpoint = after.split(" joined").next()?.trim();
-    if endpoint.contains(':') {
-        Some(endpoint.to_string())
-    } else {
-        None
+    None
+}
+
+fn connection_endpoint_from_observations(
+    store: &Store,
+    observation_ids: &[String],
+) -> Option<String> {
+    for obs_id in observation_ids {
+        let Ok(id) = ObservationId::from_str(obs_id) else {
+            continue;
+        };
+        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+            continue;
+        };
+        if let Some(endpoint) = connection_endpoint_from_observation(&obs) {
+            return Some(endpoint);
+        }
+    }
+    None
+}
+
+fn connection_endpoint_from_observation(obs: &Observation) -> Option<String> {
+    match obs.kind() {
+        ObservationKind::TcpConnectionSeen => {
+            let remote_ip = obs
+                .metadata()
+                .get("remote_ip")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let remote_port = obs
+                .metadata()
+                .get("remote_port")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            Some(format!("{remote_ip}:{remote_port}"))
+        }
+        ObservationKind::UnixConnectionSeen => {
+            let path = obs.metadata().get("path").and_then(|v| v.as_str())?;
+            if path.is_empty() {
+                return None;
+            }
+            Some(path.to_string())
+        }
+        _ => None,
     }
 }
 
@@ -412,6 +452,24 @@ fn collect_edge_evidence(
     seen: &mut HashSet<String>,
     relationship: &str,
 ) {
+    if observation_ids.len() > 1 {
+        if let Ok(ctx) =
+            crate::commands::evidence::EvidenceLoadContext::preload_observations(store, observation_ids)
+        {
+            for obs_id in observation_ids {
+                let Some(obs) = ctx.observation(obs_id) else {
+                    continue;
+                };
+                if let Some(line) = impact_evidence_line(obs, relationship) {
+                    let key = format!("{}|{}", line.source, line.statement);
+                    if seen.insert(key) {
+                        evidence.push(line);
+                    }
+                }
+            }
+            return;
+        }
+    }
     for obs_id in observation_ids {
         let Ok(id) = ObservationId::from_str(obs_id) else {
             continue;
@@ -623,19 +681,98 @@ fn unmapped_socket_observations(store: &Store, source: &str) -> Result<Vec<Obser
     Ok(out)
 }
 
+#[derive(Default)]
+struct TcpUnmappedIndex {
+    counts: HashMap<(String, u16), (usize, usize)>,
+}
+
+impl TcpUnmappedIndex {
+    fn build(cache: &[Observation]) -> Self {
+        let mut counts: HashMap<(String, u16), (usize, usize)> = HashMap::new();
+        for obs in cache {
+            let keys = tcp_port_keys_for_observation(obs);
+            if keys.is_empty() {
+                continue;
+            }
+            let (active, listener) = match obs.kind() {
+                ObservationKind::TcpConnectionSeen => (1usize, 0usize),
+                ObservationKind::TcpSocketSeen => (0, 1),
+                _ => continue,
+            };
+            for key in keys {
+                let entry = counts.entry(key).or_insert((0, 0));
+                entry.0 += active;
+                entry.1 += listener;
+            }
+        }
+        Self { counts }
+    }
+}
+
+fn tcp_port_keys_for_observation(obs: &Observation) -> Vec<(String, u16)> {
+    let local_ip = obs.metadata().get("local_ip").and_then(|v| v.as_str());
+    let local_port = obs.metadata().get("local_port").and_then(|v| v.as_u64());
+    let remote_ip = obs.metadata().get("remote_ip").and_then(|v| v.as_str());
+    let remote_port = obs.metadata().get("remote_port").and_then(|v| v.as_u64());
+    let mut keys = Vec::new();
+    if let (Some(ip), Some(port)) = (local_ip, local_port) {
+        keys.push((ip.to_string(), port as u16));
+    }
+    if let (Some(ip), Some(port)) = (remote_ip, remote_port) {
+        keys.push((ip.to_string(), port as u16));
+    }
+    if local_ip == Some("0.0.0.0") {
+        if let Some(port) = local_port {
+            keys.push(("0.0.0.0".to_string(), port as u16));
+        }
+    }
+    if local_ip == Some("::") {
+        if let Some(port) = local_port {
+            keys.push(("::".to_string(), port as u16));
+        }
+    }
+    keys
+}
+
+#[derive(Default)]
+struct UnixUnmappedIndex {
+    counts: HashMap<String, (usize, usize)>,
+}
+
+impl UnixUnmappedIndex {
+    fn build(cache: &[Observation]) -> Self {
+        let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+        for obs in cache {
+            let Some(path) = obs.metadata().get("path").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if path.is_empty() {
+                continue;
+            }
+            let entry = counts.entry(path.to_string()).or_insert((0, 0));
+            match obs.kind() {
+                ObservationKind::UnixConnectionSeen => entry.0 += 1,
+                ObservationKind::UnixSocketSeen => entry.1 += 1,
+                _ => {}
+            }
+        }
+        Self { counts }
+    }
+}
+
 fn target_unknowns_for_service(
     store: &Store,
     target: &NodeId,
-    tcp_cache: &[Observation],
-    unix_cache: &[Observation],
+    tcp_index: &TcpUnmappedIndex,
+    unix_index: &UnixUnmappedIndex,
 ) -> Result<Vec<ImpactUnknown>, AppError> {
     let mut unknowns = Vec::new();
     let (port_ids, unix_ids) = socket_peers_for_service(store, target)?;
     for port_id in &port_ids {
-        unknowns.extend(unmapped_sockets_for_port(port_id, tcp_cache)?);
+        unknowns.extend(unmapped_sockets_for_port(port_id, tcp_index)?);
     }
     for unix_id in &unix_ids {
-        unknowns.extend(unmapped_sockets_for_unix(unix_id, unix_cache)?);
+        unknowns.extend(unmapped_sockets_for_unix(unix_id, unix_index)?);
     }
     Ok(unknowns)
 }
@@ -643,12 +780,12 @@ fn target_unknowns_for_service(
 fn target_unknowns_for_socket(
     target: &NodeId,
     target_kind: NodeKind,
-    tcp_cache: &[Observation],
-    unix_cache: &[Observation],
+    tcp_index: &TcpUnmappedIndex,
+    unix_index: &UnixUnmappedIndex,
 ) -> Result<Vec<ImpactUnknown>, AppError> {
     match target_kind {
-        NodeKind::Port => unmapped_sockets_for_port(target, tcp_cache),
-        NodeKind::UnixSocket => unmapped_sockets_for_unix(target, unix_cache),
+        NodeKind::Port => unmapped_sockets_for_port(target, tcp_index),
+        NodeKind::UnixSocket => unmapped_sockets_for_unix(target, unix_index),
         _ => Ok(Vec::new()),
     }
 }
@@ -681,23 +818,15 @@ fn socket_peers_for_service(
 
 fn unmapped_sockets_for_port(
     port_id: &NodeId,
-    tcp_cache: &[Observation],
+    tcp_index: &TcpUnmappedIndex,
 ) -> Result<Vec<ImpactUnknown>, AppError> {
     let (ip, port) = parse_port_node(port_id)?;
     let mut unknowns = Vec::new();
-    let mut unmapped_active = 0usize;
-    let mut unmapped_listener = 0usize;
-
-    for obs in tcp_cache {
-        if !observation_matches_port(obs, &ip, port) {
-            continue;
-        }
-        match obs.kind() {
-            ObservationKind::TcpConnectionSeen => unmapped_active += 1,
-            ObservationKind::TcpSocketSeen => unmapped_listener += 1,
-            _ => {}
-        }
-    }
+    let (unmapped_active, unmapped_listener) = tcp_index
+        .counts
+        .get(&(ip.clone(), port))
+        .copied()
+        .unwrap_or((0, 0));
 
     if unmapped_active > 0 {
         unknowns.push(ImpactUnknown {
@@ -724,7 +853,7 @@ fn unmapped_sockets_for_port(
 
 fn unmapped_sockets_for_unix(
     unix_id: &NodeId,
-    unix_cache: &[Observation],
+    unix_index: &UnixUnmappedIndex,
 ) -> Result<Vec<ImpactUnknown>, AppError> {
     let path =
         unix_id
@@ -734,19 +863,11 @@ fn unmapped_sockets_for_unix(
                 kind: unix_id.to_string(),
             })?;
     let mut unknowns = Vec::new();
-    let mut unmapped_active = 0usize;
-    let mut unmapped_listener = 0usize;
-
-    for obs in unix_cache {
-        if obs.metadata().get("path").and_then(|v| v.as_str()) != Some(path) {
-            continue;
-        }
-        match obs.kind() {
-            ObservationKind::UnixConnectionSeen => unmapped_active += 1,
-            ObservationKind::UnixSocketSeen => unmapped_listener += 1,
-            _ => {}
-        }
-    }
+    let (unmapped_active, unmapped_listener) = unix_index
+        .counts
+        .get(path)
+        .copied()
+        .unwrap_or((0, 0));
 
     if unmapped_active > 0 {
         unknowns.push(ImpactUnknown {
@@ -789,27 +910,6 @@ fn parse_port_node(port_id: &NodeId) -> Result<(String, u16), AppError> {
             kind: s.to_string(),
         })?;
     Ok((ip.to_string(), port))
-}
-
-fn observation_matches_port(obs: &Observation, ip: &str, port: u16) -> bool {
-    let local_ip = obs.metadata().get("local_ip").and_then(|v| v.as_str());
-    let local_port = obs.metadata().get("local_port").and_then(|v| v.as_u64());
-    let remote_ip = obs.metadata().get("remote_ip").and_then(|v| v.as_str());
-    let remote_port = obs.metadata().get("remote_port").and_then(|v| v.as_u64());
-
-    if local_ip == Some(ip) && local_port == Some(port as u64) {
-        return true;
-    }
-    if remote_ip == Some(ip) && remote_port == Some(port as u64) {
-        return true;
-    }
-    if local_ip == Some("0.0.0.0") && local_port == Some(port as u64) {
-        return true;
-    }
-    if local_ip == Some("::") && local_port == Some(port as u64) {
-        return true;
-    }
-    false
 }
 
 fn missing_evidence_unknown(edge_id: &str) -> ImpactUnknown {
@@ -868,10 +968,7 @@ fn score_risk(
         reasons.push("target is a service dependency target".to_string());
     }
 
-    RiskAssessment {
-        level: level.to_string(),
-        reasons,
-    }
+    RiskAssessment { level, reasons }
 }
 
 fn score_evidence(

@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use thiserror::Error;
 use twin_core::TimestampNs;
 use twin_observation::{
     ConfidenceHint, ObservationKind, ObservationMetadata, ObservationSource, RawEvidenceRef,
     RawIdentity, RawObservation,
 };
+
 use zbus::blocking::Connection;
 use zbus::proxy;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use crate::systemd::warning::{SystemdWarning, SystemdWarningKind};
 use twin_core::CollectorName;
@@ -83,26 +85,43 @@ type UnitListTuple = (
 );
 
 #[proxy(
-    interface = "org.freedesktop.systemd1.Unit",
+    interface = "org.freedesktop.DBus.Properties",
     default_service = "org.freedesktop.systemd1"
 )]
-trait SystemdUnit {
-    #[zbus(property)]
-    fn id(&self) -> zbus::Result<String>;
-    #[zbus(property)]
-    fn active_state(&self) -> zbus::Result<String>;
-    #[zbus(property)]
-    fn load_state(&self) -> zbus::Result<String>;
-    #[zbus(property)]
-    fn sub_state(&self) -> zbus::Result<String>;
-    #[zbus(property)]
-    fn requires(&self) -> zbus::Result<Vec<String>>;
-    #[zbus(property)]
-    fn wants(&self) -> zbus::Result<Vec<String>>;
-    #[zbus(property)]
-    fn control_group(&self) -> zbus::Result<String>;
-    #[zbus(property)]
-    fn fragment_path(&self) -> zbus::Result<String>;
+trait UnitProperties {
+    fn get_all(&self, interface_name: &str) -> zbus::Result<HashMap<String, OwnedValue>>;
+}
+
+fn unit_props_from_get_all(
+    props: HashMap<String, OwnedValue>,
+) -> (Vec<String>, Vec<String>, String, String) {
+    (
+        string_vec_prop(&props, "Requires"),
+        string_vec_prop(&props, "Wants"),
+        string_prop(&props, "ControlGroup"),
+        string_prop(&props, "FragmentPath"),
+    )
+}
+
+fn string_prop(props: &HashMap<String, OwnedValue>, key: &str) -> String {
+    props
+        .get(key)
+        .and_then(|v| v.downcast_ref::<String>().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_default()
+}
+
+fn string_vec_prop(props: &HashMap<String, OwnedValue>, key: &str) -> Vec<String> {
+    let Some(value) = props.get(key) else {
+        return Vec::new();
+    };
+    let Ok(values) = <Vec<OwnedValue>>::try_from(value.clone()) else {
+        return Vec::new();
+    };
+    values
+        .into_iter()
+        .filter_map(|v| String::try_from(v).ok())
+        .collect()
 }
 
 impl SystemdDBusReader for StdSystemdDBusReader {
@@ -131,7 +150,7 @@ impl SystemdDBusReader for StdSystemdDBusReader {
             _job_path,
         ) in rows
         {
-            let unit_proxy = SystemdUnitProxyBlocking::builder(&self.connection)
+            let props_proxy = UnitPropertiesProxyBlocking::builder(&self.connection)
                 .path(path.clone())
                 .map_err(|e| SystemdDBusError::CallFailed {
                     detail: e.to_string(),
@@ -140,10 +159,10 @@ impl SystemdDBusReader for StdSystemdDBusReader {
                 .map_err(|e| SystemdDBusError::CallFailed {
                     detail: e.to_string(),
                 })?;
-            let requires = unit_proxy.requires().unwrap_or_default();
-            let wants = unit_proxy.wants().unwrap_or_default();
-            let control_group = unit_proxy.control_group().unwrap_or_default();
-            let fragment_path = unit_proxy.fragment_path().unwrap_or_default();
+            let props = props_proxy
+                .get_all("org.freedesktop.systemd1.Unit")
+                .unwrap_or_default();
+            let (requires, wants, control_group, fragment_path) = unit_props_from_get_all(props);
             out.push(UnitDBusSnapshot {
                 name,
                 active_state,
@@ -177,7 +196,7 @@ impl SystemdDBusReader for StdSystemdDBusReader {
             .map_err(|e| SystemdDBusError::CallFailed {
                 detail: e.to_string(),
             })?;
-        let unit_proxy = SystemdUnitProxyBlocking::builder(&self.connection)
+        let props_proxy = UnitPropertiesProxyBlocking::builder(&self.connection)
             .path(path)
             .map_err(|e| SystemdDBusError::CallFailed {
                 detail: e.to_string(),
@@ -186,7 +205,17 @@ impl SystemdDBusReader for StdSystemdDBusReader {
             .map_err(|e| SystemdDBusError::CallFailed {
                 detail: e.to_string(),
             })?;
-        Ok(unit_proxy.id().ok())
+        let props = props_proxy
+            .get_all("org.freedesktop.systemd1.Unit")
+            .map_err(|e| SystemdDBusError::CallFailed {
+                detail: e.to_string(),
+            })?;
+        let id = string_prop(&props, "Id");
+        if id.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(id))
+        }
     }
 }
 
@@ -312,26 +341,18 @@ fn dep_observation(
     } else {
         ObservationKind::SystemdUnitWants
     };
-    let mut meta = ObservationMetadata::new();
-    meta.insert_str("from_unit", from_unit);
-    meta.insert_str("to_unit", to_unit);
-    meta.insert_str("key", key);
-    meta.insert_str("source", "systemd_dbus");
-    RawObservation {
+    super::observation::unit_dependency_raw(super::observation::UnitDependencyRawInput {
         source: ObservationSource::SystemdDBus,
+        collector: DBUS_COLLECTOR_NAME,
         kind,
-        collector: CollectorName::new(DBUS_COLLECTOR_NAME),
-        subject: Some(RawIdentity::Service {
-            unit: from_unit.to_string(),
-        }),
-        object: Some(RawIdentity::Service {
-            unit: to_unit.to_string(),
-        }),
+        from_unit,
+        to_unit,
+        key,
         timestamp,
-        raw_ref: Some(RawEvidenceRef::new("org.freedesktop.systemd1")),
-        confidence_hint: hint,
-        metadata: meta,
-    }
+        raw_ref: RawEvidenceRef::new("org.freedesktop.systemd1"),
+        hint,
+        extra_metadata: &[("source", "systemd_dbus")],
+    })
 }
 
 pub fn try_connect_dbus() -> Option<StdSystemdDBusReader> {

@@ -5,8 +5,37 @@ use twin_collectors::{try_connect_dbus, SystemdDBusReader};
 use twin_core::{EdgeClass, EdgeKind, GraphEdge, GraphNode, NodeId, TimestampNs};
 use twin_store::{Store, StoreError};
 
+struct CgroupUnitLookup {
+    by_prefix: Vec<(String, String)>,
+}
+
+impl CgroupUnitLookup {
+    fn from_reader(reader: &dyn SystemdDBusReader) -> Result<Self, twin_collectors::SystemdDBusError> {
+        let units = reader.list_units()?;
+        let mut by_prefix: Vec<(String, String)> = units
+            .into_iter()
+            .filter(|u| !u.control_group.is_empty())
+            .map(|u| (u.control_group, u.name))
+            .collect();
+        by_prefix.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        Ok(Self { by_prefix })
+    }
+
+    fn resolve(&self, cgroup_path: &str) -> Option<&str> {
+        for (prefix, unit) in &self.by_prefix {
+            if cgroup_path == prefix.as_str()
+                || cgroup_path.starts_with(&format!("{prefix}/"))
+            {
+                return Some(unit.as_str());
+            }
+        }
+        None
+    }
+}
+
 pub(crate) fn apply_cgroup_corrections(
     store: &mut Store,
+    edge_cache: &mut super::scan::ScanEdgeCache,
     records: &[ProcessRecord],
     scan_time: TimestampNs,
     reader: Option<&dyn SystemdDBusReader>,
@@ -14,6 +43,7 @@ pub(crate) fn apply_cgroup_corrections(
     let Some(reader) = reader else {
         return Ok(0);
     };
+    let cgroup_lookup = CgroupUnitLookup::from_reader(reader).ok();
     let mut corrections = 0usize;
     let mut seen_paths: HashSet<String> = HashSet::new();
     for record in records {
@@ -25,9 +55,12 @@ pub(crate) fn apply_cgroup_corrections(
             if !seen_paths.insert(path.clone()) {
                 continue;
             }
-            let dbus_unit = match reader.get_unit_by_control_group(&path) {
-                Ok(Some(name)) => name,
-                Ok(None) | Err(_) => continue,
+            let dbus_unit = cgroup_lookup
+                .as_ref()
+                .and_then(|map| map.resolve(&path).map(str::to_string))
+                .or_else(|| reader.get_unit_by_control_group(&path).ok().flatten());
+            let Some(dbus_unit) = dbus_unit else {
+                continue;
             };
             if dbus_unit == *inferred {
                 continue;
@@ -50,13 +83,23 @@ pub(crate) fn apply_cgroup_corrections(
                     &corrected_id,
                     target,
                     scan_time,
-                    super::scan::load_existing_edge(store, &corrected_id, EdgeKind::Owns, target)?
-                        .as_ref(),
+                    super::scan::load_existing_edge(
+                        store,
+                        edge_cache,
+                        &corrected_id,
+                        EdgeKind::Owns,
+                        target,
+                    )?
+                    .as_ref(),
                 );
                 super::scan::upsert_edge_with_link(store, &edge, None)?;
-                if let Ok(Some(stale)) =
-                    super::scan::load_existing_edge(store, &inferred_id, EdgeKind::Owns, target)
-                {
+                if let Ok(Some(stale)) = super::scan::load_existing_edge(
+                    store,
+                    edge_cache,
+                    &inferred_id,
+                    EdgeKind::Owns,
+                    target,
+                ) {
                     if stale.class() == EdgeClass::Inferred {
                         store.delete_edge(stale.id().as_str())?;
                     }

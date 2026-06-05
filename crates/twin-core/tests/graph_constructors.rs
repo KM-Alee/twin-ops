@@ -1,4 +1,6 @@
-use twin_core::{EdgeClass, EdgeKind, GraphEdge, GraphNode, NodeId, NodeKind, TimestampNs};
+use twin_core::{
+    EdgeClass, EdgeKind, GraphEdge, GraphMetadata, GraphNode, NodeId, NodeKind, TimestampNs,
+};
 
 #[test]
 fn cgroup_and_service_nodes_preserve_first_seen() {
@@ -114,4 +116,13 @@ fn connection_and_dependency_edges() {
         r#"/usr/lib/systemd/system/with"quote.service"#,
     );
     assert!(escaped.metadata().as_str().contains(r#"with\"quote"#));
+}
+
+#[test]
+fn graph_metadata_socket_activation_field() {
+    let meta = GraphMetadata::from_json(
+        r#"{"source":"systemd_socket_unit","socket_activation":true,"unit_path":"/etc/dbus.socket"}"#,
+    );
+    assert!(meta.socket_activation());
+    assert!(!GraphMetadata::empty().socket_activation());
 }

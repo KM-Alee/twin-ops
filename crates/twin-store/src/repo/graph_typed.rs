@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, GraphEdgeParts, GraphMetadata, GraphNode,
-    GraphNodeParts, NodeId, NodeKind, NodeState, TimestampNs,
+    GraphNodeParts, NodeId, NodeKind, NodeState, ObservationId, TimestampNs,
 };
+use twin_observation::Observation;
 
 use crate::error::StoreError;
 use crate::repo::decode::parse_field;
@@ -114,5 +116,36 @@ impl Store {
     pub fn list_nodes_by_kind_typed(&self, kind: NodeKind) -> Result<Vec<GraphNode>, StoreError> {
         let rows = self.list_nodes_by_kind(&kind.to_string())?;
         rows.iter().map(GraphNode::try_from).collect()
+    }
+
+    pub fn count_nodes_by_kind_typed(&self, kind: NodeKind) -> Result<i64, StoreError> {
+        self.count_nodes_by_kind(&kind.to_string())
+    }
+
+    pub fn get_nodes_typed_by_ids(
+        &self,
+        ids: &[&str],
+    ) -> Result<HashMap<String, GraphNode>, StoreError> {
+        let rows = self.get_nodes_by_ids(ids)?;
+        rows.iter()
+            .map(|(id, row)| GraphNode::try_from(row).map(|n| (id.clone(), n)))
+            .collect()
+    }
+
+    pub fn get_observations_typed_by_ids(
+        &self,
+        ids: &[&str],
+    ) -> Result<HashMap<String, Observation>, StoreError> {
+        let rows = self.get_observations_by_ids(ids)?;
+        rows.iter()
+            .map(|(id, row)| Observation::try_from(row).map(|o| (id.clone(), o)))
+            .collect()
+    }
+
+    pub fn get_observation_typed_from_map(
+        map: &HashMap<String, Observation>,
+        id: ObservationId,
+    ) -> Option<Observation> {
+        map.get(&id.to_string()).cloned()
     }
 }

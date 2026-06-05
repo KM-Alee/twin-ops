@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use twin_app::{GraphRequest, ImpactRequest, InitRequest, ScanRequest};
 use twin_collectors::COLLECTOR_NAME;
-use twin_core::{NodeId, NodeKind};
+use twin_core::{NodeId, NodeKind, RiskLevel};
 use twin_store::Store;
 
 use support::{
@@ -520,7 +520,7 @@ fn impact_in_service_shows_direct_dependents() {
         .direct_dependents
         .iter()
         .any(|d| d.id == "service:django.service"));
-    assert_eq!(result.risk.level, "medium");
+    assert_eq!(result.risk.level, RiskLevel::Medium);
     assert!(result.evidence_strength.score >= 31);
     assert!(result.direct_dependents.iter().any(|d| {
         d.evidence
@@ -622,7 +622,7 @@ fn impact_in_no_dependents_low_risk() {
     )
     .expect("impact");
     assert!(result.direct_dependents.is_empty());
-    assert_eq!(result.risk.level, "low");
+    assert_eq!(result.risk.level, RiskLevel::Low);
     assert!(
         result.unknowns.iter().all(|u| !u.weakens_evidence),
         "unexpected weakening unknowns: {:?}",
@@ -703,7 +703,7 @@ fn impact_in_multiple_dependents_raises_risk() {
     )
     .expect("impact");
     assert_eq!(result.direct_dependents.len(), 2);
-    assert_eq!(result.risk.level, "high");
+    assert_eq!(result.risk.level, RiskLevel::High);
     assert!(result.unknowns.iter().any(|u| u.kind == "missing_evidence"));
 }
 
@@ -850,7 +850,7 @@ fn impact_in_declared_dependent_from_unit_file() {
     assert_eq!(result.configured_dependents.len(), 1);
     assert_eq!(result.configured_dependents[0].id, "service:docker.service");
     assert_eq!(result.configured_dependents[0].impact_kind, "configured");
-    assert_eq!(result.risk.level, "low");
+    assert_eq!(result.risk.level, RiskLevel::Low);
     assert!(result.configured_dependents[0]
         .evidence
         .iter()
@@ -944,7 +944,7 @@ fn impact_in_degraded_scan_still_low_without_local_unknowns() {
     )
     .expect("impact");
     assert!(result.direct_dependents.is_empty());
-    assert_eq!(result.risk.level, "low");
+    assert_eq!(result.risk.level, RiskLevel::Low);
     assert!(result
         .unknowns
         .iter()
@@ -1081,9 +1081,10 @@ fn impact_in_unix_socket_target_lists_callers() {
         .iter()
         .any(|d| d.id == "service:pipewire.service"));
     assert!(result.direct_dependents.iter().any(|d| {
-        d.evidence
-            .iter()
-            .any(|e| e.statement.contains("connected on /run/dbus/system_bus_socket"))
+        d.evidence.iter().any(|e| {
+            e.statement
+                .contains("connected on /run/dbus/system_bus_socket")
+        })
     }));
 }
 

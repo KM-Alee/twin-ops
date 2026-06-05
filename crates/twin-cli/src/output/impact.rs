@@ -1,4 +1,7 @@
-use twin_app::ImpactResult;
+use std::collections::HashSet;
+
+use twin_app::{ImpactEvidenceLine, ImpactResult};
+use twin_core::RiskLevel;
 
 use crate::output::format::{Lines, Status};
 
@@ -12,7 +15,7 @@ pub fn render(result: &ImpactResult) -> String {
     out.tree_leaf(true, &result.target, &result.target_label);
     out.blank();
     out.section("risk");
-    out.tree_leaf(false, "level", &result.risk.level);
+    out.tree_leaf(false, "level", &result.risk.level.to_string());
     out.tree_leaf(false, "evidence strength", &result.evidence_strength.label);
     if result.risk.reasons.is_empty() {
         out.tree_leaf(true, "reason", "no scoring reasons recorded");
@@ -73,11 +76,16 @@ pub fn render(result: &ImpactResult) -> String {
             out.tree_leaf(is_last_dep, "reason", &dependent.reason);
         }
     }
-    if !result.evidence.is_empty() {
+    let evidence_lines: Vec<_> = if result.evidence.is_empty() {
+        aggregate_dependent_evidence(result)
+    } else {
+        result.evidence.iter().collect()
+    };
+    if !evidence_lines.is_empty() {
         out.blank();
         out.section("evidence");
-        for (i, line) in result.evidence.iter().enumerate() {
-            let is_last = i + 1 == result.evidence.len();
+        for (i, line) in evidence_lines.iter().enumerate() {
+            let is_last = i + 1 == evidence_lines.len();
             out.tree_leaf(is_last, &line.source, &line.statement);
         }
     }
@@ -110,12 +118,30 @@ pub fn render(result: &ImpactResult) -> String {
     out.into_string()
 }
 
+fn aggregate_dependent_evidence(result: &ImpactResult) -> Vec<&ImpactEvidenceLine> {
+    let mut seen = HashSet::new();
+    let mut lines = Vec::new();
+    for dependent in result
+        .direct_dependents
+        .iter()
+        .chain(result.configured_dependents.iter())
+    {
+        for line in &dependent.evidence {
+            let key = format!("{}|{}", line.source, line.statement);
+            if seen.insert(key) {
+                lines.push(line);
+            }
+        }
+    }
+    lines
+}
+
 fn impact_status(result: &ImpactResult) -> Status {
     if result.unknowns.iter().any(|u| u.weakens_evidence) {
         return Status::Warn;
     }
-    match result.risk.level.as_str() {
-        "high" | "critical" | "unknown" => Status::Warn,
-        _ => Status::Ok,
+    match result.risk.level {
+        RiskLevel::High | RiskLevel::Critical | RiskLevel::Unknown => Status::Warn,
+        RiskLevel::Low | RiskLevel::Medium => Status::Ok,
     }
 }
