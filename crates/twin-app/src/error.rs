@@ -14,6 +14,8 @@ pub enum AppError {
     Scan(#[from] ScanError),
     #[error("graph failed: {0}")]
     Graph(#[from] GraphError),
+    #[error("impact failed: {0}")]
+    Impact(#[from] ImpactError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -78,4 +80,26 @@ pub enum GraphError {
     ServiceNotFound { query: String, detail: String },
     #[error("ambiguous service match for `{query}`: {candidates}")]
     AmbiguousService { query: String, candidates: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ImpactError {
+    #[error("path resolution failed: {0}")]
+    Paths(#[from] PathError),
+    #[error("database is not initialized; run `twin init` first")]
+    DatabaseNotInitialized,
+    #[error("specify an impact target")]
+    MissingTarget,
+    #[error("cannot open database: {0}")]
+    StoreOpen(#[from] StoreOpenError),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("node not found: {id}")]
+    NodeNotFound { id: NodeId },
+    #[error("service not found for query `{query}`")]
+    ServiceNotFound { query: String },
+    #[error("ambiguous service match for `{query}`: {candidates}")]
+    AmbiguousService { query: String, candidates: String },
+    #[error("unsupported impact target kind: {kind}")]
+    UnsupportedTarget { kind: String },
 }

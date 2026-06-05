@@ -11,6 +11,6 @@ pub use process_record::ProcessRecord;
 pub use procfs::{ProcReader, StdProcReader};
 pub use socket::{
     parse_socket_fd_target, parse_tcp_table, ParseTcpWarning, SocketOwner, SocketState,
-    TcpSocketRecord, TcpTableKind,
+    TcpConnectionRecord, TcpSocketRecord, TcpTableKind, TcpTableParse,
 };
 pub use warning::{ProcessWarning, ProcessWarningKind};

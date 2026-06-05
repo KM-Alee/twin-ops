@@ -48,6 +48,26 @@ pub fn render(result: &ScanResult) -> String {
         "service-listens-on",
         &result.service_listens_on_edge_count.to_string(),
     );
+    out.tree_leaf(
+        false,
+        "active-connections",
+        &result.tcp_connection_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "process-connects-to",
+        &result.process_connects_to_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-connects-to",
+        &result.service_connects_to_edge_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "service-depends-on",
+        &result.service_depends_on_edge_count.to_string(),
+    );
     out.tree_leaf(true, "observations", &result.observation_count.to_string());
 
     if result.warning_count > 0 {

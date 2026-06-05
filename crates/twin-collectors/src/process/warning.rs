@@ -15,6 +15,7 @@ pub enum ProcessWarningKind {
     FdMalformed,
     FdVanished,
     SocketUnmapped,
+    ActiveSocketUnmapped,
 }
 
 impl ProcessWarningKind {
@@ -33,6 +34,7 @@ impl ProcessWarningKind {
             Self::FdMalformed => "fd_malformed",
             Self::FdVanished => "fd_vanished",
             Self::SocketUnmapped => "socket_unmapped",
+            Self::ActiveSocketUnmapped => "active_socket_unmapped",
         }
     }
 
@@ -51,6 +53,7 @@ impl ProcessWarningKind {
             Self::FdMalformed => "fd_malformed",
             Self::FdVanished => "fd_vanished",
             Self::SocketUnmapped => "socket_unmapped",
+            Self::ActiveSocketUnmapped => "active_socket_unmapped",
         }
     }
 
@@ -63,6 +66,7 @@ impl ProcessWarningKind {
                 | Self::TcpTableMalformed
                 | Self::FdMalformed
                 | Self::SocketUnmapped
+                | Self::ActiveSocketUnmapped
         )
     }
 
@@ -81,6 +85,7 @@ impl ProcessWarningKind {
             "fd_malformed" => Some(Self::FdMalformed),
             "fd_vanished" => Some(Self::FdVanished),
             "socket_unmapped" => Some(Self::SocketUnmapped),
+            "active_socket_unmapped" => Some(Self::ActiveSocketUnmapped),
             _ => None,
         }
     }
@@ -105,6 +110,10 @@ impl ProcessWarningKind {
             Self::SocketUnmapped => (
                 "socket",
                 format!("{count} listener sockets could not be mapped to processes"),
+            ),
+            Self::ActiveSocketUnmapped => (
+                "socket",
+                format!("{count} active sockets could not be mapped to processes"),
             ),
         }
     }

@@ -45,6 +45,7 @@ pub enum ObservationKind {
     ProcessExeSeen,
     ProcessParentSeen,
     TcpSocketSeen,
+    TcpConnectionSeen,
     ProcessBelongsToCgroup,
 }
 
@@ -56,6 +57,7 @@ impl fmt::Display for ObservationKind {
             Self::ProcessExeSeen => "process_exe_seen",
             Self::ProcessParentSeen => "process_parent_seen",
             Self::TcpSocketSeen => "tcp_socket_seen",
+            Self::TcpConnectionSeen => "tcp_connection_seen",
             Self::ProcessBelongsToCgroup => "process_belongs_to_cgroup",
         })
     }
@@ -71,6 +73,7 @@ impl FromStr for ObservationKind {
             "process_exe_seen" => Ok(Self::ProcessExeSeen),
             "process_parent_seen" => Ok(Self::ProcessParentSeen),
             "tcp_socket_seen" => Ok(Self::TcpSocketSeen),
+            "tcp_connection_seen" => Ok(Self::TcpConnectionSeen),
             "process_belongs_to_cgroup" => Ok(Self::ProcessBelongsToCgroup),
             other => Err(ParseError::Enum {
                 kind: "ObservationKind",

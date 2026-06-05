@@ -60,3 +60,37 @@ fn tcp_port_and_listener_edges() {
         .as_str()
         .contains("service_owns_listening_process"));
 }
+
+#[test]
+fn connection_and_dependency_edges() {
+    let t0 = TimestampNs::new(100);
+    let t1 = TimestampNs::new(200);
+    let process = NodeId::process(8841);
+    let port = NodeId::port_tcp("127.0.0.1", 5432).expect("port id");
+    let django = NodeId::service("django.service");
+    let postgres = NodeId::service("postgresql.service");
+
+    let connects = GraphEdge::observed_process_connects_to(&process, &port, t0, None);
+    assert_eq!(connects.kind(), EdgeKind::ConnectsTo);
+    assert_eq!(connects.class(), EdgeClass::Observed);
+    assert!(connects
+        .metadata()
+        .as_str()
+        .contains("proc_tcp_established_inode_join"));
+
+    let service_connects = GraphEdge::inferred_service_connects_to(&django, &port, t0, None);
+    assert_eq!(service_connects.class(), EdgeClass::Inferred);
+
+    let depends_first = GraphEdge::inferred_service_depends_on(&django, &postgres, t0, None);
+    let depends_second =
+        GraphEdge::inferred_service_depends_on(&django, &postgres, t1, Some(&depends_first));
+    assert_eq!(depends_first.kind(), EdgeKind::DependsOn);
+    assert_eq!(depends_first.class(), EdgeClass::Inferred);
+    assert_eq!(depends_first.first_seen(), t0);
+    assert_eq!(depends_second.last_seen(), t1);
+    assert_eq!(depends_second.evidence_count(), 2);
+    assert!(depends_first
+        .metadata()
+        .as_str()
+        .contains("active_connection_to_listening_service"));
+}

@@ -1,5 +1,6 @@
 mod doctor_result;
 mod graph_result;
+mod impact_result;
 mod init_result;
 mod scan_result;
 
@@ -11,5 +12,6 @@ pub use graph_result::{
     GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
     GraphResult, GraphServiceResult,
 };
+pub use impact_result::{ImpactDependent, ImpactEvidenceLine, ImpactResult};
 pub use init_result::InitResult;
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};

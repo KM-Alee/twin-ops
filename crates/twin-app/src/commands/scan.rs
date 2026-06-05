@@ -1,11 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
+use std::str::FromStr;
 
 use twin_collectors::{
     ProcessBatch, ProcessCollector, ProcessWarning, ProcessWarningKind, COLLECTOR_NAME,
 };
-use twin_core::{EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, ObservationId, TimestampNs};
+use twin_core::{
+    EdgeClass, EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId,
+    TimestampNs,
+};
 use twin_observation::{Observation, ObservationKind};
 use twin_store::{CollectorRunRow, Store, StoreError};
 
@@ -57,6 +62,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
     let parent_obs_by_child = parent_observation_ids(&observations);
     let cgroup_obs_by_key = cgroup_observation_ids(&observations);
     let tcp_obs_by_inode = tcp_socket_observation_ids(&observations);
+    let tcp_conn_obs_by_key = tcp_connection_observation_ids(&observations);
     let scan_time = batch.ended_at();
     let mut process_count = 0usize;
     let mut parent_edge_count = 0usize;
@@ -68,11 +74,21 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
     let mut process_listens_on_edge_count = 0usize;
     let mut service_listens_on_edge_count = 0usize;
     let mut unmapped_listener_socket_count = 0usize;
+    let mut tcp_connection_count = 0usize;
+    let mut process_connects_to_edge_count = 0usize;
+    let mut service_connects_to_edge_count = 0usize;
+    let mut service_depends_on_edge_count = 0usize;
+    let mut unmapped_active_socket_count = 0usize;
     let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
     let mut seen_services: HashSet<NodeId> = HashSet::new();
     let mut seen_ports: HashSet<NodeId> = HashSet::new();
     let mut seen_service_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut seen_process_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_process_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_service_connects: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut seen_service_depends: HashSet<(NodeId, NodeId)> = HashSet::new();
+    let mut listeners_by_port: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    let mut service_connect_targets: Vec<(NodeId, String, u16, Option<ObservationId>)> = Vec::new();
 
     let pid_to_services = services_by_pid(batch.records());
     let owners_by_inode = batch.owners_by_inode();
@@ -87,6 +103,7 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
 
     store
         .with_transaction(|store| {
+            let mut listener_obs_by_port: HashMap<NodeId, ObservationId> = HashMap::new();
             let run_id = store.insert_collector_run(&CollectorRunRow {
                 id: None,
                 collector: COLLECTOR_NAME.to_string(),
@@ -228,6 +245,9 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                 let socket_obs = tcp_obs_by_inode
                     .get(&listener.inode)
                     .map(|id| (id, "direct"));
+                if let Some(obs_id) = tcp_obs_by_inode.get(&listener.inode) {
+                    listener_obs_by_port.insert(port_id.clone(), *obs_id);
+                }
                 if owners.is_empty() {
                     unmapped_listener_socket_count += 1;
                     continue;
@@ -279,10 +299,168 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
                             );
                             upsert_edge_with_link(store, &edge, socket_obs)?;
                             service_listens_on_edge_count += 1;
+                            let listeners = listeners_by_port.entry(port_id.clone()).or_default();
+                            if !listeners.contains(service_id) {
+                                listeners.push(service_id.clone());
+                            }
                         }
                     }
                 }
             }
+
+            for connection in batch.tcp_connections() {
+                tcp_connection_count += 1;
+                let remote_port_id =
+                    NodeId::port_tcp(&connection.remote_ip, connection.remote_port).map_err(
+                        |e| StoreError::Decode {
+                            detail: e.to_string(),
+                        },
+                    )?;
+                let port_existing = store.get_node_typed(&remote_port_id)?;
+                let port_node = GraphNode::tcp_port(
+                    &connection.remote_ip,
+                    connection.remote_port,
+                    scan_time,
+                    port_existing.as_ref(),
+                )
+                .map_err(|e| StoreError::Decode {
+                    detail: e.to_string(),
+                })?;
+                store.upsert_node_typed(&port_node)?;
+                if seen_ports.insert(remote_port_id.clone()) {
+                    port_count += 1;
+                }
+
+                let conn_key = ConnectionObservationKey {
+                    inode: connection.inode,
+                    remote_ip: connection.remote_ip.clone(),
+                    remote_port: connection.remote_port,
+                    raw_line: connection.raw_line,
+                    table: connection.table.net_file_name().to_string(),
+                };
+                let conn_obs = tcp_conn_obs_by_key.get(&conn_key).map(|id| (id, "direct"));
+
+                let owners = owners_by_inode
+                    .get(&connection.inode)
+                    .cloned()
+                    .unwrap_or_default();
+                if owners.is_empty() {
+                    unmapped_active_socket_count += 1;
+                    continue;
+                }
+
+                for owner in &owners {
+                    let process_id = NodeId::process(owner.pid);
+                    let process_existing = store.get_node_typed(&process_id)?;
+                    if process_existing.is_none() {
+                        let label = batch
+                            .records()
+                            .iter()
+                            .find(|r| r.pid() == owner.pid)
+                            .and_then(|r| r.comm().map(str::to_string))
+                            .unwrap_or_else(|| format!("pid:{}", owner.pid));
+                        store.upsert_node_typed(&GraphNode::process(
+                            owner.pid, label, scan_time, None,
+                        ))?;
+                    }
+                    let edge = GraphEdge::observed_process_connects_to(
+                        &process_id,
+                        &remote_port_id,
+                        scan_time,
+                        load_existing_edge(
+                            store,
+                            &process_id,
+                            EdgeKind::ConnectsTo,
+                            &remote_port_id,
+                        )?
+                        .as_ref(),
+                    );
+                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    if seen_process_connects.insert((process_id.clone(), remote_port_id.clone())) {
+                        process_connects_to_edge_count += 1;
+                    }
+
+                    if let Some(services) = pid_to_services.get(&owner.pid) {
+                        for service_id in services {
+                            let edge = GraphEdge::inferred_service_connects_to(
+                                service_id,
+                                &remote_port_id,
+                                scan_time,
+                                load_existing_edge(
+                                    store,
+                                    service_id,
+                                    EdgeKind::ConnectsTo,
+                                    &remote_port_id,
+                                )?
+                                .as_ref(),
+                            );
+                            upsert_edge_with_link(
+                                store,
+                                &edge,
+                                conn_obs.map(|(id, _)| (id, "support")),
+                            )?;
+                            if seen_service_connects
+                                .insert((service_id.clone(), remote_port_id.clone()))
+                            {
+                                service_connects_to_edge_count += 1;
+                                service_connect_targets.push((
+                                    service_id.clone(),
+                                    connection.remote_ip.clone(),
+                                    connection.remote_port,
+                                    conn_obs.map(|(id, _)| *id),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (source_service, remote_ip, remote_port, conn_obs_id) in &service_connect_targets {
+                let candidate_ports = listener_port_candidates(remote_ip, *remote_port);
+                for listener_port in candidate_ports {
+                    let target_services =
+                        listener_services_for_port(store, &listeners_by_port, &listener_port)?;
+                    for target_service in &target_services {
+                        if source_service == target_service {
+                            continue;
+                        }
+                        let listener_obs = listener_obs_by_port
+                            .get(&listener_port)
+                            .copied()
+                            .map(|id| (id, "support"))
+                            .or_else(|| {
+                                listener_obs_from_store(store, &listener_port, target_service)
+                            });
+                        let conn_obs = conn_obs_id.as_ref().map(|id| (id, "direct"));
+                        let edge = GraphEdge::inferred_service_depends_on(
+                            source_service,
+                            target_service,
+                            scan_time,
+                            load_existing_edge(
+                                store,
+                                source_service,
+                                EdgeKind::DependsOn,
+                                target_service,
+                            )?
+                            .as_ref(),
+                        );
+                        upsert_edge_with_link(store, &edge, conn_obs)?;
+                        if let Some(link) = listener_obs {
+                            store.link_edge_observation(
+                                edge.id().as_str(),
+                                &link.0.to_string(),
+                                link.1,
+                            )?;
+                        }
+                        if seen_service_depends
+                            .insert((source_service.clone(), target_service.clone()))
+                        {
+                            service_depends_on_edge_count += 1;
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .map_err(ScanError::Store)?;
@@ -302,6 +480,11 @@ fn persist_scan(db_path: &Path, mut batch: ProcessBatch) -> Result<ScanResult, A
         process_listens_on_edge_count,
         service_listens_on_edge_count,
         unmapped_listener_socket_count,
+        tcp_connection_count,
+        process_connects_to_edge_count,
+        service_connects_to_edge_count,
+        service_depends_on_edge_count,
+        unmapped_active_socket_count,
         socket_owner_inode_count: batch.owners_by_inode().len(),
         observation_count: observations.len(),
         warning_count: collector_warnings.len(),
@@ -370,6 +553,128 @@ fn cgroup_observation_ids(observations: &[Observation]) -> HashMap<(u32, String)
     map
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConnectionObservationKey {
+    inode: u64,
+    remote_ip: String,
+    remote_port: u16,
+    raw_line: usize,
+    table: String,
+}
+
+fn tcp_connection_observation_ids(
+    observations: &[Observation],
+) -> HashMap<ConnectionObservationKey, ObservationId> {
+    let mut map = HashMap::new();
+    for obs in observations {
+        if obs.kind() != ObservationKind::TcpConnectionSeen {
+            continue;
+        }
+        let Some(inode) = obs
+            .metadata()
+            .get("inode")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        let remote_ip = obs
+            .metadata()
+            .get("remote_ip")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let remote_port = obs
+            .metadata()
+            .get("remote_port")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u16);
+        let raw_line = obs
+            .metadata()
+            .get("raw_line")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize);
+        let table = obs
+            .metadata()
+            .get("table")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let (Some(remote_ip), Some(remote_port), Some(raw_line), Some(table)) =
+            (remote_ip, remote_port, raw_line, table)
+        else {
+            continue;
+        };
+        map.insert(
+            ConnectionObservationKey {
+                inode,
+                remote_ip,
+                remote_port,
+                raw_line,
+                table,
+            },
+            obs.id(),
+        );
+    }
+    map
+}
+
+fn listener_services_for_port(
+    store: &Store,
+    listeners_by_port: &HashMap<NodeId, Vec<NodeId>>,
+    port_id: &NodeId,
+) -> Result<Vec<NodeId>, StoreError> {
+    let mut out = listeners_by_port.get(port_id).cloned().unwrap_or_default();
+    for row in store.list_edges_to(port_id.as_str())? {
+        let Ok(edge) = GraphEdge::try_from(&row) else {
+            continue;
+        };
+        if edge.kind() != EdgeKind::ListensOn || edge.class() != EdgeClass::Inferred {
+            continue;
+        }
+        let service_id = edge.from();
+        if service_id.kind() == Some(NodeKind::Service) && !out.contains(service_id) {
+            out.push(service_id.clone());
+        }
+    }
+    Ok(out)
+}
+
+fn listener_obs_from_store(
+    store: &Store,
+    port_id: &NodeId,
+    service_id: &NodeId,
+) -> Option<(ObservationId, &'static str)> {
+    let edge_id = EdgeId::new(service_id, EdgeKind::ListensOn, port_id);
+    let row = store.get_edge(edge_id.as_str()).ok()??;
+    let edge = GraphEdge::try_from(&row).ok()?;
+    let obs_links = store.list_observations_for_edge(edge.id().as_str()).ok()?;
+    let (obs_id, _) = obs_links.first()?;
+    ObservationId::from_str(obs_id)
+        .ok()
+        .map(|id| (id, "support"))
+}
+
+fn listener_port_candidates(remote_ip: &str, remote_port: u16) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    if let Ok(exact) = NodeId::port_tcp(remote_ip, remote_port) {
+        out.push(exact);
+    }
+    if remote_ip.parse::<Ipv4Addr>().is_ok() {
+        if let Ok(wildcard) = NodeId::port_tcp("0.0.0.0", remote_port) {
+            if !out.contains(&wildcard) {
+                out.push(wildcard);
+            }
+        }
+    }
+    if remote_ip.parse::<Ipv6Addr>().is_ok() {
+        if let Ok(wildcard) = NodeId::port_tcp("::", remote_port) {
+            if !out.contains(&wildcard) {
+                out.push(wildcard);
+            }
+        }
+    }
+    out
+}
+
 fn tcp_socket_observation_ids(observations: &[Observation]) -> HashMap<u64, ObservationId> {
     let mut map = HashMap::new();
     for obs in observations {
@@ -403,6 +708,7 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut fd_malformed = 0usize;
     let mut fd_vanished = 0usize;
     let mut socket_unmapped = 0usize;
+    let mut active_socket_unmapped = 0usize;
     for w in warnings {
         match w.kind() {
             ProcessWarningKind::Vanished => vanished += 1,
@@ -418,6 +724,7 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
             ProcessWarningKind::FdMalformed => fd_malformed += 1,
             ProcessWarningKind::FdVanished => fd_vanished += 1,
             ProcessWarningKind::SocketUnmapped => socket_unmapped += 1,
+            ProcessWarningKind::ActiveSocketUnmapped => active_socket_unmapped += 1,
         }
     }
     let mut out = Vec::new();
@@ -457,6 +764,11 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
         &mut out,
         ProcessWarningKind::SocketUnmapped,
         socket_unmapped,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::ActiveSocketUnmapped,
+        active_socket_unmapped,
     );
     out
 }

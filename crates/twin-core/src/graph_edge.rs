@@ -50,6 +50,10 @@ impl GraphEdge {
     const INFERENCE_METADATA: &str = r#"{"inference":"systemd_cgroup_path"}"#;
     const PROCESS_LISTENER_METADATA: &str = r#"{"source":"proc_socket_inode_join"}"#;
     const SERVICE_LISTENER_METADATA: &str = r#"{"inference":"service_owns_listening_process"}"#;
+    const PROCESS_CONNECTION_METADATA: &str = r#"{"source":"proc_tcp_established_inode_join"}"#;
+    const SERVICE_CONNECTION_METADATA: &str = r#"{"inference":"service_owns_connected_process"}"#;
+    const SERVICE_DEPENDENCY_METADATA: &str =
+        r#"{"inference":"active_connection_to_listening_service"}"#;
 
     pub fn observed_parent(
         parent: &NodeId,
@@ -170,6 +174,84 @@ impl GraphEdge {
             first_seen,
             last_seen: seen_at,
             metadata: GraphMetadata::from_json(Self::SERVICE_LISTENER_METADATA),
+        }
+    }
+
+    pub fn observed_process_connects_to(
+        process: &NodeId,
+        port: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::ConnectsTo;
+        let id = EdgeId::new(process, kind, port);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: process.clone(),
+            to: port.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::PROCESS_CONNECTION_METADATA),
+        }
+    }
+
+    pub fn inferred_service_connects_to(
+        service: &NodeId,
+        port: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::ConnectsTo;
+        let id = EdgeId::new(service, kind, port);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: service.clone(),
+            to: port.clone(),
+            kind,
+            class: EdgeClass::Inferred,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::SERVICE_CONNECTION_METADATA),
+        }
+    }
+
+    pub fn inferred_service_depends_on(
+        source_service: &NodeId,
+        target_service: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::DependsOn;
+        let id = EdgeId::new(source_service, kind, target_service);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: source_service.clone(),
+            to: target_service.clone(),
+            kind,
+            class: EdgeClass::Inferred,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(Self::SERVICE_DEPENDENCY_METADATA),
         }
     }
 

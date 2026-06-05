@@ -3,8 +3,11 @@ use std::process;
 
 use clap::Parser;
 use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
-use twin_cli::cli::args::{Cli, Command, DoctorArgs, GlobalArgs, GraphArgs, InitArgs, ScanArgs};
+use twin_cli::cli::args::{
+    Cli, Command, DoctorArgs, GlobalArgs, GraphArgs, ImpactArgs, InitArgs, ScanArgs,
+};
 use twin_cli::cli::graph;
+use twin_cli::cli::impact;
 use twin_cli::output;
 
 fn main() {
@@ -18,6 +21,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Doctor(args) => run_doctor(&cli.global, &args),
         Command::Scan(args) => run_scan(&cli.global, &args),
         Command::Graph(args) => run_graph(&cli.global, &args),
+        Command::Impact(args) => run_impact(&cli.global, &args),
     }
 }
 
@@ -71,6 +75,20 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     match result {
         Ok(result) => {
             emit(global.json, &result, output::scan::render);
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
+    let request = impact::impact_request(args);
+    match twin_app::impact(request) {
+        Ok(result) => {
+            emit(global.json, &result, output::impact::render);
             0
         }
         Err(error) => {

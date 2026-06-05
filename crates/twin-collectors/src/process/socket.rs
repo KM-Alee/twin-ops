@@ -19,6 +19,7 @@ impl TcpTableKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SocketState {
     Listen,
+    Established,
     Other(String),
 }
 
@@ -27,6 +28,18 @@ pub struct TcpSocketRecord {
     pub table: TcpTableKind,
     pub local_ip: String,
     pub local_port: u16,
+    pub state: SocketState,
+    pub inode: u64,
+    pub raw_line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpConnectionRecord {
+    pub table: TcpTableKind,
+    pub local_ip: String,
+    pub local_port: u16,
+    pub remote_ip: String,
+    pub remote_port: u16,
     pub state: SocketState,
     pub inode: u64,
     pub raw_line: usize,
@@ -47,12 +60,15 @@ pub struct ParseTcpWarning {
     pub detail: String,
 }
 
-pub fn parse_tcp_table(
-    table: TcpTableKind,
-    content: &str,
-) -> (Vec<TcpSocketRecord>, Vec<ParseTcpWarning>) {
-    let mut records = Vec::new();
-    let mut warnings = Vec::new();
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TcpTableParse {
+    pub listeners: Vec<TcpSocketRecord>,
+    pub connections: Vec<TcpConnectionRecord>,
+    pub warnings: Vec<ParseTcpWarning>,
+}
+
+pub fn parse_tcp_table(table: TcpTableKind, content: &str) -> TcpTableParse {
+    let mut result = TcpTableParse::default();
     for (idx, line) in content.lines().enumerate() {
         if idx == 0 {
             continue;
@@ -63,29 +79,35 @@ pub fn parse_tcp_table(
             continue;
         }
         match parse_tcp_line(table, trimmed, line_no) {
-            Ok(Some(record)) => records.push(record),
+            Ok(Some(TcpParsedRow::Listener(record))) => result.listeners.push(record),
+            Ok(Some(TcpParsedRow::Connection(record))) => result.connections.push(record),
             Ok(None) => {}
-            Err(detail) => warnings.push(ParseTcpWarning {
+            Err(detail) => result.warnings.push(ParseTcpWarning {
                 table,
                 line: line_no,
                 detail,
             }),
         }
     }
-    (records, warnings)
+    result
+}
+
+enum TcpParsedRow {
+    Listener(TcpSocketRecord),
+    Connection(TcpConnectionRecord),
 }
 
 fn parse_tcp_line(
     table: TcpTableKind,
     line: &str,
     raw_line: usize,
-) -> Result<Option<TcpSocketRecord>, String> {
+) -> Result<Option<TcpParsedRow>, String> {
     let mut fields = line.split_whitespace();
     let _sl = fields.next().ok_or_else(|| "missing sl".to_string())?;
     let local = fields
         .next()
         .ok_or_else(|| "missing local_address".to_string())?;
-    let _rem = fields
+    let remote = fields
         .next()
         .ok_or_else(|| "missing rem_address".to_string())?;
     let state_hex = fields.next().ok_or_else(|| "missing st".to_string())?;
@@ -102,33 +124,65 @@ fn parse_tcp_line(
         .parse::<u64>()
         .map_err(|e| format!("invalid inode: {e}"))?;
     let state = parse_state(state_hex)?;
-    if state != SocketState::Listen {
-        return Ok(None);
+    let (local_ip, local_port) = parse_endpoint(table, local)?;
+    match state {
+        SocketState::Listen => Ok(Some(TcpParsedRow::Listener(TcpSocketRecord {
+            table,
+            local_ip,
+            local_port,
+            state,
+            inode,
+            raw_line,
+        }))),
+        SocketState::Established => {
+            if is_empty_remote(table, remote) {
+                return Ok(None);
+            }
+            let (remote_ip, remote_port) = parse_endpoint(table, remote)?;
+            Ok(Some(TcpParsedRow::Connection(TcpConnectionRecord {
+                table,
+                local_ip,
+                local_port,
+                remote_ip,
+                remote_port,
+                state,
+                inode,
+                raw_line,
+            })))
+        }
+        SocketState::Other(_) => Ok(None),
     }
-    let (ip_hex, port_hex) = local
-        .split_once(':')
-        .ok_or_else(|| "invalid local_address".to_string())?;
-    let local_port = u16::from_str_radix(port_hex, 16).map_err(|e| format!("invalid port: {e}"))?;
-    let local_ip = match table {
-        TcpTableKind::Tcp => parse_ipv4_hex(ip_hex)?,
-        TcpTableKind::Tcp6 => parse_ipv6_hex(ip_hex)?,
-    };
-    Ok(Some(TcpSocketRecord {
-        table,
-        local_ip,
-        local_port,
-        state,
-        inode,
-        raw_line,
-    }))
 }
 
 fn parse_state(hex: &str) -> Result<SocketState, String> {
     let upper = hex.to_ascii_uppercase();
-    if upper == "0A" {
-        return Ok(SocketState::Listen);
+    match upper.as_str() {
+        "0A" => Ok(SocketState::Listen),
+        "01" => Ok(SocketState::Established),
+        other => Ok(SocketState::Other(other.to_string())),
     }
-    Ok(SocketState::Other(upper))
+}
+
+fn parse_endpoint(table: TcpTableKind, endpoint: &str) -> Result<(String, u16), String> {
+    let (ip_hex, port_hex) = endpoint
+        .split_once(':')
+        .ok_or_else(|| "invalid address:port".to_string())?;
+    let port = u16::from_str_radix(port_hex, 16).map_err(|e| format!("invalid port: {e}"))?;
+    let ip = match table {
+        TcpTableKind::Tcp => parse_ipv4_hex(ip_hex)?,
+        TcpTableKind::Tcp6 => parse_ipv6_hex(ip_hex)?,
+    };
+    Ok((ip, port))
+}
+
+fn is_empty_remote(table: TcpTableKind, remote: &str) -> bool {
+    match table {
+        TcpTableKind::Tcp => remote == "00000000:0000",
+        TcpTableKind::Tcp6 => {
+            remote == "00000000000000000000000000000000:0000"
+                || remote.starts_with("00000000000000000000000000000000:")
+        }
+    }
 }
 
 fn parse_ipv4_hex(hex: &str) -> Result<String, String> {
@@ -188,13 +242,32 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0"
         );
-        let (records, warnings) = parse_tcp_table(TcpTableKind::Tcp, &content);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].local_ip, "127.0.0.1");
-        assert_eq!(records[0].local_port, 5432);
-        assert_eq!(records[0].inode, 12345);
-        assert_eq!(records[0].state, SocketState::Listen);
+        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(parsed.listeners.len(), 1);
+        assert_eq!(parsed.connections.len(), 0);
+        assert_eq!(parsed.listeners[0].local_ip, "127.0.0.1");
+        assert_eq!(parsed.listeners[0].local_port, 5432);
+        assert_eq!(parsed.listeners[0].inode, 12345);
+        assert_eq!(parsed.listeners[0].state, SocketState::Listen);
+    }
+
+    #[test]
+    fn parses_ipv4_established_row() {
+        let content = format!(
+            "{TCP_HEADER}\n   0: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0"
+        );
+        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(parsed.listeners.len(), 0);
+        assert_eq!(parsed.connections.len(), 1);
+        let conn = &parsed.connections[0];
+        assert_eq!(conn.local_ip, "127.0.0.1");
+        assert_eq!(conn.local_port, 50122);
+        assert_eq!(conn.remote_ip, "127.0.0.1");
+        assert_eq!(conn.remote_port, 5432);
+        assert_eq!(conn.inode, 456);
+        assert_eq!(conn.state, SocketState::Established);
     }
 
     #[test]
@@ -202,26 +275,27 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 00000000:0050 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 99 1 0000000000000000 100 0 0 10 0"
         );
-        let (records, _) = parse_tcp_table(TcpTableKind::Tcp, &content);
-        assert_eq!(records[0].local_ip, "0.0.0.0");
-        assert_eq!(records[0].local_port, 80);
+        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        assert_eq!(parsed.listeners[0].local_ip, "0.0.0.0");
+        assert_eq!(parsed.listeners[0].local_port, 80);
     }
 
     #[test]
-    fn skips_non_listen_rows() {
+    fn skips_non_listen_non_established_rows() {
         let content = format!(
-            "{TCP_HEADER}\n   0: 0100007F:1538 0100007F:0050 01 00000000:00000000 00000000:00000000  00000000       0        0 1 1 0000000000000000 100 0 0 10 0"
+            "{TCP_HEADER}\n   0: 0100007F:1538 0100007F:0050 02 00000000:00000000 00000000:00000000  00000000       0        0 1 1 0000000000000000 100 0 0 10 0"
         );
-        let (records, _) = parse_tcp_table(TcpTableKind::Tcp, &content);
-        assert!(records.is_empty());
+        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        assert!(parsed.listeners.is_empty());
+        assert!(parsed.connections.is_empty());
     }
 
     #[test]
     fn malformed_row_is_warning_not_panic() {
         let content = format!("{TCP_HEADER}\n   0: badaddr 00000000:0000 0A");
-        let (records, warnings) = parse_tcp_table(TcpTableKind::Tcp, &content);
-        assert!(records.is_empty());
-        assert_eq!(warnings.len(), 1);
+        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        assert!(parsed.listeners.is_empty());
+        assert_eq!(parsed.warnings.len(), 1);
     }
 
     #[test]
@@ -229,11 +303,23 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 00000000000000000000000001000000:1538 00000000000000000000000000000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 54321 1 0000000000000000 100 0 0 10 0"
         );
-        let (records, warnings) = parse_tcp_table(TcpTableKind::Tcp6, &content);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].local_ip, "::1");
-        assert_eq!(records[0].local_port, 5432);
+        let parsed = parse_tcp_table(TcpTableKind::Tcp6, &content);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(parsed.listeners.len(), 1);
+        assert_eq!(parsed.listeners[0].local_ip, "::1");
+        assert_eq!(parsed.listeners[0].local_port, 5432);
+    }
+
+    #[test]
+    fn parses_ipv6_established_without_panic() {
+        let content = format!(
+            "{TCP_HEADER}\n   0: 00000000000000000000000001000000:C453 00000000000000000000000001000000:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 789 1 0000000000000000 100 0 0 10 0"
+        );
+        let parsed = parse_tcp_table(TcpTableKind::Tcp6, &content);
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(parsed.connections.len(), 1);
+        assert_eq!(parsed.connections[0].remote_ip, "::1");
+        assert_eq!(parsed.connections[0].remote_port, 5432);
     }
 
     #[test]

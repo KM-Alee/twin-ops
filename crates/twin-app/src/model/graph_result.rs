@@ -60,6 +60,9 @@ pub struct GraphServiceResult {
     pub owned_processes: Vec<GraphOwnedNode>,
     pub owned_cgroups: Vec<GraphOwnedNode>,
     pub listening_ports: Vec<GraphOwnedNode>,
+    pub connected_ports: Vec<GraphOwnedNode>,
+    pub dependencies: Vec<GraphOwnedNode>,
+    pub dependents: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -68,6 +71,8 @@ pub struct GraphPortResult {
     pub port: GraphNodeSummary,
     pub process_listeners: Vec<GraphOwnedNode>,
     pub service_listeners: Vec<GraphOwnedNode>,
+    pub process_callers: Vec<GraphOwnedNode>,
+    pub service_callers: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -107,32 +112,24 @@ impl GraphResult {
         })
     }
 
-    pub fn service(
-        service: GraphNodeSummary,
-        owned_processes: Vec<GraphOwnedNode>,
-        owned_cgroups: Vec<GraphOwnedNode>,
-        listening_ports: Vec<GraphOwnedNode>,
-        evidence: Vec<GraphEvidenceLine>,
-    ) -> Self {
-        Self::Service(GraphServiceResult {
-            service,
-            owned_processes,
-            owned_cgroups,
-            listening_ports,
-            evidence,
-        })
+    pub fn service(result: GraphServiceResult) -> Self {
+        Self::Service(result)
     }
 
     pub fn port(
         port: GraphNodeSummary,
         process_listeners: Vec<GraphOwnedNode>,
         service_listeners: Vec<GraphOwnedNode>,
+        process_callers: Vec<GraphOwnedNode>,
+        service_callers: Vec<GraphOwnedNode>,
         evidence: Vec<GraphEvidenceLine>,
     ) -> Self {
         Self::Port(GraphPortResult {
             port,
             process_listeners,
             service_listeners,
+            process_callers,
+            service_callers,
             evidence,
         })
     }

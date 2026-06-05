@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use twin_app::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEvidenceLine,
-    GraphListResult, GraphNodeResult, GraphOwnedNode, GraphResult, InitResult, PermissionMode,
-    ScanResult, ScanWarning,
+    GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphResult,
+    GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, InitResult,
+    PermissionMode, ScanResult, ScanWarning,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -83,6 +84,11 @@ fn scan_render_counts() {
         process_listens_on_edge_count: 6,
         service_listens_on_edge_count: 4,
         unmapped_listener_socket_count: 0,
+        tcp_connection_count: 3,
+        process_connects_to_edge_count: 3,
+        service_connects_to_edge_count: 2,
+        service_depends_on_edge_count: 1,
+        unmapped_active_socket_count: 0,
         socket_owner_inode_count: 6,
         observation_count: 500,
         warning_count: 0,
@@ -97,6 +103,8 @@ fn scan_render_counts() {
     assert!(text.contains("service-owns"));
     assert!(text.contains("ports"));
     assert!(text.contains("process-listens-on"));
+    assert!(text.contains("active-connections"));
+    assert!(text.contains("service-depends-on"));
 }
 
 #[test]
@@ -115,6 +123,11 @@ fn scan_render_warning_aggregation() {
         process_listens_on_edge_count: 0,
         service_listens_on_edge_count: 0,
         unmapped_listener_socket_count: 0,
+        tcp_connection_count: 0,
+        process_connects_to_edge_count: 0,
+        service_connects_to_edge_count: 0,
+        service_depends_on_edge_count: 0,
+        unmapped_active_socket_count: 0,
         socket_owner_inode_count: 0,
         observation_count: 1,
         warning_count: 6,
@@ -165,39 +178,54 @@ fn graph_list_render_stable() {
 
 #[test]
 fn graph_service_render_inferred_ownership() {
-    let result = GraphResult::service(
-        twin_app::GraphNodeSummary {
+    let result = GraphResult::service(GraphServiceResult {
+        service: GraphNodeSummary {
             id: "service:nginx.service".to_string(),
             label: "nginx.service".to_string(),
         },
-        vec![GraphOwnedNode {
+        owned_processes: vec![GraphOwnedNode {
             id: "process:pid:1432".to_string(),
             label: "nginx".to_string(),
             edge_class: "inferred".to_string(),
             observation_ids: vec!["obs-1".to_string()],
         }],
-        vec![GraphOwnedNode {
+        owned_cgroups: vec![GraphOwnedNode {
             id: "cgroup:/system.slice/nginx.service".to_string(),
             label: "/system.slice/nginx.service".to_string(),
             edge_class: "inferred".to_string(),
             observation_ids: vec![],
         }],
-        vec![GraphOwnedNode {
+        listening_ports: vec![GraphOwnedNode {
             id: "port:tcp:127.0.0.1:5432".to_string(),
             label: "tcp:127.0.0.1:5432".to_string(),
             edge_class: "inferred".to_string(),
             observation_ids: vec![],
         }],
-        vec![GraphEvidenceLine {
+        connected_ports: vec![GraphOwnedNode {
+            id: "port:tcp:127.0.0.1:8000".to_string(),
+            label: "tcp:127.0.0.1:8000".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec![],
+        }],
+        dependencies: vec![GraphOwnedNode {
+            id: "service:postgresql.service".to_string(),
+            label: "postgresql.service".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec![],
+        }],
+        dependents: vec![],
+        evidence: vec![GraphEvidenceLine {
             source: "/proc/1432/cgroup".to_string(),
             statement: "contains /system.slice/nginx.service".to_string(),
             strength: "high".to_string(),
             relationship: "service ownership inferred from systemd cgroup path".to_string(),
         }],
-    );
+    });
     let text = output::graph::render(&result);
     assert!(text.contains("owns (inferred)"));
     assert!(text.contains("listens on (inferred)"));
+    assert!(text.contains("connects to (inferred from active TCP)"));
+    assert!(text.contains("depends on (inferred)"));
     assert!(text.contains("/proc/1432/cgroup"));
     assert!(text.contains("service neighborhood"));
 }
@@ -244,6 +272,11 @@ fn scan_json_includes_warning_details_field() {
         process_listens_on_edge_count: 0,
         service_listens_on_edge_count: 0,
         unmapped_listener_socket_count: 0,
+        tcp_connection_count: 0,
+        process_connects_to_edge_count: 0,
+        service_connects_to_edge_count: 0,
+        service_depends_on_edge_count: 0,
+        unmapped_active_socket_count: 0,
         socket_owner_inode_count: 0,
         observation_count: 1,
         warning_count: 1,
@@ -264,6 +297,37 @@ fn scan_json_includes_warning_details_field() {
         .and_then(|v| v.as_array())
         .expect("warning_details array");
     assert_eq!(details.len(), 1);
+}
+
+#[test]
+fn impact_render_direct_dependents_and_evidence() {
+    let result = ImpactResult {
+        target: "service:postgresql.service".to_string(),
+        target_label: "postgresql.service".to_string(),
+        direct_dependents: vec![ImpactDependent {
+            id: "service:django.service".to_string(),
+            label: "django.service".to_string(),
+            relationship: "depends_on".to_string(),
+            edge_class: "inferred".to_string(),
+            observation_ids: vec!["obs-1".to_string()],
+        }],
+        evidence: vec![ImpactEvidenceLine {
+            source: "/proc/net/tcp:2".to_string(),
+            statement: "inode 456 established from 127.0.0.1:50122 to 127.0.0.1:5432 joined with /proc/8841/fd/12"
+                .to_string(),
+            relationship:
+                "process connection observed; service dependency inferred from listener match"
+                    .to_string(),
+        }],
+        unknowns: vec![],
+    };
+    let text = output::impact::render(&result);
+    assert!(text.contains("twin impact"));
+    assert!(text.contains("direct dependents"));
+    assert!(text.contains("service:django.service"));
+    assert!(text.contains("depends_on"));
+    assert!(text.contains("/proc/net/tcp:2"));
+    assert!(!text.contains("risk"));
 }
 
 #[test]

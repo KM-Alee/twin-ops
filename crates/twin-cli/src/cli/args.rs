@@ -24,6 +24,7 @@ pub enum Command {
     Doctor(DoctorArgs),
     Scan(ScanArgs),
     Graph(GraphArgs),
+    Impact(ImpactArgs),
 }
 
 #[derive(Args)]
@@ -60,4 +61,16 @@ pub struct GraphArgs {
         help = "Node id, pid, or kind (e.g. process, 1234, process:pid:1234)"
     )]
     pub target: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ImpactArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "TARGET",
+        help = "Service or port target (e.g. postgresql, port:tcp:127.0.0.1:5432)"
+    )]
+    pub target: String,
 }

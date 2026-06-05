@@ -128,6 +128,33 @@ fn render_service(service: &GraphServiceResult) -> String {
             lines.push(format!("{branch} {}", format_peer(&port.id, &port.label)));
         }
     }
+    if !service.connected_ports.is_empty() {
+        lines.push(String::new());
+        lines.push("connects to (inferred from active TCP)".to_string());
+        for (i, port) in service.connected_ports.iter().enumerate() {
+            let is_last = i + 1 == service.connected_ports.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&port.id, &port.label)));
+        }
+    }
+    if !service.dependencies.is_empty() {
+        lines.push(String::new());
+        lines.push("depends on (inferred)".to_string());
+        for (i, dep) in service.dependencies.iter().enumerate() {
+            let is_last = i + 1 == service.dependencies.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
+        }
+    }
+    if !service.dependents.is_empty() {
+        lines.push(String::new());
+        lines.push("depended on by (inferred)".to_string());
+        for (i, dep) in service.dependents.iter().enumerate() {
+            let is_last = i + 1 == service.dependents.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
+        }
+    }
     append_evidence_lines(&mut lines, &service.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
@@ -153,6 +180,22 @@ fn render_port(port: &GraphPortResult) -> String {
     } else {
         for (i, (id, label, class)) in listeners.iter().enumerate() {
             let is_last = i + 1 == listeners.len();
+            let branch = if is_last { "└──" } else { "├──" };
+            lines.push(format!("{branch} {}  {class}", format_peer(id, label)));
+        }
+    }
+    let mut callers: Vec<(&str, &str, &str)> = Vec::new();
+    for node in &port.process_callers {
+        callers.push((&node.id, &node.label, "observed"));
+    }
+    for node in &port.service_callers {
+        callers.push((&node.id, &node.label, "inferred"));
+    }
+    if !callers.is_empty() {
+        lines.push(String::new());
+        lines.push("callers".to_string());
+        for (i, (id, label, class)) in callers.iter().enumerate() {
+            let is_last = i + 1 == callers.len();
             let branch = if is_last { "└──" } else { "├──" };
             lines.push(format!("{branch} {}  {class}", format_peer(id, label)));
         }

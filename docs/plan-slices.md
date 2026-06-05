@@ -1361,7 +1361,7 @@ checks:
 ## Output Example
 
 ```text
-Emulation: fill mount:/var to 95%
+Emulation: fill mount:/var to 80%
 
 Risk: CRITICAL
 

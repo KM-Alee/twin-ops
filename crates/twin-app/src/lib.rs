@@ -4,12 +4,13 @@ mod error;
 mod model;
 pub mod paths;
 
-pub use error::{AppError, GraphError, ScanError};
+pub use error::{AppError, GraphError, ImpactError, ScanError};
 pub use model::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEdgeSummary,
     GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode,
-    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, InitResult, PermissionMode,
-    ScanResult, ScanWarning, ScanWarningDetail,
+    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, ImpactDependent,
+    ImpactEvidenceLine, ImpactResult, InitResult, PermissionMode, ScanResult, ScanWarning,
+    ScanWarningDetail,
 };
 pub use paths::TwinLayout;
 
@@ -79,4 +80,19 @@ pub fn graph(request: GraphRequest) -> Result<GraphResult, AppError> {
 
 pub fn graph_in(layout: &TwinLayout, request: GraphRequest) -> Result<GraphResult, AppError> {
     commands::graph::run(layout, &request)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ImpactRequest {
+    pub config_override: Option<PathBuf>,
+    pub target: Option<NodeId>,
+    pub target_query: Option<String>,
+}
+
+pub fn impact(request: ImpactRequest) -> Result<ImpactResult, AppError> {
+    commands::impact::run_home(request)
+}
+
+pub fn impact_in(layout: &TwinLayout, request: ImpactRequest) -> Result<ImpactResult, AppError> {
+    commands::impact::run(layout, &request)
 }
