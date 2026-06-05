@@ -9,7 +9,9 @@ use twin_core::{
 use twin_observation::{Observation, ObservationKind};
 use twin_store::Store;
 
-use crate::commands::evidence::{systemd_dep_strength_label, systemd_impact_statement};
+use crate::commands::evidence::{
+    is_runtime_active_metadata, systemd_dep_strength_label, systemd_impact_statement,
+};
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::commands::scan_quality::{assess_scan_quality, scan_health_note};
 use crate::error::{AppError, ImpactError};
@@ -82,7 +84,6 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
     let target_summary = node_summary(target, label);
     let mut direct_dependents = Vec::new();
     let mut configured_dependents = Vec::new();
-    let mut evidence = Vec::new();
     let mut seen_evidence = HashSet::new();
     let tcp_cache = unmapped_tcp_observations(store)?;
     let unix_cache = unmapped_unix_observations(store)?;
@@ -126,7 +127,6 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
             &mut seen_evidence,
             relationship,
         );
-        evidence.extend(dependent_evidence.clone());
         let reason = service_dependent_reason(&edge, &dependent_evidence, target, label);
         let impact_kind = classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
         let dependent = build_dependent(DependentInput {
@@ -152,7 +152,6 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
 
     direct_dependents.sort_by_key(|d| d.id.clone());
     configured_dependents.sort_by_key(|d| d.id.clone());
-    evidence.sort_by(|a, b| a.source.cmp(&b.source));
     unknowns.sort_by(|a, b| a.kind.cmp(&b.kind));
 
     let risk = score_risk(
@@ -161,7 +160,7 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
         &configured_dependents,
         &unknowns,
     );
-    let evidence_strength = score_evidence(&direct_dependents, &evidence, &unknowns);
+    let evidence_strength = score_evidence(&direct_dependents, &[], &unknowns);
 
     Ok(ImpactResult {
         target: target.to_string(),
@@ -171,7 +170,7 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
         direct_dependents,
         configured_dependents,
         listener_owners: Vec::new(),
-        evidence,
+        evidence: Vec::new(),
         unknowns,
     })
 }
@@ -180,27 +179,11 @@ fn classify_dependent_impact_kind(edge: &GraphEdge, dependent_metadata: &str) ->
     if edge.class() == EdgeClass::Inferred {
         return "runtime";
     }
-    let active_state = metadata_field(dependent_metadata, "active_state");
-    if is_runtime_active_state(active_state.as_deref()) {
+    if is_runtime_active_metadata(dependent_metadata) {
         "runtime"
     } else {
         "configured"
     }
-}
-
-fn metadata_field(metadata: &str, key: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
-    value
-        .get(key)
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-}
-
-fn is_runtime_active_state(state: Option<&str>) -> bool {
-    matches!(
-        state,
-        Some("active") | Some("activating") | Some("reloading") | Some("deactivating")
-    )
 }
 
 fn port_impact(
@@ -216,8 +199,7 @@ fn port_impact(
     let mut seen_evidence = HashSet::new();
     let tcp_cache = unmapped_tcp_observations(store)?;
     let unix_cache = unmapped_unix_observations(store)?;
-    let mut unknowns =
-        target_unknowns_for_socket(store, target, target_kind, &tcp_cache, &unix_cache)?;
+    let mut unknowns = target_unknowns_for_socket(target, target_kind, &tcp_cache, &unix_cache)?;
 
     let incoming = store
         .list_edges_to(target.as_str())
@@ -250,7 +232,6 @@ fn port_impact(
                 &mut seen_evidence,
                 "Inferred: service connection inferred from process ownership",
             );
-            evidence.extend(dependent_evidence.clone());
             let reason = format!("active connection to {label}");
             direct_dependents.push(build_dependent(DependentInput {
                 dependent_id: caller_id,
@@ -660,13 +641,11 @@ fn target_unknowns_for_service(
 }
 
 fn target_unknowns_for_socket(
-    store: &Store,
     target: &NodeId,
     target_kind: NodeKind,
     tcp_cache: &[Observation],
     unix_cache: &[Observation],
 ) -> Result<Vec<ImpactUnknown>, AppError> {
-    let _ = store;
     match target_kind {
         NodeKind::Port => unmapped_sockets_for_port(target, tcp_cache),
         NodeKind::UnixSocket => unmapped_sockets_for_unix(target, unix_cache),
@@ -912,13 +891,13 @@ fn score_evidence(
             only_inferred = false;
         }
         for line in &dependent.evidence {
-            let score = EvidenceStrength::new(line_strength_score(line)).score();
+            let score = EvidenceStrength::new(line.strength_score()).score();
             best = best.max(score);
         }
     }
 
     for line in evidence {
-        let score = EvidenceStrength::new(line_strength_score(line)).score();
+        let score = EvidenceStrength::new(line.strength_score()).score();
         best = best.max(score);
     }
 
@@ -940,13 +919,4 @@ fn score_evidence(
     }
 
     EvidenceStrength::new(best)
-}
-
-fn line_strength_score(line: &ImpactEvidenceLine) -> u8 {
-    match line.strength.as_str() {
-        "very_strong" => 95,
-        "strong" => 75,
-        "moderate" => 45,
-        _ => 20,
-    }
 }

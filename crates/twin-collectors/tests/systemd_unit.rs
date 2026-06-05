@@ -147,7 +147,8 @@ fn instance_inherits_template_unit_dependencies() {
         .expect("collect");
     assert!(batch.observations().iter().any(|o| {
         o.kind == twin_observation::ObservationKind::SystemdUnitRequires
-            && o.metadata.get("from_unit").and_then(|v| v.as_str()) == Some("postgresql@5432.service")
+            && o.metadata.get("from_unit").and_then(|v| v.as_str())
+                == Some("postgresql@5432.service")
             && o.metadata.get("to_unit").and_then(|v| v.as_str()) == Some("postgres.service")
     }));
 }

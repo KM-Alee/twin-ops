@@ -115,9 +115,7 @@ pub fn assess_scan_quality(store: &Store) -> Result<ScanQualityAssessment, ScanE
 }
 
 fn meta_usize(meta: &HashMap<String, serde_json::Value>, key: &str) -> usize {
-    meta.get(key)
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize
+    meta.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as usize
 }
 
 pub fn scan_health_note(assessment: &ScanQualityAssessment) -> Option<String> {

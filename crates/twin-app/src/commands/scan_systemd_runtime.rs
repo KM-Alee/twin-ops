@@ -59,7 +59,9 @@ pub(crate) fn persist_runtime_in_scan(
             let id = NodeId::service(unit);
             let existing = store.get_node_typed(&id)?;
             if let Some(state_obs) = obs_ids.iter().find_map(|oid| {
-                obs_by_id.get(oid).filter(|o| o.kind() == ObservationKind::SystemdUnitStateSeen)
+                obs_by_id
+                    .get(oid)
+                    .filter(|o| o.kind() == ObservationKind::SystemdUnitStateSeen)
             }) {
                 upsert_service_state_node(store, unit, state_obs, scan_time)?;
             } else if existing.is_none() {
@@ -179,7 +181,10 @@ fn upsert_service_state_node(
         serde_json::Value::String("systemd_dbus".to_string()),
     );
     if let Some(v) = obs.metadata().get("unit_type").and_then(|v| v.as_str()) {
-        meta.insert("unit_type".to_string(), serde_json::Value::String(v.to_string()));
+        meta.insert(
+            "unit_type".to_string(),
+            serde_json::Value::String(v.to_string()),
+        );
     } else if unit.ends_with(".socket") {
         meta.insert(
             "unit_type".to_string(),

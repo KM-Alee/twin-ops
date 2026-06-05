@@ -142,12 +142,14 @@ pub fn discover_units(
 
     let units = by_name
         .into_iter()
-        .map(|(unit_name, (main_path, dependencies, socket_config))| EffectiveUnit {
-            unit_name,
-            main_path,
-            dependencies,
-            socket_config,
-        })
+        .map(
+            |(unit_name, (main_path, dependencies, socket_config))| EffectiveUnit {
+                unit_name,
+                main_path,
+                dependencies,
+                socket_config,
+            },
+        )
         .collect();
     (units, warnings)
 }

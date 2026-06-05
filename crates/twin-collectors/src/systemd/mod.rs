@@ -2,6 +2,7 @@ mod collector;
 mod dbus;
 mod enable_symlinks;
 mod runtime_collector;
+mod test_env;
 mod unit_parse;
 mod unit_paths;
 mod warning;
@@ -12,6 +13,7 @@ pub use dbus::{
     UnitDBusSnapshot,
 };
 pub use runtime_collector::{SystemdRuntimeBatch, SystemdRuntimeCollector, RUNTIME_COLLECTOR_NAME};
+pub use test_env::should_skip_live_dbus;
 pub use unit_parse::{merge_dependencies, parse_unit_file, UnitDependencies};
 pub use unit_paths::{default_search_paths, UnitFileReader};
 pub use warning::{SystemdWarning, SystemdWarningKind};

@@ -134,7 +134,7 @@ impl SystemdRuntimeCollector {
         }
 
         let mut cgroup_dbus_reader = None;
-        let skip_live_dbus = std::env::var("TWIN_SYSTEMD_UNIT_ROOT").is_ok();
+        let skip_live_dbus = super::should_skip_live_dbus();
         if let Some(fixture) = &self.dbus_fixture {
             let reader = match &self.cgroup_fixture {
                 Some(map) => {

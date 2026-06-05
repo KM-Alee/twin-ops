@@ -56,8 +56,14 @@ fn scan_at(
             std::thread::sleep(Duration::from_secs(interval_secs));
         }
         let sample_proc = proc_root_for_sample(proc_root, sample_index);
-        let (result, edges_new) =
-            run_scan_pass(layout, request, sample_proc.as_ref(), db_path, sample_index, samples)?;
+        let (result, edges_new) = run_scan_pass(
+            layout,
+            request,
+            sample_proc.as_ref(),
+            db_path,
+            sample_index,
+            samples,
+        )?;
         edges_first_seen_by_sample.push(edges_new);
         last_result = Some(result);
     }
@@ -847,12 +853,13 @@ fn persist_scan(
                 &mut seen_service_depends,
             )?;
 
-            socket_activation_edge_count = super::scan_systemd_socket::persist_socket_activation_in_scan(
-                store,
-                &unit_observations,
-                scan_time,
-                &mut seen_service_depends,
-            )?;
+            socket_activation_edge_count =
+                super::scan_systemd_socket::persist_socket_activation_in_scan(
+                    store,
+                    &unit_observations,
+                    scan_time,
+                    &mut seen_service_depends,
+                )?;
 
             super::scan_systemd_runtime::persist_runtime_in_scan(
                 store,
@@ -872,8 +879,7 @@ fn persist_scan(
                         .as_ref()
                         .map(|r| r.as_ref() as &dyn twin_collectors::SystemdDBusReader)
                 });
-            cgroup_correction_count =
-                super::scan_cgroup_validate::apply_cgroup_corrections(
+            cgroup_correction_count = super::scan_cgroup_validate::apply_cgroup_corrections(
                 store,
                 batch.records(),
                 scan_time,
@@ -912,55 +918,59 @@ fn persist_scan(
         observations.len() + unit_observations.len() + runtime_observations.len();
     Ok((
         ScanResult {
-        samples_requested: 1,
-        samples_completed: 1,
-        interval_secs: 0,
-        edges_first_seen_by_sample: vec![edges_new],
-        socket_activation_edge_count,
-        cgroup_correction_count,
-        started_at_ns: batch.started_at().as_i64(),
-        ended_at_ns: batch.ended_at().as_i64(),
-        process_count,
-        parent_edge_count,
-        cgroup_count,
-        service_count,
-        in_cgroup_edge_count,
-        service_owns_edge_count,
-        tcp_listener_count: resolved_listeners.len(),
-        port_count,
-        process_listens_on_edge_count,
-        service_listens_on_edge_count,
-        unmapped_listener_socket_count,
-        tcp_connection_count,
-        process_connects_to_edge_count,
-        service_connects_to_edge_count,
-        service_depends_on_edge_count,
-        declared_depends_on_edge_count,
-        systemd_unit_count,
-        enable_depends_on_edge_count,
-        dbus_depends_on_edge_count,
-        dbus_available: runtime_batch.dbus_available(),
-        unix_listener_count,
-        unix_socket_count,
-        process_listens_on_unix_edge_count,
-        service_listens_on_unix_edge_count,
-        unmapped_unix_listener_count,
-        unix_connection_count,
-        process_connects_to_unix_edge_count,
-        service_connects_to_unix_edge_count,
-        service_depends_on_unix_edge_count,
-        unmapped_active_socket_count,
-        socket_owner_inode_count: batch.owners_by_inode().len(),
-        observation_count: total_observations,
-        warning_count,
-        warnings,
-        warning_details: detailed_warnings(process_warnings),
+            samples_requested: 1,
+            samples_completed: 1,
+            interval_secs: 0,
+            edges_first_seen_by_sample: vec![edges_new],
+            socket_activation_edge_count,
+            cgroup_correction_count,
+            started_at_ns: batch.started_at().as_i64(),
+            ended_at_ns: batch.ended_at().as_i64(),
+            process_count,
+            parent_edge_count,
+            cgroup_count,
+            service_count,
+            in_cgroup_edge_count,
+            service_owns_edge_count,
+            tcp_listener_count: resolved_listeners.len(),
+            port_count,
+            process_listens_on_edge_count,
+            service_listens_on_edge_count,
+            unmapped_listener_socket_count,
+            tcp_connection_count,
+            process_connects_to_edge_count,
+            service_connects_to_edge_count,
+            service_depends_on_edge_count,
+            declared_depends_on_edge_count,
+            systemd_unit_count,
+            enable_depends_on_edge_count,
+            dbus_depends_on_edge_count,
+            dbus_available: runtime_batch.dbus_available(),
+            unix_listener_count,
+            unix_socket_count,
+            process_listens_on_unix_edge_count,
+            service_listens_on_unix_edge_count,
+            unmapped_unix_listener_count,
+            unix_connection_count,
+            process_connects_to_unix_edge_count,
+            service_connects_to_unix_edge_count,
+            service_depends_on_unix_edge_count,
+            unmapped_active_socket_count,
+            socket_owner_inode_count: batch.owners_by_inode().len(),
+            observation_count: total_observations,
+            warning_count,
+            warnings,
+            warning_details: detailed_warnings(process_warnings),
         },
         edges_new,
     ))
 }
 
-fn tag_sample(raw: &mut twin_observation::RawObservation, sample_index: u32, sample_at: TimestampNs) {
+fn tag_sample(
+    raw: &mut twin_observation::RawObservation,
+    sample_index: u32,
+    sample_at: TimestampNs,
+) {
     raw.metadata.insert_u32("sample_index", sample_index);
     raw.metadata
         .insert_str("sample_at_ns", &sample_at.as_i64().to_string());

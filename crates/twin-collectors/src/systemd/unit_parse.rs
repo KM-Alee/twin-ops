@@ -18,10 +18,11 @@ pub struct SocketUnitConfig {
 }
 
 pub fn parse_unit_file(path: &Path, content: &str) -> Result<UnitDependencies, CollectorError> {
-    let section = unit_section(content).ok_or_else(|| CollectorError::SystemdParse {
-        path: path.to_path_buf(),
-        detail: "missing [Unit] section".to_string(),
-    })?;
+    let section =
+        parse_ini_section(content, "[Unit]").ok_or_else(|| CollectorError::SystemdParse {
+            path: path.to_path_buf(),
+            detail: "missing [Unit] section".to_string(),
+        })?;
     let mut deps = UnitDependencies::default();
     for (key, value) in section {
         let targets = split_unit_list(&value);
@@ -64,10 +65,11 @@ pub fn normalize_unit_name(raw: &str) -> Option<String> {
 }
 
 pub fn parse_socket_unit(path: &Path, content: &str) -> Result<SocketUnitConfig, CollectorError> {
-    let section = socket_section(content).ok_or_else(|| CollectorError::SystemdParse {
-        path: path.to_path_buf(),
-        detail: "missing [Socket] section".to_string(),
-    })?;
+    let section =
+        parse_ini_section(content, "[Socket]").ok_or_else(|| CollectorError::SystemdParse {
+            path: path.to_path_buf(),
+            detail: "missing [Socket] section".to_string(),
+        })?;
     let mut config = SocketUnitConfig::default();
     for (key, value) in section {
         let values = split_socket_list(&value);
@@ -102,8 +104,8 @@ pub fn template_unit_name_for_instance(instance_unit: &str) -> Option<String> {
     Some(format!("{prefix}@.{suffix}"))
 }
 
-fn socket_section(content: &str) -> Option<Vec<(String, String)>> {
-    let mut in_socket = false;
+fn parse_ini_section(content: &str, section_header: &str) -> Option<Vec<(String, String)>> {
+    let mut in_section = false;
     let mut pairs = Vec::new();
     for line in content.lines() {
         let line = line.trim();
@@ -111,10 +113,10 @@ fn socket_section(content: &str) -> Option<Vec<(String, String)>> {
             continue;
         }
         if line.starts_with('[') && line.ends_with(']') {
-            in_socket = line.eq_ignore_ascii_case("[Socket]");
+            in_section = line.eq_ignore_ascii_case(section_header);
             continue;
         }
-        if !in_socket {
+        if !in_section {
             continue;
         }
         let Some((key, value)) = line.split_once('=') else {
@@ -122,7 +124,7 @@ fn socket_section(content: &str) -> Option<Vec<(String, String)>> {
         };
         pairs.push((key.trim().to_string(), value.trim().to_string()));
     }
-    if pairs.is_empty() && !content.contains("[Socket]") {
+    if pairs.is_empty() && !content.contains(section_header) {
         return None;
     }
     Some(pairs)
@@ -135,32 +137,6 @@ fn split_socket_list(value: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
-}
-
-fn unit_section(content: &str) -> Option<Vec<(String, String)>> {
-    let mut in_unit = false;
-    let mut pairs = Vec::new();
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if line.starts_with('[') && line.ends_with(']') {
-            in_unit = line.eq_ignore_ascii_case("[Unit]");
-            continue;
-        }
-        if !in_unit {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        pairs.push((key.trim().to_string(), value.trim().to_string()));
-    }
-    if pairs.is_empty() && !content.contains("[Unit]") {
-        return None;
-    }
-    Some(pairs)
 }
 
 fn split_unit_list(value: &str) -> Vec<String> {

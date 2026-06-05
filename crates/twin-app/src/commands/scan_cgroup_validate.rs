@@ -69,9 +69,7 @@ pub(crate) fn apply_cgroup_corrections(
 }
 
 pub(crate) fn dbus_reader_for_scan() -> Option<Box<dyn SystemdDBusReader>> {
-    if std::env::var("TWIN_SYSTEMD_UNIT_ROOT").is_ok()
-        || std::env::var("TWIN_SYSTEMD_CGROUP_MAP").is_ok()
-    {
+    if twin_collectors::should_skip_live_dbus() {
         return None;
     }
     try_connect_dbus().map(|r| Box::new(r) as Box<dyn SystemdDBusReader>)

@@ -50,7 +50,11 @@ pub struct ScanArgs {
     #[arg(long, default_value = "1", help = "Number of scan samples (1–30)")]
     pub samples: u32,
 
-    #[arg(long, default_value = "2", help = "Seconds between samples when samples > 1")]
+    #[arg(
+        long,
+        default_value = "2",
+        help = "Seconds between samples when samples > 1"
+    )]
     pub interval: u64,
 }
 

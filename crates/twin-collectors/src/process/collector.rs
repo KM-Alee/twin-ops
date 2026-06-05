@@ -284,7 +284,8 @@ fn collect_unix_sockets<R: ProcReader>(
         return (listeners, connections, Vec::new(), HashMap::new());
     }
 
-    let (inode_owner_map, supplemental_owners) = if existing_owners.is_empty() {
+    let mut supplemental_owners = HashMap::new();
+    if existing_owners.is_empty() {
         let mut socket_owners = Vec::new();
         for record in records {
             socket_owners.extend(read_fd_socket_owners(
@@ -294,15 +295,18 @@ fn collect_unix_sockets<R: ProcReader>(
                 warnings,
             ));
         }
-        let map = owners_by_inode(&socket_owners);
-        (map.clone(), map)
+        supplemental_owners = owners_by_inode(&socket_owners);
+    }
+
+    let inode_lookup: &HashMap<u64, Vec<SocketOwner>> = if existing_owners.is_empty() {
+        &supplemental_owners
     } else {
-        (existing_owners.clone(), HashMap::new())
+        existing_owners
     };
 
     let mut observations = Vec::new();
     for listener in &listeners {
-        let owners = inode_owner_map
+        let owners = inode_lookup
             .get(&listener.inode)
             .cloned()
             .unwrap_or_default();
@@ -319,7 +323,7 @@ fn collect_unix_sockets<R: ProcReader>(
     }
 
     for connection in &connections {
-        let owners = inode_owner_map
+        let owners = inode_lookup
             .get(&connection.inode)
             .cloned()
             .unwrap_or_default();

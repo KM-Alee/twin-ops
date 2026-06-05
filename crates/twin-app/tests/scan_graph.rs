@@ -522,10 +522,11 @@ fn impact_in_service_shows_direct_dependents() {
         .any(|d| d.id == "service:django.service"));
     assert_eq!(result.risk.level, "medium");
     assert!(result.evidence_strength.score >= 31);
-    assert!(result
-        .evidence
-        .iter()
-        .any(|line| line.statement.contains("Observed:")));
+    assert!(result.direct_dependents.iter().any(|d| {
+        d.evidence
+            .iter()
+            .any(|line| line.statement.contains("Observed:"))
+    }));
 }
 
 #[test]
@@ -850,7 +851,7 @@ fn impact_in_declared_dependent_from_unit_file() {
     assert_eq!(result.configured_dependents[0].id, "service:docker.service");
     assert_eq!(result.configured_dependents[0].impact_kind, "configured");
     assert_eq!(result.risk.level, "low");
-    assert!(result
+    assert!(result.configured_dependents[0]
         .evidence
         .iter()
         .any(|e| e.statement.contains("Requires=containerd.service")));
@@ -1079,9 +1080,11 @@ fn impact_in_unix_socket_target_lists_callers() {
         .direct_dependents
         .iter()
         .any(|d| d.id == "service:pipewire.service"));
-    assert!(result.evidence.iter().any(|e| e
-        .statement
-        .contains("connected on /run/dbus/system_bus_socket")));
+    assert!(result.direct_dependents.iter().any(|d| {
+        d.evidence
+            .iter()
+            .any(|e| e.statement.contains("connected on /run/dbus/system_bus_socket"))
+    }));
 }
 
 fn write_socket_activation_fixture(dir: &std::path::Path) {
@@ -1091,11 +1094,7 @@ fn write_socket_activation_fixture(dir: &std::path::Path) {
         "[Unit]\nDescription=D-Bus Socket\n\n[Socket]\nListenStream=/run/dbus/system_bus_socket\nService=dbus.service\n",
     )
     .expect("dbus.socket");
-    std::fs::write(
-        dir.join("dbus.service"),
-        "[Unit]\nDescription=D-Bus\n",
-    )
-    .expect("dbus.service");
+    std::fs::write(dir.join("dbus.service"), "[Unit]\nDescription=D-Bus\n").expect("dbus.service");
 }
 
 #[test]
@@ -1104,7 +1103,10 @@ fn scan_in_persists_socket_activation_edge() {
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = home.layout.data_dir.join("fixture-proc-socket-activation");
     std::fs::create_dir_all(&proc).expect("proc");
-    let systemd = home.layout.data_dir.join("fixture-systemd-socket-activation");
+    let systemd = home
+        .layout
+        .data_dir
+        .join("fixture-systemd-socket-activation");
     write_socket_activation_fixture(&systemd);
     let result = scan_with_systemd(&home, &proc, &systemd);
     assert!(result.socket_activation_edge_count >= 1);
@@ -1182,7 +1184,12 @@ fn scan_in_applies_cgroup_correction_from_dbus_fixture() {
         .is_none());
 }
 
-fn write_multi_sample_proc(base: &std::path::Path, sample: u32, client_inode: u64, client_port: u16) {
+fn write_multi_sample_proc(
+    base: &std::path::Path,
+    sample: u32,
+    client_inode: u64,
+    client_port: u16,
+) {
     let proc = base.join(format!("sample-{sample}"));
     std::fs::create_dir_all(&proc).expect("proc sample");
     write_proc_fixture_with_cgroup(

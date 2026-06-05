@@ -6,7 +6,7 @@ use twin_core::{EdgeClass, EdgeKind, GraphEdge, NodeId, NodeKind, ObservationId}
 use twin_observation::{Observation, ObservationKind};
 use twin_store::Store;
 
-use crate::commands::evidence::graph_systemd_dep_line;
+use crate::commands::evidence::{graph_systemd_dep_line, is_runtime_active_metadata};
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::error::{AppError, GraphError};
 use crate::model::{
@@ -223,6 +223,16 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
                 .list_observations_for_edge(edge.id().as_str())
                 .map_err(GraphError::Store)?;
             let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
+            if edge.class() == EdgeClass::Observed && is_socket_activation_edge(&edge) {
+                socket_activation.push(GraphOwnedNode {
+                    id: peer.as_str().to_string(),
+                    label: peer_node.label().to_string(),
+                    edge_class: edge.class().to_string(),
+                    tag: Some("activates".to_string()),
+                    observation_ids,
+                });
+                continue;
+            }
             if edge.class() == EdgeClass::Inferred {
                 collect_dependency_connection_evidence(
                     store,
@@ -349,39 +359,6 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
         }
     }
 
-    let outgoing = store
-        .list_edges_from(target.as_str())
-        .map_err(GraphError::Store)?;
-    for row in outgoing {
-        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
-        if edge.kind() != EdgeKind::DependsOn || edge.class() != EdgeClass::Observed {
-            continue;
-        }
-        if !edge
-            .metadata()
-            .as_str()
-            .contains("socket_activation")
-        {
-            continue;
-        }
-        let peer = edge.to();
-        let peer_node = store
-            .get_node_typed(peer)
-            .map_err(GraphError::Store)?
-            .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
-        let obs_links = store
-            .list_observations_for_edge(edge.id().as_str())
-            .map_err(GraphError::Store)?;
-        let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
-        socket_activation.push(GraphOwnedNode {
-            id: peer.as_str().to_string(),
-            label: peer_node.label().to_string(),
-            edge_class: edge.class().to_string(),
-            tag: Some("activates".to_string()),
-            observation_ids,
-        });
-    }
-
     owned_processes.sort_by_key(|n| n.id.clone());
     owned_cgroups.sort_by_key(|n| n.id.clone());
     listening_ports.sort_by_key(|n| n.id.clone());
@@ -410,14 +387,8 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     }))
 }
 
-fn is_runtime_active_metadata(metadata: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    matches!(
-        value.get("active_state").and_then(|v| v.as_str()),
-        Some("active") | Some("activating") | Some("reloading") | Some("deactivating")
-    )
+fn is_socket_activation_edge(edge: &GraphEdge) -> bool {
+    edge.metadata().as_str().contains("socket_activation")
 }
 
 fn unix_socket_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
@@ -659,6 +630,13 @@ fn collect_dependency_connection_evidence(
     );
 }
 
+const CONNECT_SERVICE_RELATIONSHIP: &str =
+    "process connection observed; service connection inferred from process ownership";
+const CONNECT_DEPENDENCY_RELATIONSHIP: &str =
+    "process connection observed; service dependency inferred from listener port match";
+const CONNECT_DEPENDENCY_UNIX_RELATIONSHIP: &str =
+    "process connection observed; service dependency inferred from listener path match";
+
 fn collect_systemd_unit_evidence(
     store: &Store,
     observation_ids: &[String],
@@ -693,31 +671,26 @@ fn systemd_unit_evidence_line(obs: &Observation) -> Option<GraphEvidenceLine> {
 }
 
 fn connect_evidence_line(obs: &Observation) -> Option<GraphEvidenceLine> {
-    if let Some((raw_ref, inode, local_ip, local_port, remote_ip, remote_port, fd)) =
-        tcp_connection_evidence_fields(obs)
-    {
-        return Some(GraphEvidenceLine {
-            source: raw_ref,
-            statement: format!(
-                "inode {inode} established from {local_ip}:{local_port} to {remote_ip}:{remote_port} joined with {fd}"
-            ),
-            strength: "high".to_string(),
-            relationship:
-                "process connection observed; service connection inferred from process ownership"
-                    .to_string(),
-        });
-    }
-    unix_connection_evidence_fields(obs).map(|(raw_ref, inode, path, fd)| GraphEvidenceLine {
-        source: raw_ref,
-        statement: format!("inode {inode} connected on {path} joined with {fd}"),
-        strength: "high".to_string(),
-        relationship:
-            "process connection observed; service connection inferred from process ownership"
-                .to_string(),
-    })
+    connection_evidence_line(
+        obs,
+        CONNECT_SERVICE_RELATIONSHIP,
+        CONNECT_SERVICE_RELATIONSHIP,
+    )
 }
 
 fn dependency_connection_evidence_line(obs: &Observation) -> Option<GraphEvidenceLine> {
+    connection_evidence_line(
+        obs,
+        CONNECT_DEPENDENCY_RELATIONSHIP,
+        CONNECT_DEPENDENCY_UNIX_RELATIONSHIP,
+    )
+}
+
+fn connection_evidence_line(
+    obs: &Observation,
+    tcp_relationship: &str,
+    unix_relationship: &str,
+) -> Option<GraphEvidenceLine> {
     if let Some((raw_ref, inode, local_ip, local_port, remote_ip, remote_port, fd)) =
         tcp_connection_evidence_fields(obs)
     {
@@ -727,18 +700,14 @@ fn dependency_connection_evidence_line(obs: &Observation) -> Option<GraphEvidenc
                 "inode {inode} established from {local_ip}:{local_port} to {remote_ip}:{remote_port} joined with {fd}"
             ),
             strength: "high".to_string(),
-            relationship:
-                "process connection observed; service dependency inferred from listener port match"
-                    .to_string(),
+            relationship: tcp_relationship.to_string(),
         });
     }
     unix_connection_evidence_fields(obs).map(|(raw_ref, inode, path, fd)| GraphEvidenceLine {
         source: raw_ref,
         statement: format!("inode {inode} connected on {path} joined with {fd}"),
         strength: "high".to_string(),
-        relationship:
-            "process connection observed; service dependency inferred from listener path match"
-                .to_string(),
+        relationship: unix_relationship.to_string(),
     })
 }
 

@@ -27,6 +27,17 @@ pub struct ImpactEvidenceLine {
     pub observation_id: Option<String>,
 }
 
+impl ImpactEvidenceLine {
+    pub fn strength_score(&self) -> u8 {
+        match self.strength.as_str() {
+            "very_strong" => 95,
+            "strong" => 75,
+            "moderate" => 45,
+            _ => 20,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactDependent {
     pub id: String,
