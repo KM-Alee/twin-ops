@@ -1,7 +1,10 @@
 pub mod doctor;
+pub mod emulate;
 pub mod format;
 pub mod graph;
 pub mod impact;
 pub mod init;
 pub mod json;
 pub mod scan;
+pub mod sections;
+pub mod unknowns;

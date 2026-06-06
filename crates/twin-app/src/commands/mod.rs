@@ -1,4 +1,5 @@
 pub mod doctor;
+pub mod emulate;
 mod evidence;
 pub mod graph;
 pub mod impact;
@@ -11,3 +12,4 @@ mod scan_systemd;
 mod scan_systemd_groups;
 mod scan_systemd_runtime;
 mod scan_systemd_socket;
+mod service_dependents;

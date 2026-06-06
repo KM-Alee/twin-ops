@@ -128,11 +128,7 @@ pub(crate) fn persist_runtime_in_scan(
                     super::scan_systemd_groups::EdgeObservationLink::AllIds(obs_ids),
                     |existing| {
                         GraphEdge::observed_service_depends_on_dbus(
-                            &source_id,
-                            &target_id,
-                            scan_time,
-                            existing,
-                            dep_key,
+                            &source_id, &target_id, scan_time, existing, dep_key,
                         )
                     },
                 )?;

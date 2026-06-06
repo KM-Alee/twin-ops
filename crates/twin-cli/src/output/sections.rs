@@ -1,0 +1,18 @@
+pub const TARGET: &str = "target";
+pub const RISK: &str = "risk";
+pub const EVIDENCE_STRENGTH: &str = "evidence strength";
+pub const SCAN_HEALTH: &str = "scan health";
+pub const UNKNOWNS: &str = "unknowns";
+pub const OVERLAY: &str = "overlay";
+pub const OVERLAY_SERVICE: &str = "service";
+pub const OVERLAY_TCP_LISTENERS: &str = "tcp listeners";
+pub const OVERLAY_UNIX_LISTENERS: &str = "unix listeners";
+pub const TRANSIENT_IMPACT: &str = "transient impact";
+pub const CONFIGURED_CONTEXT: &str = "configured context";
+pub const SAFETY: &str = "safety";
+pub const EVIDENCE: &str = "evidence";
+pub const OWNED_BY: &str = "owned by";
+pub const DIRECT_DEPENDENTS_RUNTIME: &str = "direct dependents (runtime)";
+pub const CONFIGURED_DEPENDENTS: &str = "configured dependents (inactive)";
+pub const EMULATION_SCORING_NOTE: &str =
+    "emulation uses direct-only scoring; twin impact applies broader thresholds";

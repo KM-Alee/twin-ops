@@ -452,11 +452,12 @@ where
     for (edge, obs_links) in incoming_edges {
         if edge.kind() == EdgeKind::ConnectsTo {
             let caller_id = edge.from();
-            let caller_node = node_ctx.node(caller_id.as_str()).ok_or_else(|| {
-                GraphError::NodeNotFound {
-                    id: caller_id.clone(),
-                }
-            })?;
+            let caller_node =
+                node_ctx
+                    .node(caller_id.as_str())
+                    .ok_or_else(|| GraphError::NodeNotFound {
+                        id: caller_id.clone(),
+                    })?;
             let observation_ids: Vec<String> = obs_links.iter().map(|(id, _)| id.clone()).collect();
             collect_connect_evidence_cached(
                 &obs_ctx,
@@ -482,11 +483,12 @@ where
             continue;
         }
         let listener_id = edge.from();
-        let listener_node = node_ctx.node(listener_id.as_str()).ok_or_else(|| {
-            GraphError::NodeNotFound {
-                id: listener_id.clone(),
-            }
-        })?;
+        let listener_node =
+            node_ctx
+                .node(listener_id.as_str())
+                .ok_or_else(|| GraphError::NodeNotFound {
+                    id: listener_id.clone(),
+                })?;
         let observation_ids: Vec<String> = obs_links.iter().map(|(id, _)| id.clone()).collect();
         collect_socket_evidence_cached(
             &obs_ctx,
@@ -529,15 +531,16 @@ where
 }
 
 fn unix_socket_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
-    socket_endpoint_neighborhood(store, target, NodeKind::UnixSocket, |summary, pl, sl, pc, sc, ev| {
-        GraphResult::unix_socket(summary, pl, sl, pc, sc, ev)
-    })
+    socket_endpoint_neighborhood(
+        store,
+        target,
+        NodeKind::UnixSocket,
+        GraphResult::unix_socket,
+    )
 }
 
 fn port_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
-    socket_endpoint_neighborhood(store, target, NodeKind::Port, |summary, pl, sl, pc, sc, ev| {
-        GraphResult::port(summary, pl, sl, pc, sc, ev)
-    })
+    socket_endpoint_neighborhood(store, target, NodeKind::Port, GraphResult::port)
 }
 
 fn collect_socket_evidence(

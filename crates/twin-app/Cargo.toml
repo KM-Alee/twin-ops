@@ -14,6 +14,7 @@ twin-collectors = { workspace = true }
 twin-core = { workspace = true }
 twin-observation = { workspace = true }
 twin-store = { workspace = true }
+twin-emulate = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

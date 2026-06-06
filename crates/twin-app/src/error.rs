@@ -16,6 +16,8 @@ pub enum AppError {
     Graph(#[from] GraphError),
     #[error("impact failed: {0}")]
     Impact(#[from] ImpactError),
+    #[error("emulation failed: {0}")]
+    Emulate(#[from] EmulateError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -26,6 +28,12 @@ pub enum AppError {
     },
     #[error("invalid impact target `{value}`: {source}")]
     InvalidImpactTarget {
+        value: String,
+        #[source]
+        source: ParseError,
+    },
+    #[error("invalid emulate target `{value}`: {source}")]
+    InvalidEmulateTarget {
         value: String,
         #[source]
         source: ParseError,
@@ -109,5 +117,27 @@ pub enum ImpactError {
     #[error("ambiguous service match for `{query}`: {candidates}")]
     AmbiguousService { query: String, candidates: String },
     #[error("unsupported impact target kind: {kind}")]
+    UnsupportedTarget { kind: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EmulateError {
+    #[error("path resolution failed: {0}")]
+    Paths(#[from] PathError),
+    #[error("database is not initialized; run `twin init` first")]
+    DatabaseNotInitialized,
+    #[error("specify an emulation target (e.g. twin emulate restart postgresql.service)")]
+    MissingTarget,
+    #[error("cannot open database: {0}")]
+    StoreOpen(#[from] StoreOpenError),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("node not found: {id}")]
+    NodeNotFound { id: NodeId },
+    #[error("service not found for query `{query}`; try: twin emulate restart postgresql.service")]
+    ServiceNotFound { query: String },
+    #[error("ambiguous service match for `{query}`: {candidates}")]
+    AmbiguousService { query: String, candidates: String },
+    #[error("unsupported emulation target kind: {kind}; restart emulation requires a service")]
     UnsupportedTarget { kind: String },
 }

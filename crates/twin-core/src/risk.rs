@@ -122,6 +122,35 @@ impl EvidenceStrength {
     }
 }
 
+pub const EVIDENCE_CAP_NO_OBSERVATIONS: u8 = 30;
+pub const EVIDENCE_CAP_WEAKENING_UNKNOWN: u8 = 60;
+pub const EVIDENCE_CAP_INFERRED_ONLY: u8 = 85;
+
+pub fn cap_dependent_evidence_score(
+    best: u8,
+    has_observation_links: bool,
+    only_inferred: bool,
+    has_weakening_unknowns: bool,
+    has_dependents_or_evidence: bool,
+) -> EvidenceStrength {
+    if !has_observation_links && !has_dependents_or_evidence {
+        return EvidenceStrength::weak();
+    }
+    let mut score = best;
+    if !has_observation_links {
+        score = score.min(EVIDENCE_CAP_NO_OBSERVATIONS);
+    } else if score == 0 {
+        score = EVIDENCE_CAP_NO_OBSERVATIONS;
+    }
+    if only_inferred && has_dependents_or_evidence {
+        score = score.min(EVIDENCE_CAP_INFERRED_ONLY);
+    }
+    if has_weakening_unknowns {
+        score = score.min(EVIDENCE_CAP_WEAKENING_UNKNOWN);
+    }
+    EvidenceStrength::new(score)
+}
+
 fn label_for_score(score: u8) -> EvidenceLabel {
     match score {
         0..=30 => EvidenceLabel::Weak,

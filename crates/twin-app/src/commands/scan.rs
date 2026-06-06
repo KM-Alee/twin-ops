@@ -315,8 +315,14 @@ fn persist_scan(
                                 &service_id,
                                 owned,
                                 scan_time,
-                                load_existing_edge(store, &mut edge_cache, &service_id, EdgeKind::Owns, owned)?
-                                    .as_ref(),
+                                load_existing_edge(
+                                    store,
+                                    &mut edge_cache,
+                                    &service_id,
+                                    EdgeKind::Owns,
+                                    owned,
+                                )?
+                                .as_ref(),
                             );
                             upsert_edge_with_link(store, &edge, cgroup_obs_support)?;
                             service_owns_edge_count += 1;
@@ -327,8 +333,14 @@ fn persist_scan(
                         &process_id,
                         &cgroup_id,
                         scan_time,
-                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::InCgroup, &cgroup_id)?
-                            .as_ref(),
+                        load_existing_edge(
+                            store,
+                            &mut edge_cache,
+                            &process_id,
+                            EdgeKind::InCgroup,
+                            &cgroup_id,
+                        )?
+                        .as_ref(),
                     );
                     upsert_edge_with_link(store, &in_cgroup, cgroup_obs_direct)?;
                     in_cgroup_edge_count += 1;
@@ -430,8 +442,14 @@ fn persist_scan(
                         &process_id,
                         port_id,
                         scan_time,
-                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ListensOn, port_id)?
-                            .as_ref(),
+                        load_existing_edge(
+                            store,
+                            &mut edge_cache,
+                            &process_id,
+                            EdgeKind::ListensOn,
+                            port_id,
+                        )?
+                        .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, socket_obs)?;
                     if seen_process_listeners.insert((process_id.clone(), port_id.clone())) {
@@ -670,8 +688,14 @@ fn persist_scan(
                         &process_id,
                         &unix_id,
                         scan_time,
-                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ListensOn, &unix_id)?
-                            .as_ref(),
+                        load_existing_edge(
+                            store,
+                            &mut edge_cache,
+                            &process_id,
+                            EdgeKind::ListensOn,
+                            &unix_id,
+                        )?
+                        .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, socket_obs)?;
                     if seen_process_unix_listeners.insert((process_id.clone(), unix_id.clone())) {
@@ -760,8 +784,14 @@ fn persist_scan(
                         &process_id,
                         &unix_id,
                         scan_time,
-                        load_existing_edge(store, &mut edge_cache, &process_id, EdgeKind::ConnectsTo, &unix_id)?
-                            .as_ref(),
+                        load_existing_edge(
+                            store,
+                            &mut edge_cache,
+                            &process_id,
+                            EdgeKind::ConnectsTo,
+                            &unix_id,
+                        )?
+                        .as_ref(),
                     );
                     upsert_edge_with_link(store, &edge, conn_obs)?;
                     if seen_process_unix_connects.insert((process_id.clone(), unix_id.clone())) {

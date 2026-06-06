@@ -1068,6 +1068,7 @@ dependencies = [
  "toml",
  "twin-collectors",
  "twin-core",
+ "twin-emulate",
  "twin-observation",
  "twin-store",
 ]
@@ -1108,6 +1109,15 @@ dependencies = [
  "thiserror",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "twin-emulate"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "twin-core",
 ]
 
 [[package]]

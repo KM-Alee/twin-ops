@@ -3,17 +3,18 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 
 use twin_core::{
-    EdgeClass, EdgeKind, EdgeState, EvidenceStrength, GraphEdge, NodeId, NodeKind, ObservationId,
-    RiskLevel,
+    cap_dependent_evidence_score, DependentImpactKind, EdgeClass, EdgeKind, EdgeState,
+    EvidenceStrength, GraphEdge, NodeId, NodeKind, ObservationId, RiskLevel, UnknownKind,
 };
 use twin_observation::{Observation, ObservationKind};
 use twin_store::Store;
 
 use crate::commands::evidence::{
-    is_runtime_active_metadata, systemd_dep_strength_label, systemd_impact_statement,
+    classify_dependent_impact_kind, systemd_dep_strength_label, systemd_impact_statement,
 };
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::commands::scan_quality::{assess_scan_quality, scan_health_note};
+use crate::commands::service_dependents::TypedServiceDependent;
 use crate::error::{AppError, ImpactError};
 use crate::model::{
     GraphOwnedNode, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPathStep,
@@ -80,10 +81,26 @@ fn resolve_target(store: &Store, request: &ImpactRequest) -> Result<NodeId, AppE
     resolve_service_target(store, query, ServiceNotFoundContext::Impact)
 }
 
-fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactResult, AppError> {
+pub(crate) struct TypedServiceDependentAnalysis {
+    pub runtime: Vec<TypedServiceDependent>,
+    pub configured: Vec<TypedServiceDependent>,
+    pub unknowns: Vec<ImpactUnknown>,
+}
+
+pub(crate) struct ServiceDependentAnalysis {
+    pub direct_dependents: Vec<ImpactDependent>,
+    pub configured_dependents: Vec<ImpactDependent>,
+    pub unknowns: Vec<ImpactUnknown>,
+}
+
+pub(crate) fn load_typed_service_dependents(
+    store: &Store,
+    target: &NodeId,
+    label: &str,
+) -> Result<TypedServiceDependentAnalysis, AppError> {
     let target_summary = node_summary(target, label);
-    let mut direct_dependents = Vec::new();
-    let mut configured_dependents = Vec::new();
+    let mut runtime = Vec::new();
+    let mut configured = Vec::new();
     let mut seen_evidence = HashSet::new();
     let tcp_cache = unmapped_tcp_observations(store)?;
     let unix_cache = unmapped_unix_observations(store)?;
@@ -131,61 +148,82 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
         );
         let reason = service_dependent_reason(store, &edge, &observation_ids, label);
         let impact_kind = classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
-        let dependent = build_dependent(DependentInput {
-            dependent_id,
-            dependent_label: dependent_node.label(),
+        let dependent = TypedServiceDependent {
+            id: dependent_id.clone(),
+            label: dependent_node.label().to_string(),
             edge_kind: EdgeKind::DependsOn,
             edge_class: edge.class(),
             impact_kind,
-            target: &target_summary,
-            edge_id: edge.id().as_str(),
             reason,
+            to_id: target.clone(),
+            to_label: target_summary.label.clone(),
+            edge_id: edge.id().clone(),
             evidence: dependent_evidence,
             observation_ids,
-        });
-        if impact_kind == "runtime" {
-            direct_dependents.push(dependent);
+        };
+        if impact_kind.is_runtime() {
+            runtime.push(dependent);
         } else {
-            configured_dependents.push(dependent);
+            configured.push(dependent);
         }
     }
 
     append_scan_health_note(store, &mut unknowns)?;
 
-    direct_dependents.sort_by_key(|d| d.id.clone());
-    configured_dependents.sort_by_key(|d| d.id.clone());
+    runtime.sort_by_key(|d| d.id.as_str().to_string());
+    configured.sort_by_key(|d| d.id.as_str().to_string());
     unknowns.sort_by(|a, b| a.kind.cmp(&b.kind));
+
+    Ok(TypedServiceDependentAnalysis {
+        runtime,
+        configured,
+        unknowns,
+    })
+}
+
+pub(crate) fn load_service_dependent_analysis(
+    store: &Store,
+    target: &NodeId,
+    label: &str,
+) -> Result<ServiceDependentAnalysis, AppError> {
+    let typed = load_typed_service_dependents(store, target, label)?;
+    Ok(ServiceDependentAnalysis {
+        direct_dependents: typed
+            .runtime
+            .iter()
+            .map(TypedServiceDependent::to_impact_dependent)
+            .collect(),
+        configured_dependents: typed
+            .configured
+            .iter()
+            .map(TypedServiceDependent::to_impact_dependent)
+            .collect(),
+        unknowns: typed.unknowns,
+    })
+}
+
+fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactResult, AppError> {
+    let analysis = load_service_dependent_analysis(store, target, label)?;
 
     let risk = score_risk(
         NodeKind::Service,
-        &direct_dependents,
-        &configured_dependents,
-        &unknowns,
+        &analysis.direct_dependents,
+        &analysis.configured_dependents,
+        &analysis.unknowns,
     );
-    let evidence_strength = score_evidence(&direct_dependents, &[], &unknowns);
+    let evidence_strength = score_evidence(&analysis.direct_dependents, &[], &analysis.unknowns);
 
     Ok(ImpactResult {
         target: target.to_string(),
         target_label: label.to_string(),
         risk,
         evidence_strength: evidence_strength.into(),
-        direct_dependents,
-        configured_dependents,
+        direct_dependents: analysis.direct_dependents,
+        configured_dependents: analysis.configured_dependents,
         listener_owners: Vec::new(),
         evidence: Vec::new(),
-        unknowns,
+        unknowns: analysis.unknowns,
     })
-}
-
-fn classify_dependent_impact_kind(edge: &GraphEdge, dependent_metadata: &str) -> &'static str {
-    if edge.class() == EdgeClass::Inferred {
-        return "runtime";
-    }
-    if is_runtime_active_metadata(dependent_metadata) {
-        "runtime"
-    } else {
-        "configured"
-    }
 }
 
 fn port_impact(
@@ -242,7 +280,7 @@ fn port_impact(
                 dependent_label: caller_node.label(),
                 edge_kind: EdgeKind::ConnectsTo,
                 edge_class: edge.class(),
-                impact_kind: "runtime",
+                impact_kind: DependentImpactKind::Runtime,
                 target: &target_summary,
                 edge_id: edge.id().as_str(),
                 reason,
@@ -314,7 +352,7 @@ struct DependentInput<'a> {
     dependent_label: &'a str,
     edge_kind: EdgeKind,
     edge_class: EdgeClass,
-    impact_kind: &'a str,
+    impact_kind: DependentImpactKind,
     target: &'a ImpactNodeSummary,
     edge_id: &'a str,
     reason: String,
@@ -329,7 +367,7 @@ fn build_dependent(input: DependentInput<'_>) -> ImpactDependent {
         label: from.label.clone(),
         relationship: input.edge_kind.to_string(),
         edge_class: input.edge_class.to_string(),
-        impact_kind: input.impact_kind.to_string(),
+        impact_kind: input.impact_kind.as_str().to_string(),
         reason: input.reason,
         path: vec![ImpactPathStep {
             from: from.clone(),
@@ -453,9 +491,10 @@ fn collect_edge_evidence(
     relationship: &str,
 ) {
     if observation_ids.len() > 1 {
-        if let Ok(ctx) =
-            crate::commands::evidence::EvidenceLoadContext::preload_observations(store, observation_ids)
-        {
+        if let Ok(ctx) = crate::commands::evidence::EvidenceLoadContext::preload_observations(
+            store,
+            observation_ids,
+        ) {
             for obs_id in observation_ids {
                 let Some(obs) = ctx.observation(obs_id) else {
                     continue;
@@ -642,7 +681,7 @@ fn append_scan_health_note(
     let assessment = assess_scan_quality(store)?;
     if let Some(note) = scan_health_note(&assessment) {
         unknowns.push(ImpactUnknown {
-            kind: "scan_health".to_string(),
+            kind: UnknownKind::ScanHealth.as_str().to_string(),
             detail: note,
             source: Some("latest scan".to_string()),
             weakens_evidence: false,
@@ -830,7 +869,7 @@ fn unmapped_sockets_for_port(
 
     if unmapped_active > 0 {
         unknowns.push(ImpactUnknown {
-            kind: "unmapped_active_sockets".to_string(),
+            kind: UnknownKind::UnmappedActiveSockets.as_str().to_string(),
             detail: format!(
                 "{unmapped_active} active TCP sockets on {ip}:{port} could not be mapped to a process"
             ),
@@ -840,7 +879,7 @@ fn unmapped_sockets_for_port(
     }
     if unmapped_listener > 0 {
         unknowns.push(ImpactUnknown {
-            kind: "unmapped_listener_sockets".to_string(),
+            kind: UnknownKind::UnmappedListenerSockets.as_str().to_string(),
             detail: format!(
                 "{unmapped_listener} listener sockets on {ip}:{port} could not be mapped to a process"
             ),
@@ -863,15 +902,12 @@ fn unmapped_sockets_for_unix(
                 kind: unix_id.to_string(),
             })?;
     let mut unknowns = Vec::new();
-    let (unmapped_active, unmapped_listener) = unix_index
-        .counts
-        .get(path)
-        .copied()
-        .unwrap_or((0, 0));
+    let (unmapped_active, unmapped_listener) =
+        unix_index.counts.get(path).copied().unwrap_or((0, 0));
 
     if unmapped_active > 0 {
         unknowns.push(ImpactUnknown {
-            kind: "unmapped_active_sockets".to_string(),
+            kind: UnknownKind::UnmappedActiveSockets.as_str().to_string(),
             detail: format!(
                 "{unmapped_active} active unix sockets on {path} could not be mapped to a process"
             ),
@@ -881,7 +917,7 @@ fn unmapped_sockets_for_unix(
     }
     if unmapped_listener > 0 {
         unknowns.push(ImpactUnknown {
-            kind: "unmapped_listener_sockets".to_string(),
+            kind: UnknownKind::UnmappedListenerSockets.as_str().to_string(),
             detail: format!(
                 "{unmapped_listener} unix listener sockets on {path} could not be mapped to a process"
             ),
@@ -914,7 +950,7 @@ fn parse_port_node(port_id: &NodeId) -> Result<(String, u16), AppError> {
 
 fn missing_evidence_unknown(edge_id: &str) -> ImpactUnknown {
     ImpactUnknown {
-        kind: "missing_evidence".to_string(),
+        kind: UnknownKind::MissingEvidence.as_str().to_string(),
         detail: format!("edge {edge_id} has no readable observation links"),
         source: Some("graph".to_string()),
         weakens_evidence: true,
@@ -988,32 +1024,19 @@ fn score_evidence(
             only_inferred = false;
         }
         for line in &dependent.evidence {
-            let score = EvidenceStrength::new(line.strength_score()).score();
-            best = best.max(score);
+            best = best.max(line.strength_score());
         }
     }
 
     for line in evidence {
-        let score = EvidenceStrength::new(line.strength_score()).score();
-        best = best.max(score);
+        best = best.max(line.strength_score());
     }
 
-    if !has_observation_links && direct_dependents.is_empty() && evidence.is_empty() {
-        return EvidenceStrength::weak();
-    }
-    if !has_observation_links {
-        best = best.min(30);
-    } else if best == 0 {
-        best = 30;
-    }
-
-    if only_inferred && !direct_dependents.is_empty() {
-        best = best.min(85);
-    }
-
-    if unknowns.iter().any(|u| u.weakens_evidence) {
-        best = best.min(60);
-    }
-
-    EvidenceStrength::new(best)
+    cap_dependent_evidence_score(
+        best,
+        has_observation_links,
+        only_inferred,
+        unknowns.iter().any(|u| u.weakens_evidence),
+        !direct_dependents.is_empty() || !evidence.is_empty(),
+    )
 }

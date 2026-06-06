@@ -1,4 +1,5 @@
 mod doctor_result;
+mod emulation_result;
 mod graph_result;
 mod impact_result;
 mod init_result;
@@ -7,6 +8,9 @@ mod scan_result;
 
 pub use doctor_result::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, PermissionMode,
+};
+pub use emulation_result::{
+    EmulationImpact, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
 };
 pub use graph_result::{
     edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphListResult,

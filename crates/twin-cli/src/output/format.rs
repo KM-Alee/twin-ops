@@ -47,9 +47,20 @@ impl Lines {
     }
 
     pub fn tree_leaf(&mut self, is_last: bool, label: &str, value: &str) {
+        self.tree_branch("", is_last, label, value);
+    }
+
+    pub fn tree_branch(&mut self, indent: &str, is_last: bool, label: &str, value: &str) {
         let branch = if is_last { "└──" } else { "├──" };
         self.inner
-            .push(format!("  {branch}  {:<14}  {value}", label));
+            .push(format!("  {indent}{branch}  {label:<14}  {value}"));
+    }
+
+    pub fn child_indent(parent_indent: &str, parent_is_last: bool) -> String {
+        format!(
+            "{parent_indent}{}",
+            if parent_is_last { "    " } else { "│   " }
+        )
     }
 
     pub fn path_row(&mut self, is_last: bool, label: &str, path: &Path, note: Option<&str>) {
@@ -71,6 +82,18 @@ pub(crate) fn status_tag(status: Status) -> &'static str {
         Status::Warn => "warn",
         Status::Bad => "fail",
         Status::Neutral => "—",
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScanFreshness {
+    pub started_at_ns: i64,
+    pub ended_at_ns: i64,
+}
+
+impl ScanFreshness {
+    pub fn duration_label(self) -> String {
+        format_duration_ns(self.started_at_ns, self.ended_at_ns)
     }
 }
 

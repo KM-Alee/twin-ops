@@ -25,6 +25,7 @@ pub enum Command {
     Scan(ScanArgs),
     Graph(GraphArgs),
     Impact(ImpactArgs),
+    Emulate(EmulateArgs),
 }
 
 #[derive(Args)]
@@ -71,6 +72,30 @@ pub struct GraphArgs {
         help = "Node id, pid, or kind (e.g. process, 1234, process:pid:1234)"
     )]
     pub target: Option<String>,
+}
+
+#[derive(Args)]
+pub struct EmulateArgs {
+    #[command(subcommand)]
+    pub action: EmulateActionArgs,
+}
+
+#[derive(Subcommand)]
+pub enum EmulateActionArgs {
+    #[command(about = "Hypothetically restart a service (no action performed)")]
+    Restart(EmulateRestartArgs),
+}
+
+#[derive(Args)]
+pub struct EmulateRestartArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "TARGET",
+        help = "Service target (e.g. postgresql, service:postgresql.service)"
+    )]
+    pub target: String,
 }
 
 #[derive(Args)]

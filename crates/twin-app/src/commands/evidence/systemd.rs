@@ -79,6 +79,22 @@ pub fn is_runtime_active_state(state: Option<&str>) -> bool {
     )
 }
 
+use twin_core::{DependentImpactKind, EdgeClass, GraphEdge};
+
+pub fn classify_dependent_impact_kind(
+    edge: &GraphEdge,
+    dependent_metadata: &str,
+) -> DependentImpactKind {
+    if edge.class() == EdgeClass::Inferred {
+        return DependentImpactKind::Runtime;
+    }
+    if is_runtime_active_metadata(dependent_metadata) {
+        DependentImpactKind::Runtime
+    } else {
+        DependentImpactKind::Configured
+    }
+}
+
 pub fn is_runtime_active_metadata(metadata: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
         return false;

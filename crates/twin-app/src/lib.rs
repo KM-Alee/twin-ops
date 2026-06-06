@@ -4,9 +4,10 @@ mod error;
 mod model;
 pub mod paths;
 
-pub use error::{AppError, GraphError, ImpactError, ScanError};
+pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError};
 pub use model::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EvidenceStrengthView,
+    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
+    EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
     GraphEdgeSummary, GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary,
     GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
     GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
@@ -119,4 +120,22 @@ pub fn impact(request: ImpactRequest) -> Result<ImpactResult, AppError> {
 
 pub fn impact_in(layout: &TwinLayout, request: ImpactRequest) -> Result<ImpactResult, AppError> {
     commands::impact::run(layout, &request)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EmulateRequest {
+    pub config_override: Option<PathBuf>,
+    pub target: Option<NodeId>,
+    pub target_query: Option<String>,
+}
+
+pub fn emulate(request: EmulateRequest) -> Result<EmulationResult, AppError> {
+    commands::emulate::run_home(request)
+}
+
+pub fn emulate_in(
+    layout: &TwinLayout,
+    request: EmulateRequest,
+) -> Result<EmulationResult, AppError> {
+    commands::emulate::run(layout, &request)
 }

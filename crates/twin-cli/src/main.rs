@@ -4,11 +4,14 @@ use std::process;
 use clap::Parser;
 use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
 use twin_cli::cli::args::{
-    Cli, Command, DoctorArgs, GlobalArgs, GraphArgs, ImpactArgs, InitArgs, ScanArgs,
+    Cli, Command, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs, ImpactArgs,
+    InitArgs, ScanArgs,
 };
+use twin_cli::cli::emulate;
 use twin_cli::cli::graph;
 use twin_cli::cli::impact;
 use twin_cli::output;
+use twin_cli::output::format::ScanFreshness;
 
 fn main() {
     let cli = Cli::parse();
@@ -22,21 +25,23 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Scan(args) => run_scan(&cli.global, &args),
         Command::Graph(args) => run_graph(&cli.global, &args),
         Command::Impact(args) => run_impact(&cli.global, &args),
+        Command::Emulate(args) => run_emulate(&cli.global, &args),
     }
 }
 
-fn refresh_scan(config_override: Option<std::path::PathBuf>) -> Result<(), AppError> {
+fn refresh_scan(config_override: Option<std::path::PathBuf>) -> Result<ScanFreshness, AppError> {
     let request = ScanRequest::default_with_config(config_override);
-    match std::env::var_os("TWIN_PROC_ROOT") {
+    let result = match std::env::var_os("TWIN_PROC_ROOT") {
         Some(root) => {
             let paths = twin_app::paths::resolve_command_paths(request.config_override.as_deref())?;
-            twin_app::scan_in(&paths.layout, request, Path::new(&root))?;
+            twin_app::scan_in(&paths.layout, request, Path::new(&root))?
         }
-        None => {
-            twin_app::scan(request)?;
-        }
-    }
-    Ok(())
+        None => twin_app::scan(request)?,
+    };
+    Ok(ScanFreshness {
+        started_at_ns: result.started_at_ns,
+        ended_at_ns: result.ended_at_ns,
+    })
 }
 
 fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
@@ -100,11 +105,47 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     }
 }
 
-fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
-    if let Err(error) = refresh_scan(args.config.clone()) {
-        eprintln!("Error: {error}");
-        return 1;
+fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
+    let EmulateActionArgs::Restart(restart_args) = &args.action;
+    let scan = match refresh_scan(restart_args.config.clone()) {
+        Ok(scan) => scan,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
+    let request = match emulate::emulate_restart_request(restart_args) {
+        Ok(request) => request,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
+    match twin_app::emulate(request) {
+        Ok(result) => {
+            emit_after_scan(
+                global.json,
+                &result,
+                output::emulate::render_with_scan,
+                scan,
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
     }
+}
+
+fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
+    let scan = match refresh_scan(args.config.clone()) {
+        Ok(scan) => scan,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
     let request = match impact::impact_request(args) {
         Ok(request) => request,
         Err(error) => {
@@ -114,7 +155,7 @@ fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
     };
     match twin_app::impact(request) {
         Ok(result) => {
-            emit(global.json, &result, output::impact::render);
+            emit_after_scan(global.json, &result, output::impact::render_with_scan, scan);
             0
         }
         Err(error) => {
@@ -125,10 +166,13 @@ fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
 }
 
 fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
-    if let Err(error) = refresh_scan(args.config.clone()) {
-        eprint_graph_error(&error);
-        return 1;
-    }
+    let scan = match refresh_scan(args.config.clone()) {
+        Ok(scan) => scan,
+        Err(error) => {
+            eprint_graph_error(&error);
+            return 1;
+        }
+    };
     let request = match graph::graph_request(args) {
         Ok(request) => request,
         Err(error) => {
@@ -138,7 +182,7 @@ fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
     };
     match twin_app::graph(request) {
         Ok(result) => {
-            emit(global.json, &result, output::graph::render);
+            emit_after_scan(global.json, &result, output::graph::render_with_scan, scan);
             0
         }
         Err(error) => {
@@ -163,6 +207,20 @@ fn emit<T: serde::Serialize>(json: bool, value: &T, text: fn(&T) -> String) {
         output::json::render(value).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
     } else {
         text(value)
+    };
+    println!("{rendered}");
+}
+
+fn emit_after_scan<T: serde::Serialize>(
+    json: bool,
+    value: &T,
+    text: fn(&T, Option<ScanFreshness>) -> String,
+    scan: ScanFreshness,
+) {
+    let rendered = if json {
+        output::json::render(value).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+    } else {
+        text(value, Some(scan))
     };
     println!("{rendered}");
 }

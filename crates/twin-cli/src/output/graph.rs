@@ -5,33 +5,47 @@ use twin_app::{
     GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
-use crate::output::format::{Lines, Status};
+use twin_app::GraphEvidenceLine;
+
+use crate::output::format::{Lines, ScanFreshness, Status};
 
 pub fn render(result: &GraphResult) -> String {
+    render_with_scan(result, None)
+}
+
+pub fn render_with_scan(result: &GraphResult, scan: Option<ScanFreshness>) -> String {
     match result {
-        GraphResult::List(list) => render_list(list),
-        GraphResult::Node(node) => render_node(node),
-        GraphResult::Service(service) => render_service(service),
-        GraphResult::Port(port) => render_port(port),
-        GraphResult::UnixSocket(unix) => render_unix_socket(unix),
+        GraphResult::List(list) => render_list(list, scan),
+        GraphResult::Node(node) => render_node(node, scan),
+        GraphResult::Service(service) => render_service(service, scan),
+        GraphResult::Port(port) => render_port(port, scan),
+        GraphResult::UnixSocket(unix) => render_unix_socket(unix, scan),
     }
 }
 
-fn render_list(list: &GraphListResult) -> String {
+fn graph_header(view: &str, scan: Option<ScanFreshness>) -> Lines {
+    let mut out = Lines::new();
+    out.title("twin graph");
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.status_row(Status::Ok, "view", view);
+    out.blank();
+    out
+}
+
+fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
     let title = match list.kind {
         twin_core::NodeKind::Process => "Process tree",
         twin_core::NodeKind::Service => "Service list",
         twin_core::NodeKind::Port => "Port list",
         other => return format!("Unsupported list kind: {other}"),
     };
-    let mut out = Lines::new();
-    out.title("twin graph");
-    out.status_row(
-        Status::Neutral,
-        "view",
-        &format!("{title}, {} nodes", list.nodes.len()),
-    );
-    out.blank();
+    let out = graph_header(&format!("{title}, {} nodes", list.nodes.len()), scan);
     let mut lines = Vec::new();
 
     let labels: HashMap<String, String> = list
@@ -95,11 +109,8 @@ fn render_list(list: &GraphListResult) -> String {
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
-fn render_service(service: &GraphServiceResult) -> String {
-    let mut out = Lines::new();
-    out.title("twin graph");
-    out.status_row(Status::Ok, "view", "service neighborhood");
-    out.blank();
+fn render_service(service: &GraphServiceResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("service neighborhood", scan);
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", service.service.id, service.service.label));
     lines.push(String::new());
@@ -209,11 +220,8 @@ fn render_dependency_section<'a>(
     }
 }
 
-fn render_port(port: &GraphPortResult) -> String {
-    let mut out = Lines::new();
-    out.title("twin graph");
-    out.status_row(Status::Ok, "view", "port listener neighborhood");
-    out.blank();
+fn render_port(port: &GraphPortResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("port listener neighborhood", scan);
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", port.port.id, port.port.label));
     lines.push(String::new());
@@ -254,11 +262,8 @@ fn render_port(port: &GraphPortResult) -> String {
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
-fn render_unix_socket(unix: &GraphUnixSocketResult) -> String {
-    let mut out = Lines::new();
-    out.title("twin graph");
-    out.status_row(Status::Ok, "view", "unix socket neighborhood");
-    out.blank();
+fn render_unix_socket(unix: &GraphUnixSocketResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("unix socket neighborhood", scan);
     let mut lines = Vec::new();
     lines.push(format!(
         "{}  {}",
@@ -302,25 +307,64 @@ fn render_unix_socket(unix: &GraphUnixSocketResult) -> String {
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
-fn append_evidence_lines(lines: &mut Vec<String>, evidence: &[twin_app::GraphEvidenceLine]) {
-    if evidence.is_empty() {
+fn append_evidence_lines(lines: &mut Vec<String>, evidence: &[GraphEvidenceLine]) {
+    let deduped = dedupe_graph_evidence(evidence);
+    if deduped.is_empty() {
         return;
     }
     lines.push(String::new());
     lines.push("evidence".to_string());
-    for (i, line) in evidence.iter().enumerate() {
-        let is_last = i + 1 == evidence.len();
+    for (i, line) in deduped.iter().enumerate() {
+        let is_last = i + 1 == deduped.len();
         let prefix = if is_last { "└──" } else { "├──" };
         lines.push(format!("{prefix} {} {}", line.source, line.statement));
         lines.push(format!("    relationship: {}", line.relationship));
     }
 }
 
-fn render_node(node: &GraphNodeResult) -> String {
-    let mut out = Lines::new();
-    out.title("twin graph");
-    out.status_row(Status::Neutral, "view", "process neighborhood");
-    out.blank();
+fn dedupe_graph_evidence(evidence: &[GraphEvidenceLine]) -> Vec<&GraphEvidenceLine> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for line in evidence {
+        let key = graph_evidence_key(line);
+        if seen.insert(key) {
+            out.push(line);
+        }
+    }
+    out
+}
+
+fn graph_evidence_key(line: &GraphEvidenceLine) -> String {
+    format!(
+        "{}|{}|{}",
+        line.relationship,
+        normalize_evidence_source(&line.source),
+        normalize_evidence_statement(&line.statement)
+    )
+}
+
+fn normalize_evidence_source(source: &str) -> String {
+    if let Some((head, _)) = source.rsplit_once(':') {
+        if head.contains("/proc/net/") {
+            return format!("{head}:*");
+        }
+    }
+    source.to_string()
+}
+
+fn normalize_evidence_statement(statement: &str) -> String {
+    if let Some(inode_pos) = statement.find("inode ") {
+        let mut core = statement[inode_pos..].to_string();
+        if let Some(joined) = core.find(" joined with ") {
+            core.truncate(joined);
+        }
+        return core;
+    }
+    statement.to_string()
+}
+
+fn render_node(node: &GraphNodeResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("process neighborhood", scan);
     let mut lines = Vec::new();
 
     lines.push("parent_of (observed)".to_string());

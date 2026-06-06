@@ -493,3 +493,45 @@ fn impact_before_init_exits_nonzero() {
     assert!(!out.status.success());
     assert!(stderr_utf8(&out).contains("not initialized") || stderr_utf8(&out).contains("Error"));
 }
+
+#[test]
+fn emulate_restart_service_with_fake_proc() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["emulate", "restart", "postgresql.service"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("twin emulate restart"));
+    assert!(text.contains("overlay"));
+    assert!(text.contains("No action was performed."));
+    assert!(text.contains("transient impact") || text.contains("configured context"));
+}
+
+#[test]
+fn emulate_restart_service_json_with_fake_proc() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["--json", "emulate", "restart", "postgresql.service"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let value: serde_json::Value =
+        serde_json::from_str(stdout_utf8(&out).trim()).expect("emulate json");
+    assert_eq!(value["action"], "restart");
+    assert_eq!(value["action_performed"], false);
+    assert!(value.get("overlay").is_some());
+    assert!(value.get("transient_impacts").is_some());
+}
+
+#[test]
+fn emulate_restart_rejects_port_target() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["emulate", "restart", "port:tcp:127.0.0.1:5432"]);
+    assert!(!out.status.success());
+    assert!(stderr_utf8(&out).contains("unsupported") || stderr_utf8(&out).contains("Error"));
+}

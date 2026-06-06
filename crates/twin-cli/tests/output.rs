@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use twin_app::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, GraphEvidenceLine,
-    GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphResult,
-    GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
-    InitResult, PermissionMode, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
+    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
+    EmulationOverlayNode, EmulationResult, GraphEvidenceLine, GraphListResult, GraphNodeResult,
+    GraphNodeSummary, GraphOwnedNode, GraphResult, GraphServiceResult, ImpactDependent,
+    ImpactEvidenceLine, ImpactResult, ImpactUnknown, InitResult, PermissionMode, ScanQuality,
+    ScanQualityAssessment, ScanResult, ScanWarning,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -160,6 +161,75 @@ fn scan_render_warning_aggregation() {
     let text = output::scan::render(&result);
     assert!(text.contains("4 disappeared during scan"));
     assert!(text.contains("2 unreadable exe links"));
+    assert!(text.contains("warnings (2 kinds, 6 events)"));
+}
+
+#[test]
+fn impact_render_groups_unknown_kinds() {
+    let mut result = sample_impact_result();
+    result.unknowns = vec![
+        ImpactUnknown {
+            kind: "unmapped_listener_sockets".to_string(),
+            detail: "3 unix listener sockets on /run/docker.sock".to_string(),
+            source: None,
+            weakens_evidence: true,
+        },
+        ImpactUnknown {
+            kind: "unmapped_listener_sockets".to_string(),
+            detail: "3 unix listener sockets on /var/run/metrics.sock".to_string(),
+            source: None,
+            weakens_evidence: true,
+        },
+    ];
+    let text = output::impact::render(&result);
+    assert!(text.contains("unmapped listeners"));
+    assert!(text.contains("2 report(s)"));
+    assert!(text.contains("weakens evidence"));
+}
+
+#[test]
+fn graph_service_evidence_is_deduped() {
+    use twin_app::{GraphEvidenceLine, GraphOwnedNode, GraphServiceResult};
+    let result = GraphResult::Service(GraphServiceResult {
+        service: twin_app::GraphNodeSummary {
+            id: "service:docker.service".to_string(),
+            label: "docker.service".to_string(),
+        },
+        owned_processes: vec![],
+        owned_cgroups: vec![],
+        listening_ports: vec![],
+        listening_unix: vec![GraphOwnedNode {
+            id: "unix:/run/docker.sock".to_string(),
+            label: "/run/docker.sock".to_string(),
+            edge_class: "inferred".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+        connected_ports: vec![],
+        connected_unix: vec![],
+        dependencies: vec![],
+        dependents: vec![],
+        socket_activation: vec![],
+        configured_dependents: vec![],
+        evidence: vec![
+            GraphEvidenceLine {
+                source: "/proc/net/unix:162".to_string(),
+                statement: "inode 20562 listening on /run/docker.sock joined with /proc/1212/fd/7"
+                    .to_string(),
+                strength: "strong".to_string(),
+                relationship: "process listener observed".to_string(),
+            },
+            GraphEvidenceLine {
+                source: "/proc/net/unix:164".to_string(),
+                statement: "inode 20562 listening on /run/docker.sock joined with /proc/1212/fd/7"
+                    .to_string(),
+                strength: "strong".to_string(),
+                relationship: "process listener observed".to_string(),
+            },
+        ],
+    });
+    let text = output::graph::render(&result);
+    assert_eq!(text.matches("inode 20562 listening").count(), 1);
 }
 
 #[test]
@@ -465,7 +535,7 @@ fn impact_render_direct_dependents_and_evidence() {
     assert!(text.contains("risk"));
     assert!(text.contains("evidence strength"));
     assert!(text.contains("direct dependents"));
-    assert!(text.contains("service:django.service"));
+    assert!(text.contains("django.service"));
     assert!(text.contains("depends_on"));
     assert!(text.contains("/proc/net/tcp:2"));
 }
@@ -522,6 +592,85 @@ fn impact_json_includes_risk_and_unknowns() {
         .get("direct_dependents")
         .and_then(|v| v.as_array())
         .is_some());
+}
+
+fn sample_emulation_result() -> EmulationResult {
+    EmulationResult {
+        action: "restart".to_string(),
+        target: "service:postgresql.service".to_string(),
+        target_label: "postgresql.service".to_string(),
+        action_performed: false,
+        safety_statement: "No action was performed.".to_string(),
+        risk: twin_app::RiskAssessment {
+            level: twin_core::RiskLevel::Medium,
+            reasons: vec!["1 direct runtime dependent(s) may be interrupted".to_string()],
+        },
+        evidence_strength: twin_app::EvidenceStrengthView {
+            score: 75,
+            label: "strong".to_string(),
+        },
+        overlay: twin_app::EmulationOverlaySummary {
+            unavailable_nodes: vec![
+                EmulationOverlayNode {
+                    id: "service:postgresql.service".to_string(),
+                    label: "postgresql.service".to_string(),
+                    reason: "temporarily unavailable".to_string(),
+                },
+                EmulationOverlayNode {
+                    id: "port:tcp:127.0.0.1:5432".to_string(),
+                    label: "127.0.0.1:5432".to_string(),
+                    reason: "listener unavailable".to_string(),
+                },
+            ],
+            interrupted_relationships: vec![],
+        },
+        transient_impacts: vec![EmulationImpact {
+            id: "service:django.service".to_string(),
+            label: "django.service".to_string(),
+            statement: "django.service may lose dependency while postgresql.service restarts"
+                .to_string(),
+            path: "service:django.service depends_on service:postgresql.service".to_string(),
+            evidence: vec!["active connection observed".to_string()],
+        }],
+        configured_impacts: vec![],
+        unknowns: vec![],
+    }
+}
+
+#[test]
+fn emulate_restart_output_has_overlay_transient_impact_and_safety_statement() {
+    let text = output::emulate::render(&sample_emulation_result());
+    assert!(text.contains("twin emulate restart"));
+    assert!(text.contains("overlay"));
+    assert!(text.contains("transient impact"));
+    assert!(text.contains("No action was performed."));
+    assert!(text.contains("django.service"));
+    assert!(text.contains("direct-only scoring"));
+    assert!(text.contains("path"));
+    assert!(text.contains("evidence"));
+}
+
+#[test]
+fn emulate_restart_output_omits_empty_sections_cleanly() {
+    let mut result = sample_emulation_result();
+    result.transient_impacts.clear();
+    result.configured_impacts.clear();
+    result.overlay.unavailable_nodes.clear();
+    result.unknowns.clear();
+    let text = output::emulate::render(&result);
+    assert!(!text.contains("transient impact"));
+    assert!(!text.contains("configured context"));
+    assert!(!text.contains("unknowns"));
+    assert!(text.contains("No action was performed."));
+}
+
+#[test]
+fn emulate_restart_json_contains_action_performed_false() {
+    let json = output::json::render(&sample_emulation_result()).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["action_performed"], false);
+    assert_eq!(value["action"], "restart");
+    assert!(value.get("overlay").is_some());
 }
 
 #[test]

@@ -3,12 +3,13 @@ use std::str::FromStr;
 use twin_core::{NodeId, NodeKind};
 use twin_store::Store;
 
-use crate::error::{AppError, GraphError, ImpactError};
+use crate::error::{AppError, EmulateError, GraphError, ImpactError};
 
 #[derive(Debug, Clone)]
 pub enum ServiceNotFoundContext {
     Graph { detail: String },
     Impact,
+    Emulate,
 }
 
 pub fn resolve_service_target(
@@ -71,6 +72,7 @@ fn store_err(ctx: &ServiceNotFoundContext) -> impl FnOnce(twin_store::StoreError
     move |e| match ctx {
         ServiceNotFoundContext::Graph { .. } => GraphError::Store(e).into(),
         ServiceNotFoundContext::Impact => ImpactError::Store(e).into(),
+        ServiceNotFoundContext::Emulate => EmulateError::Store(e).into(),
     }
 }
 
@@ -78,6 +80,7 @@ fn node_not_found(id: NodeId, ctx: &ServiceNotFoundContext) -> AppError {
     match ctx {
         ServiceNotFoundContext::Graph { .. } => GraphError::NodeNotFound { id }.into(),
         ServiceNotFoundContext::Impact => ImpactError::NodeNotFound { id }.into(),
+        ServiceNotFoundContext::Emulate => EmulateError::NodeNotFound { id }.into(),
     }
 }
 
@@ -92,6 +95,10 @@ fn service_not_found(query: &str, ctx: ServiceNotFoundContext) -> AppError {
             query: query.to_string(),
         }
         .into(),
+        ServiceNotFoundContext::Emulate => EmulateError::ServiceNotFound {
+            query: query.to_string(),
+        }
+        .into(),
     }
 }
 
@@ -103,6 +110,11 @@ fn ambiguous_service(query: &str, candidates: String, ctx: ServiceNotFoundContex
         }
         .into(),
         ServiceNotFoundContext::Impact => ImpactError::AmbiguousService {
+            query: query.to_string(),
+            candidates,
+        }
+        .into(),
+        ServiceNotFoundContext::Emulate => EmulateError::AmbiguousService {
             query: query.to_string(),
             candidates,
         }

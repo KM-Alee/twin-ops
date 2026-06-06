@@ -156,7 +156,16 @@ pub fn render(result: &ScanResult) -> String {
 
     if result.warning_count > 0 {
         out.blank();
-        out.section(&format!("warnings ({})", result.warning_count));
+        let kind_count = result.warnings.len();
+        let section = if kind_count == 1 {
+            format!("warnings (1 kind, {} events)", result.warning_count)
+        } else {
+            format!(
+                "warnings ({kind_count} kinds, {} events)",
+                result.warning_count
+            )
+        };
+        out.section(&section);
         let warnings = &result.warnings;
         for (i, warning) in warnings.iter().enumerate() {
             let is_last = i + 1 == warnings.len();

@@ -84,12 +84,7 @@ pub(crate) fn persist_systemd_in_scan(
             super::scan_systemd_groups::EdgeObservationLink::AllIds(obs_ids),
             |existing| {
                 GraphEdge::observed_service_depends_on_declared(
-                    &source_id,
-                    &target_id,
-                    scan_time,
-                    existing,
-                    dep_key,
-                    unit_path,
+                    &source_id, &target_id, scan_time, existing, dep_key, unit_path,
                 )
             },
         )?;
@@ -100,4 +95,3 @@ pub(crate) fn persist_systemd_in_scan(
 
     Ok(units_seen)
 }
-

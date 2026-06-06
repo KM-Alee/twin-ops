@@ -5,8 +5,10 @@ pub mod graph_edge;
 pub mod graph_metadata;
 pub mod graph_node;
 pub mod id;
+pub mod impact_kind;
 pub mod node;
 pub mod risk;
+pub mod unknown_kind;
 
 pub use edge::{EdgeClass, EdgeId, EdgeKind, EdgeState};
 pub use error::{ConfigError, ParseError};
@@ -14,7 +16,12 @@ pub use graph_edge::{GraphEdge, GraphEdgeParts};
 pub use graph_metadata::GraphMetadata;
 pub use graph_node::{GraphNode, GraphNodeParts};
 pub use id::{CollectorName, ObservationId, TimestampNs};
+pub use impact_kind::DependentImpactKind;
 pub use node::{lexical_canonical, NodeId, NodeKind, NodeState};
-pub use risk::{EvidenceLabel, EvidenceStrength, RiskLevel};
+pub use risk::{
+    cap_dependent_evidence_score, EvidenceLabel, EvidenceStrength, RiskLevel,
+    EVIDENCE_CAP_INFERRED_ONLY, EVIDENCE_CAP_NO_OBSERVATIONS, EVIDENCE_CAP_WEAKENING_UNKNOWN,
+};
+pub use unknown_kind::UnknownKind;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

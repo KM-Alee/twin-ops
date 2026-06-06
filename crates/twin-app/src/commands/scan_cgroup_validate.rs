@@ -10,7 +10,9 @@ struct CgroupUnitLookup {
 }
 
 impl CgroupUnitLookup {
-    fn from_reader(reader: &dyn SystemdDBusReader) -> Result<Self, twin_collectors::SystemdDBusError> {
+    fn from_reader(
+        reader: &dyn SystemdDBusReader,
+    ) -> Result<Self, twin_collectors::SystemdDBusError> {
         let units = reader.list_units()?;
         let mut by_prefix: Vec<(String, String)> = units
             .into_iter()
@@ -23,9 +25,7 @@ impl CgroupUnitLookup {
 
     fn resolve(&self, cgroup_path: &str) -> Option<&str> {
         for (prefix, unit) in &self.by_prefix {
-            if cgroup_path == prefix.as_str()
-                || cgroup_path.starts_with(&format!("{prefix}/"))
-            {
+            if cgroup_path == prefix.as_str() || cgroup_path.starts_with(&format!("{prefix}/")) {
                 return Some(unit.as_str());
             }
         }

@@ -1,22 +1,39 @@
 use std::collections::HashSet;
 
-use twin_app::{ImpactEvidenceLine, ImpactResult};
+use twin_app::{ImpactDependent, ImpactEvidenceLine, ImpactResult};
 use twin_core::RiskLevel;
 
-use crate::output::format::{Lines, Status};
+use crate::output::format::{Lines, ScanFreshness, Status};
+use crate::output::sections::{
+    CONFIGURED_DEPENDENTS, DIRECT_DEPENDENTS_RUNTIME, EVIDENCE, EVIDENCE_STRENGTH, OWNED_BY, RISK,
+    SCAN_HEALTH, TARGET, UNKNOWNS,
+};
+use crate::output::unknowns::{group_unknown_refs, render_unknown_groups, split_scan_health};
 
 pub fn render(result: &ImpactResult) -> String {
+    render_with_scan(result, None)
+}
+
+pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> String {
     let mut out = Lines::new();
     out.title("twin impact");
     let status = impact_status(result);
+    out.status_row(status, "summary", &impact_summary(result));
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
     out.status_row(status, "view", "impact report");
     out.blank();
-    out.section("target");
-    out.tree_leaf(true, &result.target, &result.target_label);
+    out.section(TARGET);
+    out.tree_leaf(true, &result.target_label, &result.target);
     out.blank();
-    out.section("risk");
+    out.section(RISK);
     out.tree_leaf(false, "level", &result.risk.level.to_string());
-    out.tree_leaf(false, "evidence strength", &result.evidence_strength.label);
+    out.tree_leaf(false, EVIDENCE_STRENGTH, &result.evidence_strength.label);
     if result.risk.reasons.is_empty() {
         out.tree_leaf(true, "reason", "no scoring reasons recorded");
     } else {
@@ -27,54 +44,23 @@ pub fn render(result: &ImpactResult) -> String {
     }
     if !result.listener_owners.is_empty() {
         out.blank();
-        out.section("owned by");
+        out.section(OWNED_BY);
         for (i, owner) in result.listener_owners.iter().enumerate() {
             let is_last = i + 1 == result.listener_owners.len();
-            let detail = format!("{} {}  {}", owner.id, owner.label, owner.edge_class);
-            out.tree_leaf(is_last, "owner", &detail);
+            out.tree_leaf(
+                is_last,
+                &owner.label,
+                &format!("{} ({})", owner.id, owner.edge_class),
+            );
         }
     }
     out.blank();
-    out.section("direct dependents (runtime)");
-    if result.direct_dependents.is_empty() {
-        out.tree_leaf(true, "(none)", "no runtime dependents in graph");
-    } else {
-        let total = result.direct_dependents.len();
-        for (i, dependent) in result.direct_dependents.iter().enumerate() {
-            let is_last_dep = i + 1 == total;
-            out.tree_leaf(
-                !is_last_dep,
-                &dependent.id,
-                &format!(
-                    "{}  relationship: {} {} ({})",
-                    dependent.label,
-                    dependent.relationship,
-                    dependent.edge_class,
-                    dependent.impact_kind
-                ),
-            );
-            out.tree_leaf(is_last_dep, "reason", &dependent.reason);
-        }
-    }
+    out.section(DIRECT_DEPENDENTS_RUNTIME);
+    render_dependents(&mut out, &result.direct_dependents, true);
     if !result.configured_dependents.is_empty() {
         out.blank();
-        out.section("configured dependents (inactive)");
-        let total = result.configured_dependents.len();
-        for (i, dependent) in result.configured_dependents.iter().enumerate() {
-            let is_last_dep = i + 1 == total;
-            out.tree_leaf(
-                !is_last_dep,
-                &dependent.id,
-                &format!(
-                    "{}  relationship: {} {} ({})",
-                    dependent.label,
-                    dependent.relationship,
-                    dependent.edge_class,
-                    dependent.impact_kind
-                ),
-            );
-            out.tree_leaf(is_last_dep, "reason", &dependent.reason);
-        }
+        out.section(CONFIGURED_DEPENDENTS);
+        render_dependents(&mut out, &result.configured_dependents, true);
     }
     let evidence_lines: Vec<_> = if result.evidence.is_empty() {
         aggregate_dependent_evidence(result)
@@ -83,25 +69,16 @@ pub fn render(result: &ImpactResult) -> String {
     };
     if !evidence_lines.is_empty() {
         out.blank();
-        out.section("evidence");
+        out.section(EVIDENCE);
         for (i, line) in evidence_lines.iter().enumerate() {
             let is_last = i + 1 == evidence_lines.len();
             out.tree_leaf(is_last, &line.source, &line.statement);
         }
     }
-    let health: Vec<_> = result
-        .unknowns
-        .iter()
-        .filter(|u| u.kind == "scan_health")
-        .collect();
-    let unknowns: Vec<_> = result
-        .unknowns
-        .iter()
-        .filter(|u| u.kind != "scan_health")
-        .collect();
+    let (health, unknowns) = split_scan_health(&result.unknowns);
     if !health.is_empty() {
         out.blank();
-        out.section("scan health");
+        out.section(SCAN_HEALTH);
         for (i, note) in health.iter().enumerate() {
             let is_last = i + 1 == health.len();
             out.tree_leaf(is_last, "note", &note.detail);
@@ -109,13 +86,60 @@ pub fn render(result: &ImpactResult) -> String {
     }
     if !unknowns.is_empty() {
         out.blank();
-        out.section("unknowns");
-        for (i, unknown) in unknowns.iter().enumerate() {
-            let is_last = i + 1 == unknowns.len();
-            out.tree_leaf(is_last, &unknown.kind, &unknown.detail);
-        }
+        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
+        let title = if weakens {
+            format!("{UNKNOWNS} (weakens evidence)")
+        } else {
+            UNKNOWNS.to_string()
+        };
+        out.section(&title);
+        let grouped = group_unknown_refs(unknowns.iter().copied());
+        render_unknown_groups(&mut out, &grouped);
     }
     out.into_string()
+}
+
+fn impact_summary(result: &ImpactResult) -> String {
+    let mut parts = vec![
+        format!("{} risk", result.risk.level),
+        format!("{} runtime dependent(s)", result.direct_dependents.len()),
+    ];
+    if !result.configured_dependents.is_empty() {
+        parts.push(format!(
+            "{} configured-only dependent(s)",
+            result.configured_dependents.len()
+        ));
+    }
+    if result.unknowns.iter().any(|u| u.weakens_evidence) {
+        parts.push("scan degraded".to_string());
+    }
+    parts.join(" · ")
+}
+
+fn render_dependents(out: &mut Lines, dependents: &[ImpactDependent], allow_none: bool) {
+    if dependents.is_empty() {
+        if allow_none {
+            out.tree_leaf(true, "(none)", "no runtime dependents in graph");
+        }
+        return;
+    }
+    let total = dependents.len();
+    for (i, dependent) in dependents.iter().enumerate() {
+        let is_last_dep = i + 1 == total;
+        let detail = format!(
+            "relationship: {} {} ({})",
+            dependent.relationship, dependent.edge_class, dependent.impact_kind
+        );
+        let evidence_count = dependent.evidence.len();
+        let has_children = true;
+        out.tree_branch("", !is_last_dep || has_children, &dependent.label, &detail);
+        let indent = Lines::child_indent("", is_last_dep);
+        out.tree_branch(&indent, evidence_count == 0, "reason", &dependent.reason);
+        for (j, line) in dependent.evidence.iter().enumerate() {
+            let is_last_ev = j + 1 == evidence_count;
+            out.tree_branch(&indent, is_last_ev, "evidence", &line.statement);
+        }
+    }
 }
 
 fn aggregate_dependent_evidence(result: &ImpactResult) -> Vec<&ImpactEvidenceLine> {
