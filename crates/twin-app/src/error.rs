@@ -140,4 +140,8 @@ pub enum EmulateError {
     AmbiguousService { query: String, candidates: String },
     #[error("unsupported emulation target kind: {kind}; restart emulation requires a service")]
     UnsupportedTarget { kind: String },
+    #[error("delete emulation requires a file path; got relative path `{value}`")]
+    RelativeDeletePath { value: String },
+    #[error("delete emulation requires a file target; got `{value}` ({reason})")]
+    InvalidDeleteTarget { value: String, reason: String },
 }

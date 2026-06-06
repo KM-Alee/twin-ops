@@ -62,6 +62,7 @@ fn graph_at(
             Some(NodeKind::Process) => process_neighborhood(&store, target),
             Some(NodeKind::Port) => port_neighborhood(&store, target),
             Some(NodeKind::UnixSocket) => unix_socket_neighborhood(&store, target),
+            Some(NodeKind::File) => file_neighborhood(&store, target),
             Some(kind) => Err(AppError::UnsupportedGraphKind {
                 kind: kind.to_string(),
             }),
@@ -181,6 +182,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     let mut dependencies = Vec::new();
     let mut dependents = Vec::new();
     let mut configured_dependents = Vec::new();
+    let mut configured_files = Vec::new();
     let mut socket_activation = Vec::new();
     let mut evidence = Vec::new();
     let mut seen_evidence = HashSet::new();
@@ -190,6 +192,31 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
         .map_err(GraphError::Store)?;
     for row in outgoing {
         let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() == EdgeKind::ConfiguredBy && edge.class() == EdgeClass::Observed {
+            let peer = edge.to();
+            let peer_node = store
+                .get_node_typed(peer)
+                .map_err(GraphError::Store)?
+                .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
+            let obs_links = store
+                .list_observations_for_edge(edge.id().as_str())
+                .map_err(GraphError::Store)?;
+            let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
+            collect_config_file_evidence(
+                store,
+                &observation_ids,
+                &mut evidence,
+                &mut seen_evidence,
+            );
+            configured_files.push(GraphOwnedNode {
+                id: peer.as_str().to_string(),
+                label: peer_node.label().to_string(),
+                edge_class: edge.class().to_string(),
+                tag: None,
+                observation_ids,
+            });
+            continue;
+        }
         if edge.kind() == EdgeKind::ConnectsTo && edge.class() == EdgeClass::Inferred {
             let peer = edge.to();
             let peer_node = store
@@ -370,6 +397,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     dependencies.sort_by_key(|n| n.id.clone());
     dependents.sort_by_key(|n| n.id.clone());
     configured_dependents.sort_by_key(|n| n.id.clone());
+    configured_files.sort_by_key(|n| n.id.clone());
     socket_activation.sort_by_key(|n| n.id.clone());
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
@@ -385,8 +413,57 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
         dependents,
         socket_activation,
         configured_dependents,
+        configured_files,
         evidence,
     }))
+}
+
+fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::File {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+
+    let summary = node_summary(node.id(), node.label());
+    let mut configures = Vec::new();
+    let mut evidence = Vec::new();
+    let mut seen_evidence = HashSet::new();
+
+    for row in store
+        .list_edges_to(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::ConfiguredBy {
+            continue;
+        }
+        let peer = edge.from();
+        let peer_node = store
+            .get_node_typed(peer)
+            .map_err(GraphError::Store)?
+            .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
+        let obs_links = store
+            .list_observations_for_edge(edge.id().as_str())
+            .map_err(GraphError::Store)?;
+        let observation_ids: Vec<String> = obs_links.into_iter().map(|(id, _)| id).collect();
+        collect_config_file_evidence(store, &observation_ids, &mut evidence, &mut seen_evidence);
+        configures.push(GraphOwnedNode {
+            id: peer.as_str().to_string(),
+            label: peer_node.label().to_string(),
+            edge_class: edge.class().to_string(),
+            tag: None,
+            observation_ids,
+        });
+    }
+    configures.sort_by_key(|n| n.id.clone());
+    evidence.sort_by(|a, b| a.source.cmp(&b.source));
+
+    Ok(GraphResult::file(summary, configures, evidence))
 }
 
 fn is_socket_activation_edge(edge: &GraphEdge) -> bool {
@@ -626,6 +703,48 @@ const CONNECT_DEPENDENCY_RELATIONSHIP: &str =
     "process connection observed; service dependency inferred from listener port match";
 const CONNECT_DEPENDENCY_UNIX_RELATIONSHIP: &str =
     "process connection observed; service dependency inferred from listener path match";
+
+fn collect_config_file_evidence(
+    store: &Store,
+    observation_ids: &[String],
+    evidence: &mut Vec<GraphEvidenceLine>,
+    seen: &mut HashSet<String>,
+) {
+    collect_observation_evidence(
+        store,
+        observation_ids,
+        evidence,
+        seen,
+        config_file_evidence_line,
+    );
+}
+
+fn config_file_evidence_line(obs: &Observation) -> Option<GraphEvidenceLine> {
+    let path = obs.metadata().get("path").and_then(|v| v.as_str())?;
+    let service = obs.metadata().get("service").and_then(|v| v.as_str())?;
+    let source_key = obs
+        .metadata()
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("systemd_unit_file");
+    let source = match source_key {
+        "systemd_drop_in" => twin_collectors::ConfigFileSource::SystemdDropIn,
+        "known_service_config_path" => twin_collectors::ConfigFileSource::KnownServiceConfigPath,
+        _ => twin_collectors::ConfigFileSource::SystemdUnitFile,
+    };
+    let statement = super::scan_config_files::config_file_evidence_statement(source, path, service);
+    let strength = match obs.confidence_hint() {
+        twin_observation::ConfidenceHint::High => "strong",
+        twin_observation::ConfidenceHint::Moderate => "moderate",
+        twin_observation::ConfidenceHint::Low => "weak",
+    };
+    Some(GraphEvidenceLine {
+        source: obs.source().to_string(),
+        statement,
+        strength: strength.to_string(),
+        relationship: "service configured by file".to_string(),
+    })
+}
 
 fn collect_systemd_unit_evidence(
     store: &Store,

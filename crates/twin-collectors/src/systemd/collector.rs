@@ -10,6 +10,7 @@ use crate::systemd::unit_parse::socket_activation_target;
 use crate::systemd::unit_paths::{
     default_search_paths, discover_units, EffectiveUnit, StdUnitFileReader, UnitFileReader,
 };
+
 use crate::systemd::warning::SystemdWarning;
 use crate::CollectorError;
 
@@ -18,6 +19,7 @@ pub const COLLECTOR_NAME: &str = "systemd_unit";
 pub struct SystemdUnitBatch {
     observations: Vec<RawObservation>,
     warnings: Vec<SystemdWarning>,
+    units: Vec<EffectiveUnit>,
     units_scanned: usize,
     dependency_count: usize,
     started_at: TimestampNs,
@@ -31,6 +33,10 @@ impl SystemdUnitBatch {
 
     pub fn warnings(&self) -> &[SystemdWarning] {
         &self.warnings
+    }
+
+    pub fn units(&self) -> &[EffectiveUnit] {
+        &self.units
     }
 
     pub fn units_scanned(&self) -> usize {
@@ -119,10 +125,12 @@ impl<R: UnitFileReader> SystemdUnitCollector<R> {
             }
         }
 
+        let units_scanned = units.len();
         Ok(SystemdUnitBatch {
             observations,
             warnings,
-            units_scanned: units.len(),
+            units,
+            units_scanned,
             dependency_count,
             started_at,
             ended_at: TimestampNs::now(),

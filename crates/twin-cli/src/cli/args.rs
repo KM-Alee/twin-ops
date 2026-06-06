@@ -84,6 +84,8 @@ pub struct EmulateArgs {
 pub enum EmulateActionArgs {
     #[command(about = "Hypothetically restart a service (no action performed)")]
     Restart(EmulateRestartArgs),
+    #[command(about = "Hypothetically delete a config file (no action performed)")]
+    Delete(EmulateDeleteArgs),
 }
 
 #[derive(Args)]
@@ -94,6 +96,18 @@ pub struct EmulateRestartArgs {
     #[arg(
         value_name = "TARGET",
         help = "Service target (e.g. postgresql, service:postgresql.service)"
+    )]
+    pub target: String,
+}
+
+#[derive(Args)]
+pub struct EmulateDeleteArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "PATH_OR_FILE_ID",
+        help = "Absolute file path or file: node id (e.g. /etc/nginx/nginx.conf)"
     )]
     pub target: String,
 }

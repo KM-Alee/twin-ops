@@ -39,10 +39,14 @@ fn fixture_proc(home: &support::IsolatedHome) -> PathBuf {
 
 #[test]
 fn scan_in_persists_process_nodes_and_parent_edges() {
+    let _env = support::lock_scan_env();
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
+    let empty_host = tempfile::TempDir::new().expect("empty host root");
+    support::set_host_root(empty_host.path());
     let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    support::clear_scan_env();
     assert_eq!(result.process_count, 2);
     assert_eq!(result.parent_edge_count, 1);
     let store = Store::open(&home.layout.db_file()).expect("open");
@@ -785,29 +789,16 @@ fn write_systemd_fixture(dir: &std::path::Path) {
     .expect("containerd.service");
 }
 
-struct SystemdUnitRootGuard;
-
-impl Drop for SystemdUnitRootGuard {
-    fn drop(&mut self) {
-        // SAFETY: test-only env override; cleared so parallel tests do not inherit it.
-        unsafe {
-            std::env::remove_var("TWIN_SYSTEMD_UNIT_ROOT");
-            std::env::remove_var("TWIN_SYSTEMD_CGROUP_MAP");
-        }
-    }
-}
-
 fn scan_with_systemd(
     home: &IsolatedHome,
     proc: &std::path::Path,
     systemd: &std::path::Path,
 ) -> twin_app::ScanResult {
-    let _guard = SystemdUnitRootGuard;
-    // SAFETY: test-only env override for fixture unit directory.
-    unsafe {
-        std::env::set_var("TWIN_SYSTEMD_UNIT_ROOT", systemd);
-    }
-    twin_app::scan_in(&home.layout, ScanRequest::default(), proc).expect("scan")
+    let _env = support::lock_scan_env();
+    support::set_systemd_unit_root(systemd);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), proc).expect("scan");
+    support::clear_scan_env();
+    result
 }
 
 #[test]
@@ -1163,16 +1154,17 @@ fn scan_in_applies_cgroup_correction_from_dbus_fixture() {
     );
     let systemd = home.layout.data_dir.join("fixture-systemd-cgroup-correct");
     std::fs::create_dir_all(&systemd).expect("systemd");
-    let _unit_guard = SystemdUnitRootGuard;
-    // SAFETY: test-only env overrides for fixture isolation.
+    let _env = support::lock_scan_env();
+    support::set_systemd_unit_root(&systemd);
+    // SAFETY: test-only env override for fixture isolation.
     unsafe {
-        std::env::set_var("TWIN_SYSTEMD_UNIT_ROOT", &systemd);
         std::env::set_var(
             "TWIN_SYSTEMD_CGROUP_MAP",
             r#"{"/system.slice/wrong.service":"correct.service"}"#,
         );
     }
     let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    support::clear_scan_env();
     assert!(result.cgroup_correction_count >= 1);
     let store = Store::open(&home.layout.db_file()).expect("open");
     assert!(store

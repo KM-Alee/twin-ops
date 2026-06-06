@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphListResult, GraphNodeResult, GraphOwnedNode, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult, GraphUnixSocketResult,
+    GraphFileResult, GraphListResult, GraphNodeResult, GraphOwnedNode, GraphParentEdge,
+    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
 use twin_app::GraphEvidenceLine;
@@ -20,6 +20,7 @@ pub fn render_with_scan(result: &GraphResult, scan: Option<ScanFreshness>) -> St
         GraphResult::Service(service) => render_service(service, scan),
         GraphResult::Port(port) => render_port(port, scan),
         GraphResult::UnixSocket(unix) => render_unix_socket(unix, scan),
+        GraphResult::File(file) => render_file(file, scan),
     }
 }
 
@@ -198,6 +199,7 @@ fn render_service(service: &GraphServiceResult, scan: Option<ScanFreshness>) -> 
         "depended on by (configured inactive)",
         service.configured_dependents.iter(),
     );
+    render_dependency_section(&mut lines, "configured by", service.configured_files.iter());
     append_evidence_lines(&mut lines, &service.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
@@ -218,6 +220,16 @@ fn render_dependency_section<'a>(
         let branch = if is_last { "└──" } else { "├──" };
         lines.push(format!("{branch} {}", format_peer(&dep.id, &dep.label)));
     }
+}
+
+fn render_file(file: &GraphFileResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("file neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", file.file.id, file.file.label));
+    lines.push(String::new());
+    render_dependency_section(&mut lines, "configures", file.configures.iter());
+    append_evidence_lines(&mut lines, &file.evidence);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 
 fn render_port(port: &GraphPortResult, scan: Option<ScanFreshness>) -> String {

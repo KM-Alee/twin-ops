@@ -1,6 +1,42 @@
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use tempfile::TempDir;
+
+static SCAN_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+pub struct ScanEnvGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+pub fn lock_scan_env() -> ScanEnvGuard {
+    ScanEnvGuard {
+        _lock: SCAN_ENV_LOCK.lock().expect("scan env lock"),
+    }
+}
+
+pub fn set_systemd_unit_root(root: &Path) {
+    // SAFETY: guarded by SCAN_ENV_LOCK in tests.
+    unsafe {
+        std::env::set_var("TWIN_SYSTEMD_UNIT_ROOT", root);
+    }
+}
+
+pub fn set_host_root(root: &Path) {
+    // SAFETY: guarded by SCAN_ENV_LOCK in tests.
+    unsafe {
+        std::env::set_var("TWIN_HOST_ROOT", root);
+    }
+}
+
+pub fn clear_scan_env() {
+    // SAFETY: guarded by SCAN_ENV_LOCK in tests.
+    unsafe {
+        std::env::remove_var("TWIN_SYSTEMD_UNIT_ROOT");
+        std::env::remove_var("TWIN_HOST_ROOT");
+        std::env::remove_var("TWIN_SYSTEMD_CGROUP_MAP");
+    }
+}
 use twin_app::paths::TwinLayout;
 
 pub struct IsolatedHome {

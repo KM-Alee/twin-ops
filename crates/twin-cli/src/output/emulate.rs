@@ -5,9 +5,10 @@ use twin_core::RiskLevel;
 
 use crate::output::format::{Lines, ScanFreshness, Status};
 use crate::output::sections::{
-    CONFIGURED_CONTEXT, EMULATION_SCORING_NOTE, EVIDENCE_STRENGTH, OVERLAY, OVERLAY_SERVICE,
-    OVERLAY_TCP_LISTENERS, OVERLAY_UNIX_LISTENERS, RISK, SAFETY, SCAN_HEALTH, TARGET,
-    TRANSIENT_IMPACT, UNKNOWNS,
+    CONFIGURED_CONTEXT, EMULATION_SCORING_NOTE, EVIDENCE, EVIDENCE_STRENGTH, OVERLAY,
+    OVERLAY_SERVICE, OVERLAY_TCP_LISTENERS, OVERLAY_UNIX_LISTENERS, PERSISTENT_IMPACT,
+    RESTART_IMPACT, RISK, RUNTIME_IMPACT, SAFETY, SCAN_HEALTH, TARGET, TRANSIENT_IMPACT, UNKNOWNS,
+    UNKNOWN_IMPACT,
 };
 use crate::output::unknowns::{group_unknown_refs, render_unknown_groups, split_scan_health};
 
@@ -16,6 +17,9 @@ pub fn render(result: &EmulationResult) -> String {
 }
 
 pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    if result.action == "delete" {
+        return render_delete_with_scan(result, scan);
+    }
     let mut out = Lines::new();
     out.title(&format!("twin emulate restart {}", result.target_label));
     let status = emulate_status(result);
@@ -71,6 +75,84 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     out.section(SAFETY);
     out.tree_leaf(true, "status", &result.safety_statement);
     out.into_string()
+}
+
+fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title(&format!("Emulation: delete {}", result.target));
+    let status = emulate_status(result);
+    out.status_row(status, "summary", &delete_emulate_summary(result));
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.status_row(status, "view", "emulation report");
+    out.blank();
+    out.section(RISK);
+    out.tree_leaf(false, "level", &result.risk.level.to_string());
+    out.tree_leaf(true, EVIDENCE_STRENGTH, &result.evidence_strength.label);
+    render_delete_overlay(&mut out, result);
+    render_impact_section(&mut out, RUNTIME_IMPACT, &result.runtime_impacts);
+    render_impact_section(&mut out, RESTART_IMPACT, &result.restart_impacts);
+    render_impact_section(&mut out, PERSISTENT_IMPACT, &result.persistent_impacts);
+    render_impact_section(&mut out, UNKNOWN_IMPACT, &result.unknown_impacts);
+    if !result.evidence_lines.is_empty() {
+        out.blank();
+        out.section(EVIDENCE);
+        for (i, line) in result.evidence_lines.iter().enumerate() {
+            let is_last = i + 1 == result.evidence_lines.len();
+            out.tree_leaf(is_last, "source", line);
+        }
+    }
+    let (health, unknowns) = split_scan_health(&result.unknowns);
+    if !health.is_empty() {
+        out.blank();
+        out.section(SCAN_HEALTH);
+        for (i, note) in health.iter().enumerate() {
+            let is_last = i + 1 == health.len();
+            out.tree_leaf(is_last, "note", &note.detail);
+        }
+    }
+    if !unknowns.is_empty() {
+        out.blank();
+        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
+        let title = if weakens {
+            format!("{UNKNOWNS} (weakens evidence)")
+        } else {
+            UNKNOWNS.to_string()
+        };
+        out.section(&title);
+        let grouped = group_unknown_refs(unknowns.iter().copied());
+        render_unknown_groups(&mut out, &grouped);
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", &result.general_safety_statement);
+    out.into_string()
+}
+
+fn delete_emulate_summary(result: &EmulationResult) -> String {
+    format!(
+        "{} risk · {} configured service(s)",
+        result.risk.level,
+        result.restart_impacts.len()
+    )
+}
+
+fn render_delete_overlay(out: &mut Lines, result: &EmulationResult) {
+    if result.overlay.unavailable_nodes.is_empty() {
+        return;
+    }
+    out.blank();
+    out.section(OVERLAY);
+    for (i, node) in result.overlay.unavailable_nodes.iter().enumerate() {
+        let is_last = i + 1 == result.overlay.unavailable_nodes.len();
+        out.tree_leaf(is_last, &node.label, "hypothetically deleted");
+    }
 }
 
 fn emulate_summary(result: &EmulationResult) -> String {

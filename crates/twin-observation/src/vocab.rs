@@ -14,6 +14,7 @@ pub enum ObservationSource {
     SystemdUnitFile,
     SystemdDBus,
     SystemdEnableSymlink,
+    ConfigFileDiscovery,
 }
 
 impl fmt::Display for ObservationSource {
@@ -26,6 +27,7 @@ impl fmt::Display for ObservationSource {
             Self::SystemdUnitFile => "systemd_unit_file",
             Self::SystemdDBus => "systemd_dbus",
             Self::SystemdEnableSymlink => "systemd_enable_symlink",
+            Self::ConfigFileDiscovery => "config_file_discovery",
         })
     }
 }
@@ -42,6 +44,7 @@ impl FromStr for ObservationSource {
             "systemd_unit_file" => Ok(Self::SystemdUnitFile),
             "systemd_dbus" => Ok(Self::SystemdDBus),
             "systemd_enable_symlink" => Ok(Self::SystemdEnableSymlink),
+            "config_file_discovery" => Ok(Self::ConfigFileDiscovery),
             other => Err(ParseError::Enum {
                 kind: "ObservationSource",
                 value: other.to_string(),
@@ -69,6 +72,8 @@ pub enum ObservationKind {
     SystemdSocketSeen,
     SystemdSocketActivates,
     SystemdCgroupCorrection,
+    ConfigFileSeen,
+    ServiceConfiguredByFile,
 }
 
 impl fmt::Display for ObservationKind {
@@ -91,6 +96,8 @@ impl fmt::Display for ObservationKind {
             Self::SystemdSocketSeen => "systemd_socket_seen",
             Self::SystemdSocketActivates => "systemd_socket_activates",
             Self::SystemdCgroupCorrection => "systemd_cgroup_correction",
+            Self::ConfigFileSeen => "config_file_seen",
+            Self::ServiceConfiguredByFile => "service_configured_by_file",
         })
     }
 }
@@ -117,6 +124,8 @@ impl FromStr for ObservationKind {
             "systemd_socket_seen" => Ok(Self::SystemdSocketSeen),
             "systemd_socket_activates" => Ok(Self::SystemdSocketActivates),
             "systemd_cgroup_correction" => Ok(Self::SystemdCgroupCorrection),
+            "config_file_seen" => Ok(Self::ConfigFileSeen),
+            "service_configured_by_file" => Ok(Self::ServiceConfiguredByFile),
             other => Err(ParseError::Enum {
                 kind: "ObservationKind",
                 value: other.to_string(),

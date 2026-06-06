@@ -46,6 +46,12 @@ pub struct EmulationResult {
     pub overlay: EmulationOverlaySummary,
     pub transient_impacts: Vec<EmulationImpact>,
     pub configured_impacts: Vec<EmulationImpact>,
+    pub runtime_impacts: Vec<EmulationImpact>,
+    pub restart_impacts: Vec<EmulationImpact>,
+    pub persistent_impacts: Vec<EmulationImpact>,
+    pub unknown_impacts: Vec<EmulationImpact>,
+    pub evidence_lines: Vec<String>,
+    pub general_safety_statement: String,
     pub unknowns: Vec<ImpactUnknown>,
 }
 
@@ -108,6 +114,52 @@ impl EmulationResult {
                     evidence: i.evidence,
                 })
                 .collect(),
+            runtime_impacts: report
+                .runtime_impacts
+                .into_iter()
+                .map(|i| EmulationImpact {
+                    id: i.id,
+                    label: i.label,
+                    statement: i.statement,
+                    path: i.path,
+                    evidence: i.evidence,
+                })
+                .collect(),
+            restart_impacts: report
+                .restart_impacts
+                .into_iter()
+                .map(|i| EmulationImpact {
+                    id: i.id,
+                    label: i.label,
+                    statement: i.statement,
+                    path: i.path,
+                    evidence: i.evidence,
+                })
+                .collect(),
+            persistent_impacts: report
+                .persistent_impacts
+                .into_iter()
+                .map(|i| EmulationImpact {
+                    id: i.id,
+                    label: i.label,
+                    statement: i.statement,
+                    path: i.path,
+                    evidence: i.evidence,
+                })
+                .collect(),
+            unknown_impacts: report
+                .unknown_impacts
+                .into_iter()
+                .map(|i| EmulationImpact {
+                    id: i.id,
+                    label: i.label,
+                    statement: i.statement,
+                    path: i.path,
+                    evidence: i.evidence,
+                })
+                .collect(),
+            evidence_lines: report.evidence_lines,
+            general_safety_statement: report.general_safety_statement,
             unknowns,
         }
     }

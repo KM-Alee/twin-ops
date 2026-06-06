@@ -211,6 +211,7 @@ fn graph_service_evidence_is_deduped() {
         dependents: vec![],
         socket_activation: vec![],
         configured_dependents: vec![],
+        configured_files: vec![],
         evidence: vec![
             GraphEvidenceLine {
                 source: "/proc/net/unix:162".to_string(),
@@ -350,6 +351,7 @@ fn graph_service_render_declared_dependency() {
         dependents: vec![],
         socket_activation: vec![],
         configured_dependents: vec![],
+        configured_files: vec![],
         evidence: vec![],
     });
     let text = output::graph::render(&result);
@@ -404,6 +406,7 @@ fn graph_service_render_inferred_ownership() {
         dependents: vec![],
         socket_activation: vec![],
         configured_dependents: vec![],
+        configured_files: vec![],
         evidence: vec![GraphEvidenceLine {
             source: "/proc/1432/cgroup".to_string(),
             statement: "contains /system.slice/nginx.service".to_string(),
@@ -633,6 +636,67 @@ fn sample_emulation_result() -> EmulationResult {
             evidence: vec!["active connection observed".to_string()],
         }],
         configured_impacts: vec![],
+        runtime_impacts: vec![],
+        restart_impacts: vec![],
+        persistent_impacts: vec![],
+        unknown_impacts: vec![],
+        evidence_lines: vec![],
+        general_safety_statement: "No action was performed.".to_string(),
+        unknowns: vec![],
+    }
+}
+
+fn sample_delete_emulation_result() -> EmulationResult {
+    EmulationResult {
+        action: "delete".to_string(),
+        target: "file:/etc/nginx/nginx.conf".to_string(),
+        target_label: "/etc/nginx/nginx.conf".to_string(),
+        action_performed: false,
+        safety_statement: "No file was deleted.".to_string(),
+        general_safety_statement: "No action was performed.".to_string(),
+        risk: twin_app::RiskAssessment {
+            level: twin_core::RiskLevel::Critical,
+            reasons: vec!["one service is configured by this file".to_string()],
+        },
+        evidence_strength: twin_app::EvidenceStrengthView {
+            score: 70,
+            label: "moderate".to_string(),
+        },
+        overlay: twin_app::EmulationOverlaySummary {
+            unavailable_nodes: vec![EmulationOverlayNode {
+                id: "file:/etc/nginx/nginx.conf".to_string(),
+                label: "/etc/nginx/nginx.conf".to_string(),
+                reason: "hypothetically deleted".to_string(),
+            }],
+            interrupted_relationships: vec![],
+        },
+        transient_impacts: vec![],
+        configured_impacts: vec![],
+        runtime_impacts: vec![EmulationImpact {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+            statement: "Low immediate impact: running service is not assumed to reread /etc/nginx/nginx.conf immediately".to_string(),
+            path: "service:nginx.service configured_by file:/etc/nginx/nginx.conf".to_string(),
+            evidence: vec![],
+        }],
+        restart_impacts: vec![EmulationImpact {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+            statement: "May fail to reload or restart without /etc/nginx/nginx.conf".to_string(),
+            path: "service:nginx.service configured_by file:/etc/nginx/nginx.conf".to_string(),
+            evidence: vec![],
+        }],
+        persistent_impacts: vec![EmulationImpact {
+            id: "file:/etc/nginx/nginx.conf".to_string(),
+            label: "/etc/nginx/nginx.conf".to_string(),
+            statement: "Missing file remains a risk until restored".to_string(),
+            path: String::new(),
+            evidence: vec![],
+        }],
+        unknown_impacts: vec![],
+        evidence_lines: vec![
+            "known config path /etc/nginx/nginx.conf was discovered for nginx.service".to_string(),
+        ],
         unknowns: vec![],
     }
 }
@@ -662,6 +726,28 @@ fn emulate_restart_output_omits_empty_sections_cleanly() {
     assert!(!text.contains("configured context"));
     assert!(!text.contains("unknowns"));
     assert!(text.contains("No action was performed."));
+}
+
+#[test]
+#[test]
+fn emulate_delete_output_has_runtime_restart_persistent_and_safety() {
+    let text = output::emulate::render(&sample_delete_emulation_result());
+    assert!(text.contains("Emulation: delete"));
+    assert!(text.contains("runtime impact"));
+    assert!(text.contains("restart impact"));
+    assert!(text.contains("persistent impact"));
+    assert!(text.contains("No file was deleted."));
+    assert!(text.contains("No action was performed."));
+}
+
+#[test]
+fn emulate_delete_json_contains_action_performed_false() {
+    let json = output::json::render(&sample_delete_emulation_result()).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["action_performed"], false);
+    assert_eq!(value["action"], "delete");
+    assert!(value.get("runtime_impacts").is_some());
+    assert!(value.get("restart_impacts").is_some());
 }
 
 #[test]

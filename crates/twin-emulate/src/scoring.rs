@@ -1,6 +1,8 @@
 use twin_core::{cap_dependent_evidence_score, EvidenceStrength, RiskLevel};
 
-use crate::input::{EmulationDependent, EmulationUnknown};
+use crate::input::{
+    EmulationConfiguredService, EmulationDependent, EmulationEvidenceLine, EmulationUnknown,
+};
 
 const RESTART_RISK_MEDIUM_MAX: usize = 2;
 
@@ -80,5 +82,77 @@ pub fn score_restart_evidence(
         only_inferred,
         unknowns.iter().any(|u| u.weakens_evidence),
         !runtime_dependents.is_empty(),
+    )
+}
+
+pub fn score_delete_risk(
+    configured_services: &[EmulationConfiguredService],
+    file_in_graph: bool,
+    file_exists: bool,
+    unknowns: &[EmulationUnknown],
+) -> (RiskLevel, Vec<String>) {
+    let significant_unknowns = unknowns.iter().any(|u| u.weakens_evidence);
+    let mut reasons = Vec::new();
+    let count = configured_services.len();
+
+    let level = match count {
+        0 if !file_in_graph => {
+            reasons.push("target file is not in the graph".to_string());
+            if significant_unknowns {
+                reasons.push(REASON_COVERAGE_GAPS.to_string());
+            }
+            RiskLevel::Unknown
+        }
+        0 => {
+            reasons.push("no configured services were found for this file".to_string());
+            if !file_exists {
+                reasons.push("file existence could not be confirmed".to_string());
+            }
+            if significant_unknowns {
+                reasons.push(REASON_COVERAGE_GAPS.to_string());
+            }
+            RiskLevel::Low
+        }
+        1 => {
+            reasons.push("one service is configured by this file".to_string());
+            RiskLevel::High
+        }
+        _ => {
+            reasons.push(format!("{count} services are configured by this file"));
+            RiskLevel::Critical
+        }
+    };
+
+    if count == 1 && configured_services.iter().any(|s| !s.evidence.is_empty()) {
+        reasons.push("restart impact may be critical for configured service".to_string());
+        if level == RiskLevel::High {
+            return (RiskLevel::Critical, reasons);
+        }
+    }
+
+    (level, reasons)
+}
+
+pub fn score_delete_evidence(
+    configured_services: &[EmulationConfiguredService],
+    evidence: &[EmulationEvidenceLine],
+    unknowns: &[EmulationUnknown],
+) -> EvidenceStrength {
+    let mut best = 0u8;
+    for line in evidence {
+        best = best.max(line.strength_score);
+    }
+    for service in configured_services {
+        for line in &service.evidence {
+            best = best.max(line.strength_score);
+        }
+    }
+    let has_links = !configured_services.is_empty() || !evidence.is_empty();
+    cap_dependent_evidence_score(
+        best,
+        has_links,
+        false,
+        unknowns.iter().any(|u| u.weakens_evidence),
+        has_links,
     )
 }

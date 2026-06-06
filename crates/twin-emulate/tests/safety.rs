@@ -12,11 +12,18 @@ const FORBIDDEN: &[&str] = &[
     "StartUnit",
     "StopUnit",
     "RestartUnit",
+    "remove_file",
+    "remove_dir",
+    "unlink(",
+    "rename(",
+    "set_permissions",
+    "rm ",
 ];
 
 const SCAN_ROOTS: &[&str] = &[
     "src",
     "../twin-app/src/commands/emulate.rs",
+    "../twin-app/src/commands/scan_config_files.rs",
     "../twin-cli/src/cli/emulate.rs",
     "../twin-cli/src/main.rs",
     "../twin-cli/src/output/emulate.rs",

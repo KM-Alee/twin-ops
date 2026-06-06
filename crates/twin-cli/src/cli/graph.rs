@@ -35,6 +35,9 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
 }
 
 fn parse_positional(value: &str) -> Result<GraphQuery, AppError> {
+    if value.starts_with('/') {
+        return Ok(GraphQuery::Node(NodeId::file(value)));
+    }
     if value.starts_with("port:tcp:") || value.starts_with("unix:") {
         let id = NodeId::from_str(value).map_err(|source| AppError::InvalidGraphTarget {
             value: value.to_string(),

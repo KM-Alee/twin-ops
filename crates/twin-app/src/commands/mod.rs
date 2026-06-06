@@ -7,6 +7,7 @@ pub mod init;
 mod resolve_service;
 pub mod scan;
 mod scan_cgroup_validate;
+mod scan_config_files;
 pub(crate) mod scan_quality;
 mod scan_systemd;
 mod scan_systemd_groups;

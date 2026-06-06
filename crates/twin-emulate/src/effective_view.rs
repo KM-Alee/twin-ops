@@ -50,6 +50,13 @@ impl<'a> EffectiveGraphView<'a> {
             .is_some_and(|s| s == OverlayNodeState::TemporarilyUnavailable)
     }
 
+    pub fn is_hypothetically_deleted(&self, node_id: &NodeId) -> bool {
+        self.node_override_map
+            .get(node_id.as_str())
+            .copied()
+            .is_some_and(|s| s == OverlayNodeState::HypotheticallyDeleted)
+    }
+
     pub fn interrupted_edge(&self, edge_id: &EdgeId) -> Option<&InterruptedRelationship> {
         self.interrupted_map.get(edge_id.as_str()).copied()
     }

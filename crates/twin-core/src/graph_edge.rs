@@ -123,6 +123,39 @@ impl GraphEdge {
         }
     }
 
+    pub fn observed_service_configured_by_file(
+        service: &NodeId,
+        file: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        source: &str,
+        path: &str,
+    ) -> Self {
+        let kind = EdgeKind::ConfiguredBy;
+        let id = EdgeId::new(service, kind, file);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "source": source,
+            "path": path,
+        })
+        .to_string();
+        Self {
+            id,
+            from: service.clone(),
+            to: file.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
     pub fn observed_parent(
         parent: &NodeId,
         child: &NodeId,

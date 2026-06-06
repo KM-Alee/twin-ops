@@ -47,4 +47,10 @@ pub struct EmulationDomainReport {
     pub overlay_summary: EmulationOverlaySummary,
     pub transient_impacts: Vec<EmulationImpact>,
     pub configured_impacts: Vec<EmulationImpact>,
+    pub runtime_impacts: Vec<EmulationImpact>,
+    pub restart_impacts: Vec<EmulationImpact>,
+    pub persistent_impacts: Vec<EmulationImpact>,
+    pub unknown_impacts: Vec<EmulationImpact>,
+    pub evidence_lines: Vec<String>,
+    pub general_safety_statement: String,
 }

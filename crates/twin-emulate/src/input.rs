@@ -53,3 +53,21 @@ pub struct RestartServiceInput {
     pub configured_dependents: Vec<EmulationDependent>,
     pub unknowns: Vec<EmulationUnknown>,
 }
+
+#[derive(Debug, Clone)]
+pub struct EmulationConfiguredService {
+    pub id: NodeId,
+    pub label: String,
+    pub file_id: NodeId,
+    pub evidence: Vec<EmulationEvidenceLine>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteFileInput {
+    pub target: EmulationNode,
+    pub configured_services: Vec<EmulationConfiguredService>,
+    pub evidence: Vec<EmulationEvidenceLine>,
+    pub unknowns: Vec<EmulationUnknown>,
+    pub file_in_graph: bool,
+    pub file_exists: bool,
+}

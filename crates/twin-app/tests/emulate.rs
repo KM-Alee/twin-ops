@@ -3,7 +3,7 @@ mod support;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use twin_app::{EmulateRequest, InitRequest, ScanRequest};
+use twin_app::{EmulateActionRequest, EmulateRequest, InitRequest, ScanRequest};
 use twin_core::{DependentImpactKind, NodeId, RiskLevel, UnknownKind};
 use twin_emulate::SAFETY_STATEMENT;
 use twin_store::Store;
@@ -63,14 +63,8 @@ fn emulate_restart_service_reports_runtime_dependent() {
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
     twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
-    let result = twin_app::emulate_in(
-        &home.layout,
-        EmulateRequest {
-            target_query: Some("postgresql".to_string()),
-            ..EmulateRequest::default()
-        },
-    )
-    .expect("emulate");
+    let result = twin_app::emulate_in(&home.layout, EmulateRequest::restart_query("postgresql"))
+        .expect("emulate");
     assert!(!result.action_performed);
     assert_eq!(result.safety_statement, SAFETY_STATEMENT);
     assert!(!result.transient_impacts.is_empty());
@@ -90,7 +84,10 @@ fn emulate_restart_service_marks_owned_tcp_port_unavailable() {
     let result = twin_app::emulate_in(
         &home.layout,
         EmulateRequest {
-            target: Some(NodeId::service("postgresql.service")),
+            action: EmulateActionRequest::Restart {
+                target: Some(NodeId::service("postgresql.service")),
+                target_query: None,
+            },
             ..EmulateRequest::default()
         },
     )
@@ -111,7 +108,10 @@ fn emulate_restart_rejects_port_target() {
     let err = twin_app::emulate_in(
         &home.layout,
         EmulateRequest {
-            target: Some(NodeId::port_tcp("127.0.0.1", 5432).expect("port")),
+            action: EmulateActionRequest::Restart {
+                target: Some(NodeId::port_tcp("127.0.0.1", 5432).expect("port")),
+                target_query: None,
+            },
             ..EmulateRequest::default()
         },
     )
@@ -134,14 +134,8 @@ fn emulate_restart_does_not_modify_graph() {
         .expect("get")
         .expect("row");
 
-    twin_app::emulate_in(
-        &home.layout,
-        EmulateRequest {
-            target_query: Some("postgresql".to_string()),
-            ..EmulateRequest::default()
-        },
-    )
-    .expect("emulate");
+    twin_app::emulate_in(&home.layout, EmulateRequest::restart_query("postgresql"))
+        .expect("emulate");
 
     let after_nodes = store.count_nodes().expect("nodes");
     let after_edges = store.count_edges().expect("edges");
@@ -164,10 +158,7 @@ fn emulate_restart_resolves_service_shorthand() {
     twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
     let result = twin_app::emulate_in(
         &home.layout,
-        EmulateRequest {
-            target_query: Some("postgresql.service".to_string()),
-            ..EmulateRequest::default()
-        },
+        EmulateRequest::restart_query("postgresql.service"),
     )
     .expect("emulate");
     assert_eq!(result.target, "service:postgresql.service");
@@ -188,11 +179,10 @@ fn write_systemd_fixture(dir: &std::path::Path) {
 }
 
 fn scan_with_systemd(home: &IsolatedHome, proc: &std::path::Path, systemd: &std::path::Path) {
-    // SAFETY: test-only env override for fixture unit directory.
-    unsafe {
-        std::env::set_var("TWIN_SYSTEMD_UNIT_ROOT", systemd);
-    }
+    let _env = support::lock_scan_env();
+    support::set_systemd_unit_root(systemd);
     twin_app::scan_in(&home.layout, ScanRequest::default(), proc).expect("scan");
+    support::clear_scan_env();
 }
 
 fn fixture_proc_with_unix_listener(home: &IsolatedHome) -> PathBuf {
@@ -229,10 +219,7 @@ fn emulate_restart_service_reports_configured_context() {
     scan_with_systemd(&home, &proc, &systemd);
     let result = twin_app::emulate_in(
         &home.layout,
-        EmulateRequest {
-            target_query: Some("containerd.service".to_string()),
-            ..EmulateRequest::default()
-        },
+        EmulateRequest::restart_query("containerd.service"),
     )
     .expect("emulate");
     assert!(result.transient_impacts.is_empty());
@@ -247,14 +234,8 @@ fn emulate_restart_service_marks_owned_unix_socket_unavailable() {
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_unix_listener(&home);
     twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
-    let result = twin_app::emulate_in(
-        &home.layout,
-        EmulateRequest {
-            target_query: Some("dbus-broker".to_string()),
-            ..EmulateRequest::default()
-        },
-    )
-    .expect("emulate");
+    let result = twin_app::emulate_in(&home.layout, EmulateRequest::restart_query("dbus-broker"))
+        .expect("emulate");
     assert!(result
         .overlay
         .unavailable_nodes
@@ -268,14 +249,8 @@ fn emulate_restart_unknowns_are_target_scoped() {
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
     twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
-    let result = twin_app::emulate_in(
-        &home.layout,
-        EmulateRequest {
-            target_query: Some("postgresql".to_string()),
-            ..EmulateRequest::default()
-        },
-    )
-    .expect("emulate");
+    let result = twin_app::emulate_in(&home.layout, EmulateRequest::restart_query("postgresql"))
+        .expect("emulate");
     assert!(result
         .unknowns
         .iter()
@@ -311,14 +286,8 @@ fn emulate_restart_ambiguous_service_errors() {
         Some("0::/system.slice/ang.service\n"),
     );
     twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
-    let err = twin_app::emulate_in(
-        &home.layout,
-        EmulateRequest {
-            target_query: Some("ng".to_string()),
-            ..EmulateRequest::default()
-        },
-    )
-    .expect_err("ambiguous");
+    let err = twin_app::emulate_in(&home.layout, EmulateRequest::restart_query("ng"))
+        .expect_err("ambiguous");
     assert!(err.to_string().contains("ambiguous"));
 }
 

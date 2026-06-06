@@ -8,11 +8,11 @@ pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError};
 pub use model::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
     EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
-    GraphEdgeSummary, GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary,
-    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
-    GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
-    InitResult, PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult,
-    ScanWarning, ScanWarningDetail,
+    GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult, GraphNodeResult,
+    GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult,
+    GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactResult,
+    ImpactUnknown, InitResult, PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment,
+    ScanResult, ScanWarning, ScanWarningDetail,
 };
 pub use paths::TwinLayout;
 
@@ -122,11 +122,42 @@ pub fn impact_in(layout: &TwinLayout, request: ImpactRequest) -> Result<ImpactRe
     commands::impact::run(layout, &request)
 }
 
+#[derive(Debug, Clone)]
+pub enum EmulateActionRequest {
+    Restart {
+        target: Option<NodeId>,
+        target_query: Option<String>,
+    },
+    DeleteFile {
+        path: String,
+    },
+}
+
+impl Default for EmulateActionRequest {
+    fn default() -> Self {
+        Self::Restart {
+            target: None,
+            target_query: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EmulateRequest {
     pub config_override: Option<PathBuf>,
-    pub target: Option<NodeId>,
-    pub target_query: Option<String>,
+    pub action: EmulateActionRequest,
+}
+
+impl EmulateRequest {
+    pub fn restart_query(query: impl Into<String>) -> Self {
+        Self {
+            action: EmulateActionRequest::Restart {
+                target: None,
+                target_query: Some(query.into()),
+            },
+            ..Self::default()
+        }
+    }
 }
 
 pub fn emulate(request: EmulateRequest) -> Result<EmulationResult, AppError> {

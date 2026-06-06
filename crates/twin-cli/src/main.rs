@@ -106,16 +106,30 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
 }
 
 fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
-    let EmulateActionArgs::Restart(restart_args) = &args.action;
-    let scan = match refresh_scan(restart_args.config.clone()) {
-        Ok(scan) => scan,
-        Err(error) => {
-            eprintln!("Error: {error}");
-            return 1;
-        }
+    let (config_override, request) = match &args.action {
+        EmulateActionArgs::Restart(restart_args) => (
+            restart_args.config.clone(),
+            match emulate::emulate_restart_request(restart_args) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            },
+        ),
+        EmulateActionArgs::Delete(delete_args) => (
+            delete_args.config.clone(),
+            match emulate::emulate_delete_request(delete_args) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            },
+        ),
     };
-    let request = match emulate::emulate_restart_request(restart_args) {
-        Ok(request) => request,
+    let scan = match refresh_scan(config_override) {
+        Ok(scan) => scan,
         Err(error) => {
             eprintln!("Error: {error}");
             return 1;

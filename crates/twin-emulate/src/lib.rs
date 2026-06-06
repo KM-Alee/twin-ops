@@ -1,4 +1,5 @@
 mod action;
+mod delete_file;
 pub mod effective_view;
 mod input;
 mod overlay;
@@ -6,10 +7,13 @@ mod report;
 mod restart_service;
 mod scoring;
 
-pub use action::{EmulationAction, RESTART_ACTION, SAFETY_STATEMENT};
+pub use action::{
+    EmulationAction, DELETE_ACTION, DELETE_SAFETY_STATEMENT, RESTART_ACTION, SAFETY_STATEMENT,
+};
+pub use delete_file::emulate_delete_file;
 pub use input::{
-    EmulationDependent, EmulationEvidenceLine, EmulationNode, EmulationPathStep, EmulationUnknown,
-    RestartServiceInput,
+    DeleteFileInput, EmulationConfiguredService, EmulationDependent, EmulationEvidenceLine,
+    EmulationNode, EmulationPathStep, EmulationUnknown, RestartServiceInput,
 };
 pub use overlay::{GraphOverlay, InterruptedRelationship, NodeOverlay, OverlayNodeState};
 pub use report::{EmulationDomainReport, EmulationImpact, EmulationOverlaySummary};

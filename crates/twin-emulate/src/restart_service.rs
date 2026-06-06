@@ -44,6 +44,7 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         target_label,
         action_performed: false,
         safety_statement: SAFETY_STATEMENT.to_string(),
+        general_safety_statement: SAFETY_STATEMENT.to_string(),
         risk_level,
         risk_reasons,
         evidence_strength,
@@ -51,6 +52,11 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         overlay,
         transient_impacts,
         configured_impacts,
+        runtime_impacts: Vec::new(),
+        restart_impacts: Vec::new(),
+        persistent_impacts: Vec::new(),
+        unknown_impacts: Vec::new(),
+        evidence_lines: Vec::new(),
     }
 }
 

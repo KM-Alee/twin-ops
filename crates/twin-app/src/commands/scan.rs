@@ -97,12 +97,13 @@ fn run_scan_pass(
     let batch = ProcessCollector::new(proc_root).collect(started_at)?;
     let unit_roots = systemd_unit_roots(proc_root);
     let unit_batch = SystemdUnitCollector::new(unit_roots.clone()).collect(started_at)?;
-    let runtime_batch = collect_systemd_runtime(unit_roots, started_at)?;
+    let runtime_batch = collect_systemd_runtime(unit_roots.clone(), started_at)?;
     persist_scan(
         db_path,
         batch,
         unit_batch,
         runtime_batch,
+        unit_roots,
         sample_index,
         samples_total,
     )
@@ -148,6 +149,7 @@ fn persist_scan(
     mut batch: ProcessBatch,
     mut unit_batch: SystemdUnitBatch,
     mut runtime_batch: SystemdRuntimeBatch,
+    unit_roots: Vec<PathBuf>,
     sample_index: u32,
     samples_total: u32,
 ) -> Result<(ScanResult, usize), AppError> {
@@ -884,6 +886,19 @@ fn persist_scan(
                 scan_time,
                 &mut declared_depends_on_edge_count,
                 &mut seen_service_depends,
+            )?;
+
+            let service_units = super::scan_config_files::existing_service_units(store)?;
+            let config_discoveries = super::scan_config_files::discover_config_files_for_scan(
+                unit_batch.units(),
+                &unit_roots,
+                &service_units,
+            );
+            super::scan_config_files::persist_config_files_in_scan(
+                store,
+                &mut edge_cache,
+                &config_discoveries,
+                scan_time,
             )?;
 
             socket_activation_edge_count =

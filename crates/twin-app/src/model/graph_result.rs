@@ -69,6 +69,14 @@ pub struct GraphServiceResult {
     pub dependents: Vec<GraphOwnedNode>,
     pub socket_activation: Vec<GraphOwnedNode>,
     pub configured_dependents: Vec<GraphOwnedNode>,
+    pub configured_files: Vec<GraphOwnedNode>,
+    pub evidence: Vec<GraphEvidenceLine>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphFileResult {
+    pub file: GraphNodeSummary,
+    pub configures: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -100,6 +108,7 @@ pub enum GraphResult {
     Service(GraphServiceResult),
     Port(GraphPortResult),
     UnixSocket(GraphUnixSocketResult),
+    File(GraphFileResult),
 }
 
 impl GraphResult {
@@ -147,6 +156,18 @@ impl GraphResult {
             service_listeners,
             process_callers,
             service_callers,
+            evidence,
+        })
+    }
+
+    pub fn file(
+        file: GraphNodeSummary,
+        configures: Vec<GraphOwnedNode>,
+        evidence: Vec<GraphEvidenceLine>,
+    ) -> Self {
+        Self::File(GraphFileResult {
+            file,
+            configures,
             evidence,
         })
     }
