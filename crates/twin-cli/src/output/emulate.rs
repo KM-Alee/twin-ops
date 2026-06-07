@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
-use twin_app::{EmulationImpact, EmulationOverlayNode, EmulationResult};
+use twin_app::{EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationResult};
 use twin_core::RiskLevel;
 
 use crate::output::format::{Lines, ScanFreshness, Status};
 use crate::output::sections::{
-    CONFIGURED_CONTEXT, EMULATION_SCORING_NOTE, EVIDENCE, EVIDENCE_STRENGTH, OVERLAY,
+    emulation_scoring_note, CONFIGURED_CONTEXT, EVIDENCE, EVIDENCE_STRENGTH, IMPACT_PATHS, OVERLAY,
     OVERLAY_SERVICE, OVERLAY_TCP_LISTENERS, OVERLAY_UNIX_LISTENERS, PERSISTENT_IMPACT,
     RESTART_IMPACT, RISK, RUNTIME_IMPACT, SAFETY, SCAN_HEALTH, TARGET, TRANSIENT_IMPACT, UNKNOWNS,
     UNKNOWN_IMPACT,
@@ -46,10 +46,15 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
             out.tree_leaf(false, "reason", reason);
         }
     }
-    out.tree_leaf(true, "note", EMULATION_SCORING_NOTE);
+    out.tree_leaf(true, "note", emulation_scoring_note(result.paths_requested));
     render_overlay(&mut out, result);
     render_impact_section(&mut out, TRANSIENT_IMPACT, &result.transient_impacts);
     render_impact_section(&mut out, CONFIGURED_CONTEXT, &result.configured_impacts);
+    if result.paths_requested {
+        out.blank();
+        out.section(IMPACT_PATHS);
+        render_emulation_impact_paths(&mut out, &result.impact_paths);
+    }
     let (health, unknowns) = split_scan_health(&result.unknowns);
     if !health.is_empty() {
         out.blank();
@@ -155,11 +160,57 @@ fn render_delete_overlay(out: &mut Lines, result: &EmulationResult) {
     }
 }
 
+fn render_emulation_impact_paths(out: &mut Lines, paths: &[EmulationImpactPathView]) {
+    if paths.is_empty() {
+        out.tree_leaf(true, "(none)", "no dependency paths in graph");
+        return;
+    }
+    let total = paths.len();
+    for (i, path) in paths.iter().enumerate() {
+        let is_last = i + 1 == total;
+        out.tree_branch("", !is_last, &path.terminal_label, &path.terminal_id);
+        let indent = Lines::child_indent("", is_last);
+        let mut rows: Vec<(&str, String)> = vec![
+            ("path", path.path_chain.clone()),
+            ("depth", path.depth.to_string()),
+        ];
+        for line in &path.evidence {
+            rows.push(("evidence", line.clone()));
+        }
+        if path.is_depth_capped {
+            rows.push(("note", format!("depth capped at {}", path.depth)));
+        }
+        if path.is_cycle_capped {
+            let note = path
+                .cycle_note
+                .as_deref()
+                .unwrap_or("cycle capped on path")
+                .to_string();
+            rows.push(("note", note));
+        }
+        for (i, (label, value)) in rows.iter().enumerate() {
+            out.tree_branch(&indent, i + 1 == rows.len(), label, value);
+        }
+    }
+}
+
 fn emulate_summary(result: &EmulationResult) -> String {
     let mut parts = vec![
         format!("{} risk", result.risk.level),
         format!("{} runtime dependent(s)", result.transient_impacts.len()),
     ];
+    if result.paths_requested {
+        let transitive = result
+            .impact_paths
+            .iter()
+            .filter(|p| p.depth >= 2)
+            .map(|p| p.terminal_id.as_str())
+            .collect::<HashSet<_>>()
+            .len();
+        if transitive > 0 {
+            parts.push(format!("{transitive} transitive dependent(s)"));
+        }
+    }
     let listener_count = result
         .overlay
         .unavailable_nodes

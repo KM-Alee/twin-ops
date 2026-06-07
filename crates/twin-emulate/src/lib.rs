@@ -13,8 +13,11 @@ pub use action::{
 pub use delete_file::emulate_delete_file;
 pub use input::{
     DeleteFileInput, EmulationConfiguredService, EmulationDependent, EmulationEvidenceLine,
-    EmulationNode, EmulationPathStep, EmulationUnknown, RestartServiceInput,
+    EmulationImpactPath, EmulationNode, EmulationPathStep, EmulationUnknown,
+    RestartPathScoringInput, RestartServiceInput,
 };
 pub use overlay::{GraphOverlay, InterruptedRelationship, NodeOverlay, OverlayNodeState};
-pub use report::{EmulationDomainReport, EmulationImpact, EmulationOverlaySummary};
+pub use report::{
+    EmulationDomainReport, EmulationImpact, EmulationImpactPathReport, EmulationOverlaySummary,
+};
 pub use restart_service::emulate_restart_service;

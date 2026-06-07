@@ -707,7 +707,7 @@ fn impact_in_multiple_dependents_raises_risk() {
     )
     .expect("impact");
     assert_eq!(result.direct_dependents.len(), 2);
-    assert_eq!(result.risk.level, RiskLevel::High);
+    assert_eq!(result.risk.level, RiskLevel::Medium);
     assert!(result.unknowns.iter().any(|u| u.kind == "missing_evidence"));
 }
 

@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use twin_app::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
-    EmulationOverlayNode, EmulationResult, GraphEvidenceLine, GraphListResult, GraphNodeResult,
-    GraphNodeSummary, GraphOwnedNode, GraphResult, GraphServiceResult, ImpactDependent,
-    ImpactEvidenceLine, ImpactResult, ImpactUnknown, InitResult, PermissionMode, ScanQuality,
-    ScanQualityAssessment, ScanResult, ScanWarning,
+    EmulationImpactPathView, EmulationOverlayNode, EmulationResult, GraphEvidenceLine,
+    GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphResult,
+    GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
+    InitResult, PermissionMode, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -530,6 +530,55 @@ fn impact_render_configured_dependent_and_scan_health() {
 }
 
 #[test]
+fn impact_render_impact_paths_section_when_requested() {
+    let mut result = sample_impact_result();
+    result.paths_requested = true;
+    result.impact_paths.push(twin_app::ImpactPath {
+        terminal: twin_app::ImpactNodeSummary {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+        },
+        depth: 2,
+        steps: vec![
+            twin_app::ImpactPathStep {
+                from: twin_app::ImpactNodeSummary {
+                    id: "service:nginx.service".to_string(),
+                    label: "nginx.service".to_string(),
+                },
+                edge_kind: "depends_on".to_string(),
+                edge_class: "inferred".to_string(),
+                to: twin_app::ImpactNodeSummary {
+                    id: "service:django.service".to_string(),
+                    label: "django.service".to_string(),
+                },
+                edge_id: "e1".to_string(),
+            },
+            twin_app::ImpactPathStep {
+                from: twin_app::ImpactNodeSummary {
+                    id: "service:django.service".to_string(),
+                    label: "django.service".to_string(),
+                },
+                edge_kind: "depends_on".to_string(),
+                edge_class: "inferred".to_string(),
+                to: twin_app::ImpactNodeSummary {
+                    id: "service:postgresql.service".to_string(),
+                    label: "postgresql.service".to_string(),
+                },
+                edge_id: "e2".to_string(),
+            },
+        ],
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: false,
+        cycle_note: None,
+    });
+    let text = output::impact::render(&result);
+    assert!(text.contains("impact paths"));
+    assert!(text
+        .contains("service:nginx.service -> service:django.service -> service:postgresql.service"));
+}
+
+#[test]
 fn impact_render_direct_dependents_and_evidence() {
     let result = sample_impact_result();
     let text = output::impact::render(&result);
@@ -579,6 +628,9 @@ fn sample_impact_result() -> ImpactResult {
             observation_id: Some("obs-1".to_string()),
         }],
         unknowns: vec![],
+        impact_paths: vec![],
+        paths_requested: false,
+        max_depth: 4,
     }
 }
 
@@ -595,6 +647,73 @@ fn impact_json_includes_risk_and_unknowns() {
         .get("direct_dependents")
         .and_then(|v| v.as_array())
         .is_some());
+}
+
+#[test]
+fn impact_json_includes_impact_paths_when_requested() {
+    let mut result = sample_impact_result();
+    result.paths_requested = true;
+    result.impact_paths.push(twin_app::ImpactPath {
+        terminal: twin_app::ImpactNodeSummary {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+        },
+        depth: 2,
+        steps: vec![],
+        evidence: vec![],
+        is_cycle_capped: true,
+        is_depth_capped: false,
+        cycle_note: Some("cycle capped at service:nginx.service".to_string()),
+    });
+    let json = output::json::render(&result).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["paths_requested"], true);
+    assert_eq!(value["max_depth"], 4);
+    let paths = value["impact_paths"]
+        .as_array()
+        .expect("impact_paths array");
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0]["terminal"]["id"], "service:nginx.service");
+    assert_eq!(paths[0]["depth"], 2);
+    assert_eq!(paths[0]["is_cycle_capped"], true);
+    assert_eq!(paths[0]["is_depth_capped"], false);
+    assert_eq!(
+        paths[0]["cycle_note"],
+        "cycle capped at service:nginx.service"
+    );
+}
+
+#[test]
+fn impact_render_depth_and_cycle_cap_notes() {
+    let mut result = sample_impact_result();
+    result.paths_requested = true;
+    result.impact_paths.push(twin_app::ImpactPath {
+        terminal: twin_app::ImpactNodeSummary {
+            id: "service:api.service".to_string(),
+            label: "api.service".to_string(),
+        },
+        depth: 4,
+        steps: vec![],
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: true,
+        cycle_note: None,
+    });
+    result.impact_paths.push(twin_app::ImpactPath {
+        terminal: twin_app::ImpactNodeSummary {
+            id: "service:worker.service".to_string(),
+            label: "worker.service".to_string(),
+        },
+        depth: 2,
+        steps: vec![],
+        evidence: vec![],
+        is_cycle_capped: true,
+        is_depth_capped: false,
+        cycle_note: Some("cycle capped at service:worker.service".to_string()),
+    });
+    let text = output::impact::render(&result);
+    assert!(text.contains("depth capped at 4"));
+    assert!(text.contains("cycle capped at service:worker.service"));
 }
 
 fn sample_emulation_result() -> EmulationResult {
@@ -643,6 +762,9 @@ fn sample_emulation_result() -> EmulationResult {
         evidence_lines: vec![],
         general_safety_statement: "No action was performed.".to_string(),
         unknowns: vec![],
+        impact_paths: vec![],
+        paths_requested: false,
+        max_depth: 4,
     }
 }
 
@@ -698,6 +820,9 @@ fn sample_delete_emulation_result() -> EmulationResult {
             "known config path /etc/nginx/nginx.conf was discovered for nginx.service".to_string(),
         ],
         unknowns: vec![],
+        impact_paths: vec![],
+        paths_requested: false,
+        max_depth: 0,
     }
 }
 
@@ -729,7 +854,6 @@ fn emulate_restart_output_omits_empty_sections_cleanly() {
 }
 
 #[test]
-#[test]
 fn emulate_delete_output_has_runtime_restart_persistent_and_safety() {
     let text = output::emulate::render(&sample_delete_emulation_result());
     assert!(text.contains("Emulation: delete"));
@@ -757,6 +881,118 @@ fn emulate_restart_json_contains_action_performed_false() {
     assert_eq!(value["action_performed"], false);
     assert_eq!(value["action"], "restart");
     assert!(value.get("overlay").is_some());
+}
+
+#[test]
+fn emulate_restart_json_includes_impact_paths_when_requested() {
+    let mut result = sample_emulation_result();
+    result.paths_requested = true;
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:nginx.service".to_string(),
+        terminal_label: "nginx.service".to_string(),
+        depth: 2,
+        path_chain: "service:nginx.service -> service:django.service -> service:postgresql.service"
+            .to_string(),
+        evidence: vec!["Observed: active connection".to_string()],
+        is_cycle_capped: false,
+        is_depth_capped: true,
+        cycle_note: None,
+    });
+    let json = output::json::render(&result).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(value["paths_requested"], true);
+    let paths = value["impact_paths"]
+        .as_array()
+        .expect("impact_paths array");
+    assert_eq!(paths.len(), 1);
+    assert_eq!(paths[0]["terminal_id"], "service:nginx.service");
+    assert_eq!(paths[0]["depth"], 2);
+    assert_eq!(paths[0]["is_depth_capped"], true);
+    assert_eq!(
+        paths[0]["path_chain"],
+        "service:nginx.service -> service:django.service -> service:postgresql.service"
+    );
+}
+
+#[test]
+fn emulate_restart_output_renders_impact_paths_section_when_requested() {
+    let mut result = sample_emulation_result();
+    result.paths_requested = true;
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:nginx.service".to_string(),
+        terminal_label: "nginx.service".to_string(),
+        depth: 2,
+        path_chain: "service:nginx.service -> service:django.service -> service:postgresql.service"
+            .to_string(),
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: false,
+        cycle_note: None,
+    });
+    let text = output::emulate::render(&result);
+    assert!(text.contains("impact paths"));
+    assert!(text.contains("nginx.service"));
+    assert!(text.contains("transitive path evidence"));
+    assert!(!text.contains("direct-only scoring"));
+}
+
+#[test]
+fn emulate_restart_summary_dedupes_transitive_dependents_by_terminal_id() {
+    let mut result = sample_emulation_result();
+    result.paths_requested = true;
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:nginx.service".to_string(),
+        terminal_label: "nginx.service".to_string(),
+        depth: 2,
+        path_chain: "service:nginx.service -> service:django.service".to_string(),
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: false,
+        cycle_note: None,
+    });
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:nginx.service".to_string(),
+        terminal_label: "nginx.service".to_string(),
+        depth: 3,
+        path_chain: "service:nginx.service -> service:api.service -> service:django.service"
+            .to_string(),
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: false,
+        cycle_note: None,
+    });
+    let text = output::emulate::render(&result);
+    assert!(text.contains("1 transitive dependent(s)"));
+    assert!(!text.contains("2 transitive dependent(s)"));
+}
+
+#[test]
+fn emulate_restart_output_renders_depth_and_cycle_cap_notes() {
+    let mut result = sample_emulation_result();
+    result.paths_requested = true;
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:api.service".to_string(),
+        terminal_label: "api.service".to_string(),
+        depth: 4,
+        path_chain: "service:api.service -> service:django.service".to_string(),
+        evidence: vec![],
+        is_cycle_capped: false,
+        is_depth_capped: true,
+        cycle_note: None,
+    });
+    result.impact_paths.push(EmulationImpactPathView {
+        terminal_id: "service:worker.service".to_string(),
+        terminal_label: "worker.service".to_string(),
+        depth: 2,
+        path_chain: "service:worker.service -> service:django.service".to_string(),
+        evidence: vec![],
+        is_cycle_capped: true,
+        is_depth_capped: false,
+        cycle_note: Some("cycle capped at service:worker.service".to_string()),
+    });
+    let text = output::emulate::render(&result);
+    assert!(text.contains("depth capped at 4"));
+    assert!(text.contains("cycle capped at service:worker.service"));
 }
 
 #[test]

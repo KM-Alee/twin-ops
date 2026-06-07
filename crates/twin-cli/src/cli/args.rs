@@ -93,6 +93,17 @@ pub struct EmulateRestartArgs {
     #[arg(long, help = "Config file path")]
     pub config: Option<PathBuf>,
 
+    #[arg(long, help = "Show transitive dependency impact paths")]
+    pub paths: bool,
+
+    #[arg(
+        long,
+        default_value_t = 4,
+        value_parser = clap::value_parser!(u16).range(1..=8),
+        help = "Maximum dependency path depth (1–8)"
+    )]
+    pub max_depth: u16,
+
     #[arg(
         value_name = "TARGET",
         help = "Service target (e.g. postgresql, service:postgresql.service)"
@@ -116,6 +127,17 @@ pub struct EmulateDeleteArgs {
 pub struct ImpactArgs {
     #[arg(long, help = "Config file path")]
     pub config: Option<PathBuf>,
+
+    #[arg(long, help = "Show transitive dependency impact paths")]
+    pub paths: bool,
+
+    #[arg(
+        long,
+        default_value_t = 4,
+        value_parser = clap::value_parser!(u16).range(1..=8),
+        help = "Maximum dependency path depth (1–8)"
+    )]
+    pub max_depth: u16,
 
     #[arg(
         value_name = "TARGET",

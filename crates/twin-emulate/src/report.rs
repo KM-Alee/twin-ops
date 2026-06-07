@@ -34,6 +34,18 @@ pub struct EmulationImpact {
 }
 
 #[derive(Debug, Clone)]
+pub struct EmulationImpactPathReport {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub depth: usize,
+    pub path_chain: String,
+    pub evidence: Vec<String>,
+    pub is_cycle_capped: bool,
+    pub is_depth_capped: bool,
+    pub cycle_note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct EmulationDomainReport {
     pub action: String,
     pub target: String,
@@ -53,4 +65,7 @@ pub struct EmulationDomainReport {
     pub unknown_impacts: Vec<EmulationImpact>,
     pub evidence_lines: Vec<String>,
     pub general_safety_statement: String,
+    pub impact_paths: Vec<EmulationImpactPathReport>,
+    pub paths_requested: bool,
+    pub max_depth: usize,
 }

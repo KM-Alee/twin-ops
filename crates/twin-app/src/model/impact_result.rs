@@ -19,6 +19,17 @@ pub struct ImpactPathStep {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ImpactPath {
+    pub terminal: ImpactNodeSummary,
+    pub depth: usize,
+    pub steps: Vec<ImpactPathStep>,
+    pub evidence: Vec<ImpactEvidenceLine>,
+    pub is_cycle_capped: bool,
+    pub is_depth_capped: bool,
+    pub cycle_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ImpactEvidenceLine {
     pub source: String,
     pub statement: String,
@@ -91,4 +102,15 @@ pub struct ImpactResult {
     pub listener_owners: Vec<GraphOwnedNode>,
     pub evidence: Vec<ImpactEvidenceLine>,
     pub unknowns: Vec<ImpactUnknown>,
+    #[serde(default)]
+    pub impact_paths: Vec<ImpactPath>,
+    #[serde(default)]
+    pub paths_requested: bool,
+    #[serde(default = "default_impact_max_depth")]
+    pub max_depth: usize,
+}
+
+#[allow(dead_code)]
+const fn default_impact_max_depth() -> usize {
+    4
 }

@@ -1,19 +1,24 @@
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-use twin_core::{EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind};
+use twin_core::{
+    EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind,
+};
 use twin_emulate::{
     emulate_delete_file, emulate_restart_service, DeleteFileInput, EmulationConfiguredService,
-    EmulationEvidenceLine, EmulationNode, RestartServiceInput,
+    EmulationEvidenceLine, EmulationImpactPath, EmulationNode, EmulationPathStep,
+    RestartPathScoringInput, RestartServiceInput,
 };
 use twin_store::Store;
 
 use crate::commands::impact::load_typed_service_dependents;
+use crate::commands::impact_paths::load_service_impact_paths;
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::commands::scan_config_files::{config_file_evidence_statement, host_path_for_discovery};
 use crate::commands::scan_quality::assess_scan_quality;
 use crate::commands::service_dependents::{impact_unknown_to_emulation, TypedServiceDependent};
 use crate::error::{AppError, EmulateError};
+use crate::model::ImpactPath;
 use crate::model::{EmulationResult, ImpactUnknown};
 use crate::paths::{resolve_command_paths, TwinLayout};
 use crate::EmulateActionRequest;
@@ -46,6 +51,8 @@ fn emulate_at(
         EmulateActionRequest::Restart {
             target,
             target_query,
+            show_paths,
+            max_depth,
         } => {
             let resolved = resolve_restart_target(&store, target, target_query)?;
             let node = store
@@ -60,7 +67,7 @@ fn emulate_at(
                 }
                 .into());
             }
-            restart_service_emulate(&store, &resolved, node.label())
+            restart_service_emulate(&store, &resolved, node.label(), *show_paths, *max_depth)
         }
         EmulateActionRequest::DeleteFile { path } => delete_file_emulate(&store, path),
     }
@@ -275,9 +282,28 @@ fn restart_service_emulate(
     store: &Store,
     target: &NodeId,
     label: &str,
+    show_paths: bool,
+    max_depth: usize,
 ) -> Result<EmulationResult, AppError> {
     let analysis = load_typed_service_dependents(store, target, label)?;
     let unavailable_nodes = load_listening_sockets(store, target)?;
+    let (impact_paths, path_scoring, unknowns) = if show_paths {
+        let path_analysis = load_service_impact_paths(store, target, label, max_depth)?;
+        let paths: Vec<EmulationImpactPath> = path_analysis
+            .paths
+            .iter()
+            .map(impact_path_to_emulation)
+            .collect::<Result<_, _>>()?;
+        let scoring = RestartPathScoringInput {
+            transitive_runtime_count: path_analysis.transitive_runtime_count,
+            public_exposure_label: path_analysis.public_exposure_label,
+            criticality_hints: path_analysis.criticality_hints,
+        };
+        let merged = merge_emulate_unknowns(&analysis.unknowns, &path_analysis.unknowns);
+        (paths, Some(scoring), merged)
+    } else {
+        (Vec::new(), None, analysis.unknowns.clone())
+    };
     let input = RestartServiceInput {
         target: EmulationNode {
             id: target.clone(),
@@ -294,14 +320,108 @@ fn restart_service_emulate(
             .iter()
             .map(TypedServiceDependent::to_emulation_dependent)
             .collect(),
-        unknowns: analysis
-            .unknowns
-            .iter()
-            .map(impact_unknown_to_emulation)
-            .collect(),
+        unknowns: unknowns.iter().map(impact_unknown_to_emulation).collect(),
+        impact_paths,
+        paths_requested: show_paths,
+        max_depth,
+        path_scoring,
     };
     let report = emulate_restart_service(input);
-    Ok(EmulationResult::from_domain(report, analysis.unknowns))
+    Ok(EmulationResult::from_domain(report, unknowns))
+}
+
+fn graph_node_id(id: &str) -> Result<NodeId, AppError> {
+    NodeId::from_str(id).map_err(|source| {
+        EmulateError::InvalidGraphId {
+            kind: "node",
+            id: id.to_string(),
+            reason: source.to_string(),
+        }
+        .into()
+    })
+}
+
+fn graph_edge_id(id: &str) -> Result<EdgeId, AppError> {
+    EdgeId::from_str(id).map_err(|source| {
+        EmulateError::InvalidGraphId {
+            kind: "edge",
+            id: id.to_string(),
+            reason: source.to_string(),
+        }
+        .into()
+    })
+}
+
+fn graph_edge_kind(value: &str) -> Result<EdgeKind, AppError> {
+    EdgeKind::from_str(value).map_err(|source| {
+        EmulateError::InvalidGraphId {
+            kind: "edge_kind",
+            id: value.to_string(),
+            reason: source.to_string(),
+        }
+        .into()
+    })
+}
+
+fn graph_edge_class(value: &str) -> Result<EdgeClass, AppError> {
+    EdgeClass::from_str(value).map_err(|source| {
+        EmulateError::InvalidGraphId {
+            kind: "edge_class",
+            id: value.to_string(),
+            reason: source.to_string(),
+        }
+        .into()
+    })
+}
+
+fn merge_emulate_unknowns(base: &[ImpactUnknown], extra: &[ImpactUnknown]) -> Vec<ImpactUnknown> {
+    let mut out = base.to_vec();
+    for unknown in extra {
+        let duplicate = out
+            .iter()
+            .any(|u| u.kind == unknown.kind && u.detail == unknown.detail);
+        if !duplicate {
+            out.push(unknown.clone());
+        }
+    }
+    out
+}
+
+fn impact_path_to_emulation(path: &ImpactPath) -> Result<EmulationImpactPath, AppError> {
+    let steps: Vec<EmulationPathStep> = path
+        .steps
+        .iter()
+        .map(|step| {
+            Ok::<EmulationPathStep, AppError>(EmulationPathStep {
+                from_id: graph_node_id(&step.from.id)?,
+                from_label: step.from.label.clone(),
+                edge_kind: graph_edge_kind(&step.edge_kind)?,
+                edge_class: graph_edge_class(&step.edge_class)?,
+                to_id: graph_node_id(&step.to.id)?,
+                to_label: step.to.label.clone(),
+                edge_id: graph_edge_id(&step.edge_id)?,
+            })
+        })
+        .collect::<Result<Vec<EmulationPathStep>, AppError>>()?;
+    Ok(EmulationImpactPath {
+        terminal_id: graph_node_id(&path.terminal.id)?,
+        terminal_label: path.terminal.label.clone(),
+        depth: path.depth,
+        steps,
+        evidence: path
+            .evidence
+            .iter()
+            .map(|line| EmulationEvidenceLine {
+                source: line.source.clone(),
+                statement: line.statement.clone(),
+                relationship: line.relationship.clone(),
+                strength_score: line.strength_score(),
+            })
+            .collect(),
+        is_cycle_capped: path.is_cycle_capped,
+        is_depth_capped: path.is_depth_capped,
+        cycle_note: path.cycle_note.clone(),
+    })
 }
 
 fn load_listening_sockets(store: &Store, target: &NodeId) -> Result<Vec<EmulationNode>, AppError> {

@@ -7,16 +7,20 @@ pub mod paths;
 pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError};
 pub use model::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
-    EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
-    GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult, GraphNodeResult,
-    GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult,
-    GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactResult,
-    ImpactUnknown, InitResult, PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment,
-    ScanResult, ScanWarning, ScanWarningDetail,
+    EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
+    EvidenceStrengthView, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult,
+    GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
+    ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
+    PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
+    ScanWarningDetail,
 };
 pub use paths::TwinLayout;
 
 pub use crate::commands::scan_quality::assess_scan_quality;
+
+pub const DEFAULT_MAX_DEPTH: usize = 4;
+pub const MAX_DEPTH_LIMIT: usize = 8;
 
 use std::path::{Path, PathBuf};
 
@@ -107,11 +111,41 @@ pub fn graph_in(layout: &TwinLayout, request: GraphRequest) -> Result<GraphResul
     commands::graph::run(layout, &request)
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ImpactRequest {
     pub config_override: Option<PathBuf>,
     pub target: Option<NodeId>,
     pub target_query: Option<String>,
+    pub show_paths: bool,
+    pub max_depth: usize,
+}
+
+impl Default for ImpactRequest {
+    fn default() -> Self {
+        Self {
+            config_override: None,
+            target: None,
+            target_query: None,
+            show_paths: false,
+            max_depth: DEFAULT_MAX_DEPTH,
+        }
+    }
+}
+
+pub fn validate_max_depth(max_depth: usize) -> Result<usize, AppError> {
+    if max_depth == 0 {
+        return Err(AppError::InvalidMaxDepth {
+            value: max_depth,
+            reason: "max depth must be at least 1".to_string(),
+        });
+    }
+    if max_depth > MAX_DEPTH_LIMIT {
+        return Err(AppError::InvalidMaxDepth {
+            value: max_depth,
+            reason: format!("max depth cannot exceed {MAX_DEPTH_LIMIT}"),
+        });
+    }
+    Ok(max_depth)
 }
 
 pub fn impact(request: ImpactRequest) -> Result<ImpactResult, AppError> {
@@ -127,6 +161,8 @@ pub enum EmulateActionRequest {
     Restart {
         target: Option<NodeId>,
         target_query: Option<String>,
+        show_paths: bool,
+        max_depth: usize,
     },
     DeleteFile {
         path: String,
@@ -138,6 +174,8 @@ impl Default for EmulateActionRequest {
         Self::Restart {
             target: None,
             target_query: None,
+            show_paths: false,
+            max_depth: DEFAULT_MAX_DEPTH,
         }
     }
 }
@@ -154,6 +192,8 @@ impl EmulateRequest {
             action: EmulateActionRequest::Restart {
                 target: None,
                 target_query: Some(query.into()),
+                show_paths: false,
+                max_depth: DEFAULT_MAX_DEPTH,
             },
             ..Self::default()
         }

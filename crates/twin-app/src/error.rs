@@ -40,6 +40,8 @@ pub enum AppError {
     },
     #[error("unsupported graph kind: {kind}")]
     UnsupportedGraphKind { kind: String },
+    #[error("invalid max depth {value}: {reason}")]
+    InvalidMaxDepth { value: usize, reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -134,7 +136,7 @@ pub enum EmulateError {
     Store(#[from] StoreError),
     #[error("node not found: {id}")]
     NodeNotFound { id: NodeId },
-    #[error("service not found for query `{query}`; try: twin emulate restart postgresql.service")]
+    #[error("service not found for query `{query}`; run `twin scan` and use an exact service name from the graph")]
     ServiceNotFound { query: String },
     #[error("ambiguous service match for `{query}`: {candidates}")]
     AmbiguousService { query: String, candidates: String },
@@ -144,4 +146,10 @@ pub enum EmulateError {
     RelativeDeletePath { value: String },
     #[error("delete emulation requires a file target; got `{value}` ({reason})")]
     InvalidDeleteTarget { value: String, reason: String },
+    #[error("invalid graph {kind} id `{id}`: {reason}")]
+    InvalidGraphId {
+        kind: &'static str,
+        id: String,
+        reason: String,
+    },
 }

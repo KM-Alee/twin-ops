@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
-use twin_app::{ImpactDependent, ImpactEvidenceLine, ImpactResult};
+use twin_app::{ImpactDependent, ImpactEvidenceLine, ImpactPath, ImpactResult};
 use twin_core::RiskLevel;
 
 use crate::output::format::{Lines, ScanFreshness, Status};
 use crate::output::sections::{
-    CONFIGURED_DEPENDENTS, DIRECT_DEPENDENTS_RUNTIME, EVIDENCE, EVIDENCE_STRENGTH, OWNED_BY, RISK,
-    SCAN_HEALTH, TARGET, UNKNOWNS,
+    CONFIGURED_DEPENDENTS, DIRECT_DEPENDENTS_RUNTIME, EVIDENCE, EVIDENCE_STRENGTH, IMPACT_PATHS,
+    OWNED_BY, RISK, SCAN_HEALTH, TARGET, UNKNOWNS,
 };
 use crate::output::unknowns::{group_unknown_refs, render_unknown_groups, split_scan_health};
 
@@ -62,6 +62,11 @@ pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> S
         out.section(CONFIGURED_DEPENDENTS);
         render_dependents(&mut out, &result.configured_dependents, true);
     }
+    if result.paths_requested {
+        out.blank();
+        out.section(IMPACT_PATHS);
+        render_impact_paths(&mut out, &result.impact_paths);
+    }
     let evidence_lines: Vec<_> = if result.evidence.is_empty() {
         aggregate_dependent_evidence(result)
     } else {
@@ -99,11 +104,67 @@ pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> S
     out.into_string()
 }
 
+fn render_impact_paths(out: &mut Lines, paths: &[ImpactPath]) {
+    if paths.is_empty() {
+        out.tree_leaf(true, "(none)", "no dependency paths in graph");
+        return;
+    }
+    let total = paths.len();
+    for (i, path) in paths.iter().enumerate() {
+        let is_last = i + 1 == total;
+        let chain = path_chain_label(path);
+        out.tree_branch("", !is_last, &path.terminal.label, &path.terminal.id);
+        let indent = Lines::child_indent("", is_last);
+        let mut rows: Vec<(&str, String)> =
+            vec![("path", chain), ("depth", path.depth.to_string())];
+        for line in &path.evidence {
+            rows.push(("evidence", line.statement.clone()));
+        }
+        if path.is_depth_capped {
+            rows.push(("note", format!("depth capped at {}", path.depth)));
+        }
+        if path.is_cycle_capped {
+            let note = path
+                .cycle_note
+                .as_deref()
+                .unwrap_or("cycle capped on path")
+                .to_string();
+            rows.push(("note", note));
+        }
+        for (i, (label, value)) in rows.iter().enumerate() {
+            out.tree_branch(&indent, i + 1 == rows.len(), label, value);
+        }
+    }
+}
+
+fn path_chain_label(path: &ImpactPath) -> String {
+    if path.steps.is_empty() {
+        return path.terminal.id.clone();
+    }
+    let mut nodes = vec![path.terminal.id.clone()];
+    for step in &path.steps {
+        nodes.push(step.to.id.clone());
+    }
+    nodes.join(" -> ")
+}
+
 fn impact_summary(result: &ImpactResult) -> String {
     let mut parts = vec![
         format!("{} risk", result.risk.level),
         format!("{} runtime dependent(s)", result.direct_dependents.len()),
     ];
+    if result.paths_requested {
+        let transitive = result
+            .impact_paths
+            .iter()
+            .filter(|p| p.depth >= 2)
+            .map(|p| p.terminal.id.as_str())
+            .collect::<HashSet<_>>()
+            .len();
+        if transitive > 0 {
+            parts.push(format!("{transitive} transitive dependent(s)"));
+        }
+    }
     if !result.configured_dependents.is_empty() {
         parts.push(format!(
             "{} configured-only dependent(s)",

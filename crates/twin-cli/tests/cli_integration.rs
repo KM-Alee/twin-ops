@@ -478,6 +478,50 @@ fn impact_port_after_scan_shows_callers_and_listeners() {
 }
 
 #[test]
+fn impact_service_with_paths_flag() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["impact", "postgresql.service", "--paths"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("impact paths"));
+    assert!(text.contains("django.service"));
+}
+
+#[test]
+fn impact_service_with_paths_and_max_depth() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&[
+        "impact",
+        "postgresql.service",
+        "--paths",
+        "--max-depth",
+        "1",
+    ]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("impact paths"));
+}
+
+#[test]
+fn emulate_restart_with_paths_shows_safety_statement() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_proc_fixture_with_active_connection(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["emulate", "restart", "postgresql.service", "--paths"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("impact paths"));
+    assert!(text.contains("No action was performed."));
+}
+
+#[test]
 fn impact_missing_service_exits_nonzero() {
     let home = TwinHome::new();
     init_and_scan(&home);

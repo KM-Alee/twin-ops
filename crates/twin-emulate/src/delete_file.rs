@@ -63,6 +63,9 @@ pub fn emulate_delete_file(input: DeleteFileInput) -> EmulationDomainReport {
         persistent_impacts,
         unknown_impacts,
         evidence_lines: input.evidence.iter().map(|e| e.statement.clone()).collect(),
+        impact_paths: Vec::new(),
+        paths_requested: false,
+        max_depth: 0,
     }
 }
 

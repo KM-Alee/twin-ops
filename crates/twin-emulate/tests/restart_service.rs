@@ -1,7 +1,7 @@
-use twin_core::{EdgeClass, EdgeId, EdgeKind, NodeId};
+use twin_core::{EdgeClass, EdgeId, EdgeKind, EvidenceStrength, NodeId};
 use twin_emulate::{
-    emulate_restart_service, EmulationDependent, EmulationNode, EmulationPathStep,
-    OverlayNodeState, RestartServiceInput, SAFETY_STATEMENT,
+    emulate_restart_service, EmulationDependent, EmulationEvidenceLine, EmulationImpactPath,
+    EmulationNode, EmulationPathStep, OverlayNodeState, RestartServiceInput, SAFETY_STATEMENT,
 };
 
 fn postgres_target() -> EmulationNode {
@@ -47,8 +47,7 @@ fn restart_marks_service_and_sockets_unavailable() {
             label: "127.0.0.1:5432".to_string(),
         }],
         runtime_dependents: vec![django_dependent()],
-        configured_dependents: vec![],
-        unknowns: vec![],
+        ..RestartServiceInput::default()
     };
     let report = emulate_restart_service(input);
     assert!(!report.action_performed);
@@ -69,8 +68,6 @@ fn restart_keeps_configured_dependents_separate() {
     let backup = NodeId::service("backup.service");
     let input = RestartServiceInput {
         target: postgres_target(),
-        unavailable_nodes: vec![],
-        runtime_dependents: vec![],
         configured_dependents: vec![EmulationDependent {
             id: backup.clone(),
             label: "backup.service".to_string(),
@@ -93,7 +90,7 @@ fn restart_keeps_configured_dependents_separate() {
             evidence: vec![],
             observation_ids: vec!["obs-2".to_string()],
         }],
-        unknowns: vec![],
+        ..RestartServiceInput::default()
     };
     let report = emulate_restart_service(input);
     assert!(report.transient_impacts.is_empty());
@@ -108,7 +105,6 @@ fn direct_only_does_not_include_transitive_dependents() {
     let frontend = NodeId::service("frontend.service");
     let input = RestartServiceInput {
         target: postgres_target(),
-        unavailable_nodes: vec![],
         runtime_dependents: vec![EmulationDependent {
             id: api.clone(),
             label: "api.service".to_string(),
@@ -131,8 +127,7 @@ fn direct_only_does_not_include_transitive_dependents() {
             evidence: vec![],
             observation_ids: vec![],
         }],
-        configured_dependents: vec![],
-        unknowns: vec![],
+        ..RestartServiceInput::default()
     };
     let report = emulate_restart_service(input);
     assert_eq!(report.transient_impacts.len(), 1);
@@ -146,10 +141,50 @@ fn direct_only_does_not_include_transitive_dependents() {
 fn restart_report_action_performed_is_false() {
     let report = emulate_restart_service(RestartServiceInput {
         target: postgres_target(),
-        unavailable_nodes: vec![],
-        runtime_dependents: vec![],
-        configured_dependents: vec![],
-        unknowns: vec![],
+        ..RestartServiceInput::default()
     });
     assert!(!report.action_performed);
+}
+
+#[test]
+fn restart_with_paths_includes_path_evidence_in_strength() {
+    let nginx = NodeId::service("nginx.service");
+    let path_evidence = EmulationEvidenceLine {
+        source: "/proc/net/tcp:1".to_string(),
+        statement: "Observed: active connection".to_string(),
+        relationship: "inferred".to_string(),
+        strength_score: 95,
+    };
+    let mut dependent = django_dependent();
+    dependent.evidence = vec![EmulationEvidenceLine {
+        source: "/proc/net/tcp:2".to_string(),
+        statement: "Observed: direct connection".to_string(),
+        relationship: "inferred".to_string(),
+        strength_score: 70,
+    }];
+    let base = RestartServiceInput {
+        target: postgres_target(),
+        runtime_dependents: vec![dependent],
+        ..RestartServiceInput::default()
+    };
+    let without_paths = emulate_restart_service(base.clone());
+    let with_paths = emulate_restart_service(RestartServiceInput {
+        paths_requested: true,
+        impact_paths: vec![EmulationImpactPath {
+            terminal_id: nginx,
+            terminal_label: "nginx.service".to_string(),
+            depth: 2,
+            steps: vec![],
+            evidence: vec![path_evidence],
+            is_cycle_capped: false,
+            is_depth_capped: false,
+            cycle_note: None,
+        }],
+        ..base
+    });
+    assert!(
+        with_paths.evidence_strength.score() > without_paths.evidence_strength.score(),
+        "path evidence should raise evidence strength"
+    );
+    assert_eq!(with_paths.impact_paths[0].evidence.len(), 1);
 }

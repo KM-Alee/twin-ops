@@ -17,6 +17,17 @@ pub const SAFETY: &str = "safety";
 pub const EVIDENCE: &str = "evidence";
 pub const OWNED_BY: &str = "owned by";
 pub const DIRECT_DEPENDENTS_RUNTIME: &str = "direct dependents (runtime)";
+pub const IMPACT_PATHS: &str = "impact paths";
 pub const CONFIGURED_DEPENDENTS: &str = "configured dependents (inactive)";
-pub const EMULATION_SCORING_NOTE: &str =
+pub const EMULATION_SCORING_NOTE_DIRECT: &str =
     "emulation uses direct-only scoring; twin impact applies broader thresholds";
+pub const EMULATION_SCORING_NOTE_WITH_PATHS: &str =
+    "emulation scoring includes transitive path evidence; twin impact applies broader risk thresholds";
+
+pub fn emulation_scoring_note(paths_requested: bool) -> &'static str {
+    if paths_requested {
+        EMULATION_SCORING_NOTE_WITH_PATHS
+    } else {
+        EMULATION_SCORING_NOTE_DIRECT
+    }
+}

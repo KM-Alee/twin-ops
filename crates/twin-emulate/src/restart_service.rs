@@ -5,8 +5,8 @@ use crate::effective_view::EffectiveGraphView;
 use crate::input::{EmulationDependent, RestartServiceInput};
 use crate::overlay::{GraphOverlay, InterruptedRelationship, NodeOverlay, OverlayNodeState};
 use crate::report::{
-    EmulationDomainReport, EmulationImpact, EmulationOverlayInterrupted, EmulationOverlayNode,
-    EmulationOverlaySummary,
+    EmulationDomainReport, EmulationImpact, EmulationImpactPathReport, EmulationOverlayInterrupted,
+    EmulationOverlayNode, EmulationOverlaySummary,
 };
 use crate::scoring::{score_restart_evidence, score_restart_risk};
 
@@ -23,8 +23,20 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         &input.runtime_dependents,
         &input.configured_dependents,
         &input.unknowns,
+        input.path_scoring.as_ref(),
     );
-    let evidence_strength = score_restart_evidence(&input.runtime_dependents, &input.unknowns);
+    let path_evidence: Vec<_> = if input.paths_requested {
+        input
+            .impact_paths
+            .iter()
+            .flat_map(|path| path.evidence.iter())
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let evidence_strength =
+        score_restart_evidence(&input.runtime_dependents, &input.unknowns, &path_evidence);
 
     let transient_impacts = input
         .runtime_dependents
@@ -37,6 +49,11 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         .map(|d| configured_dependent_to_impact(d, &target_label))
         .collect();
     let overlay_summary = overlay_summary_from(&view, &input);
+    let impact_paths = input
+        .impact_paths
+        .iter()
+        .map(impact_path_to_report)
+        .collect();
 
     EmulationDomainReport {
         action: RESTART_ACTION.to_string(),
@@ -57,6 +74,36 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         persistent_impacts: Vec::new(),
         unknown_impacts: Vec::new(),
         evidence_lines: Vec::new(),
+        impact_paths,
+        paths_requested: input.paths_requested,
+        max_depth: input.max_depth,
+    }
+}
+
+fn impact_path_to_report(path: &crate::input::EmulationImpactPath) -> EmulationImpactPathReport {
+    let path_chain = if path.steps.is_empty() {
+        path.terminal_id.to_string()
+    } else {
+        let mut nodes = vec![path.terminal_id.as_str().to_string()];
+        for step in &path.steps {
+            nodes.push(step.to_id.as_str().to_string());
+        }
+        nodes.join(" -> ")
+    };
+    let evidence: Vec<String> = path
+        .evidence
+        .iter()
+        .map(|line| line.statement.clone())
+        .collect();
+    EmulationImpactPathReport {
+        terminal_id: path.terminal_id.to_string(),
+        terminal_label: path.terminal_label.clone(),
+        depth: path.depth,
+        path_chain,
+        evidence,
+        is_cycle_capped: path.is_cycle_capped,
+        is_depth_capped: path.is_depth_capped,
+        cycle_note: path.cycle_note.clone(),
     }
 }
 

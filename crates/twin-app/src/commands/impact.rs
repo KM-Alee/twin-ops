@@ -3,8 +3,8 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 
 use twin_core::{
-    cap_dependent_evidence_score, DependentImpactKind, EdgeClass, EdgeKind, EdgeState,
-    EvidenceStrength, GraphEdge, NodeId, NodeKind, ObservationId, RiskLevel, UnknownKind,
+    DependentImpactKind, EdgeClass, EdgeKind, EdgeState, EvidenceStrength, GraphEdge, NodeId,
+    NodeKind, ObservationId, UnknownKind,
 };
 use twin_observation::{Observation, ObservationKind};
 use twin_store::Store;
@@ -12,13 +12,17 @@ use twin_store::Store;
 use crate::commands::evidence::{
     classify_dependent_impact_kind, systemd_dep_strength_label, systemd_impact_statement,
 };
+use crate::commands::impact_paths::{load_service_impact_paths, port_impact_paths_from_dependents};
+use crate::commands::impact_scoring::{
+    score_port_risk_with_paths, score_service_evidence, score_service_risk, PathScoringInput,
+};
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::commands::scan_quality::{assess_scan_quality, scan_health_note};
 use crate::commands::service_dependents::TypedServiceDependent;
 use crate::error::{AppError, ImpactError};
 use crate::model::{
     GraphOwnedNode, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPathStep,
-    ImpactResult, ImpactUnknown, RiskAssessment,
+    ImpactResult, ImpactUnknown,
 };
 use crate::paths::{resolve_command_paths, TwinLayout};
 use crate::ImpactRequest;
@@ -53,9 +57,9 @@ fn impact_at(
         .ok_or_else(|| ImpactError::NodeNotFound { id: target.clone() })?;
 
     match node.kind() {
-        NodeKind::Service => service_impact(&store, &target, node.label()),
+        NodeKind::Service => service_impact(&store, &target, node.label(), request),
         NodeKind::Port | NodeKind::UnixSocket => {
-            port_impact(&store, &target, node.label(), node.kind())
+            port_impact(&store, &target, node.label(), node.kind(), request)
         }
         kind => Err(ImpactError::UnsupportedTarget {
             kind: kind.to_string(),
@@ -202,16 +206,35 @@ pub(crate) fn load_service_dependent_analysis(
     })
 }
 
-fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactResult, AppError> {
+fn service_impact(
+    store: &Store,
+    target: &NodeId,
+    label: &str,
+    request: &ImpactRequest,
+) -> Result<ImpactResult, AppError> {
     let analysis = load_service_dependent_analysis(store, target, label)?;
-
-    let risk = score_risk(
-        NodeKind::Service,
+    let mut unknowns = analysis.unknowns;
+    let (impact_paths, path_scoring) = if request.show_paths {
+        let path_analysis = load_service_impact_paths(store, target, label, request.max_depth)?;
+        let paths = path_analysis.paths.clone();
+        unknowns = merge_unknowns(unknowns, path_analysis.unknowns.clone());
+        let scoring = PathScoringInput::from_path_analysis(&path_analysis);
+        (paths, Some(scoring))
+    } else {
+        (Vec::new(), None)
+    };
+    let path_evidence: Vec<_> = impact_paths
+        .iter()
+        .flat_map(|p| p.evidence.iter().cloned())
+        .collect();
+    let risk = score_service_risk(
         &analysis.direct_dependents,
         &analysis.configured_dependents,
-        &analysis.unknowns,
+        &unknowns,
+        path_scoring.as_ref(),
     );
-    let evidence_strength = score_evidence(&analysis.direct_dependents, &[], &analysis.unknowns);
+    let evidence_strength =
+        score_service_evidence(&analysis.direct_dependents, &path_evidence, &unknowns);
 
     Ok(ImpactResult {
         target: target.to_string(),
@@ -222,7 +245,10 @@ fn service_impact(store: &Store, target: &NodeId, label: &str) -> Result<ImpactR
         configured_dependents: analysis.configured_dependents,
         listener_owners: Vec::new(),
         evidence: Vec::new(),
-        unknowns: analysis.unknowns,
+        unknowns,
+        impact_paths,
+        paths_requested: request.show_paths,
+        max_depth: request.max_depth,
     })
 }
 
@@ -231,6 +257,7 @@ fn port_impact(
     target: &NodeId,
     label: &str,
     target_kind: NodeKind,
+    request: &ImpactRequest,
 ) -> Result<ImpactResult, AppError> {
     let target_summary = node_summary(target, label);
     let mut direct_dependents = Vec::new();
@@ -331,8 +358,22 @@ fn port_impact(
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
     unknowns.sort_by(|a, b| a.kind.cmp(&b.kind));
 
-    let risk = score_risk(target_kind, &direct_dependents, &[], &unknowns);
-    let evidence_strength = score_evidence(&direct_dependents, &evidence, &unknowns);
+    let impact_paths = if request.show_paths {
+        port_impact_paths_from_dependents(&direct_dependents)
+    } else {
+        Vec::new()
+    };
+    let risk = score_port_risk_with_paths(
+        target_kind,
+        &direct_dependents,
+        &unknowns,
+        request.show_paths,
+    );
+    let path_evidence: Vec<_> = impact_paths
+        .iter()
+        .flat_map(|p| p.evidence.iter().cloned())
+        .collect();
+    let evidence_strength = score_service_evidence(&direct_dependents, &path_evidence, &unknowns);
 
     Ok(ImpactResult {
         target: target.to_string(),
@@ -344,7 +385,23 @@ fn port_impact(
         listener_owners,
         evidence,
         unknowns,
+        impact_paths,
+        paths_requested: request.show_paths,
+        max_depth: request.max_depth,
     })
+}
+
+fn merge_unknowns(mut base: Vec<ImpactUnknown>, extra: Vec<ImpactUnknown>) -> Vec<ImpactUnknown> {
+    for unknown in extra {
+        let duplicate = base
+            .iter()
+            .any(|u| u.kind == unknown.kind && u.detail == unknown.detail);
+        if !duplicate {
+            base.push(unknown);
+        }
+    }
+    base.sort_by(|a, b| a.kind.cmp(&b.kind));
+    base
 }
 
 struct DependentInput<'a> {
@@ -381,14 +438,14 @@ fn build_dependent(input: DependentInput<'_>) -> ImpactDependent {
     }
 }
 
-fn node_summary(id: &NodeId, label: &str) -> ImpactNodeSummary {
+pub(crate) fn node_summary(id: &NodeId, label: &str) -> ImpactNodeSummary {
     ImpactNodeSummary {
         id: id.to_string(),
         label: label.to_string(),
     }
 }
 
-fn is_active_edge(edge: &GraphEdge) -> bool {
+pub(crate) fn is_active_edge(edge: &GraphEdge) -> bool {
     edge.state() == EdgeState::Active
 }
 
@@ -483,7 +540,7 @@ fn connection_endpoint_from_observation(obs: &Observation) -> Option<String> {
     }
 }
 
-fn collect_edge_evidence(
+pub(crate) fn collect_edge_evidence(
     store: &Store,
     observation_ids: &[String],
     evidence: &mut Vec<ImpactEvidenceLine>,
@@ -948,95 +1005,11 @@ fn parse_port_node(port_id: &NodeId) -> Result<(String, u16), AppError> {
     Ok((ip.to_string(), port))
 }
 
-fn missing_evidence_unknown(edge_id: &str) -> ImpactUnknown {
+pub(crate) fn missing_evidence_unknown(edge_id: &str) -> ImpactUnknown {
     ImpactUnknown {
         kind: UnknownKind::MissingEvidence.as_str().to_string(),
         detail: format!("edge {edge_id} has no readable observation links"),
         source: Some("graph".to_string()),
         weakens_evidence: true,
     }
-}
-
-fn score_risk(
-    target_kind: NodeKind,
-    direct_dependents: &[ImpactDependent],
-    configured_dependents: &[ImpactDependent],
-    unknowns: &[ImpactUnknown],
-) -> RiskAssessment {
-    let significant_unknowns = unknowns.iter().any(|u| u.weakens_evidence);
-    let count = direct_dependents.len();
-    let mut reasons = Vec::new();
-
-    let level = match count {
-        0 if !significant_unknowns => {
-            reasons.push("no runtime dependents are known".to_string());
-            if !configured_dependents.is_empty() {
-                reasons.push(format!(
-                    "{} configured dependent(s) are inactive or not runtime-active",
-                    configured_dependents.len()
-                ));
-            }
-            RiskLevel::Low
-        }
-        0 => {
-            reasons.push("no runtime dependents are known".to_string());
-            reasons.push("coverage gaps may hide additional dependents".to_string());
-            RiskLevel::Unknown
-        }
-        1 => {
-            reasons.push("1 direct dependent is known".to_string());
-            RiskLevel::Medium
-        }
-        2..=4 => {
-            reasons.push(format!("{count} direct dependents are known"));
-            RiskLevel::High
-        }
-        _ => {
-            reasons.push(format!("{count} direct dependents are known"));
-            RiskLevel::Critical
-        }
-    };
-
-    if count > 0 && significant_unknowns {
-        reasons.push("coverage gaps may hide additional dependents".to_string());
-    }
-    if target_kind == NodeKind::Service && count > 0 {
-        reasons.push("target is a service dependency target".to_string());
-    }
-
-    RiskAssessment { level, reasons }
-}
-
-fn score_evidence(
-    direct_dependents: &[ImpactDependent],
-    evidence: &[ImpactEvidenceLine],
-    unknowns: &[ImpactUnknown],
-) -> EvidenceStrength {
-    let mut best = 0u8;
-    let mut has_observation_links = false;
-    let mut only_inferred = true;
-
-    for dependent in direct_dependents {
-        if !dependent.observation_ids.is_empty() {
-            has_observation_links = true;
-        }
-        if dependent.edge_class != EdgeClass::Inferred.to_string() {
-            only_inferred = false;
-        }
-        for line in &dependent.evidence {
-            best = best.max(line.strength_score());
-        }
-    }
-
-    for line in evidence {
-        best = best.max(line.strength_score());
-    }
-
-    cap_dependent_evidence_score(
-        best,
-        has_observation_links,
-        only_inferred,
-        unknowns.iter().any(|u| u.weakens_evidence),
-        !direct_dependents.is_empty() || !evidence.is_empty(),
-    )
 }

@@ -10,7 +10,8 @@ pub use doctor_result::{
     DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, PermissionMode,
 };
 pub use emulation_result::{
-    EmulationImpact, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
+    EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary,
+    EmulationResult,
 };
 pub use graph_result::{
     edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult,
@@ -18,8 +19,8 @@ pub use graph_result::{
     GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 pub use impact_result::{
-    EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPathStep,
-    ImpactResult, ImpactUnknown, RiskAssessment,
+    EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,
+    ImpactPathStep, ImpactResult, ImpactUnknown, RiskAssessment,
 };
 pub use init_result::InitResult;
 pub use scan_quality::{ScanQuality, ScanQualityAssessment};

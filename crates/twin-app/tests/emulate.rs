@@ -87,6 +87,8 @@ fn emulate_restart_service_marks_owned_tcp_port_unavailable() {
             action: EmulateActionRequest::Restart {
                 target: Some(NodeId::service("postgresql.service")),
                 target_query: None,
+                show_paths: false,
+                max_depth: 4,
             },
             ..EmulateRequest::default()
         },
@@ -111,6 +113,8 @@ fn emulate_restart_rejects_port_target() {
             action: EmulateActionRequest::Restart {
                 target: Some(NodeId::port_tcp("127.0.0.1", 5432).expect("port")),
                 target_query: None,
+                show_paths: false,
+                max_depth: 4,
             },
             ..EmulateRequest::default()
         },

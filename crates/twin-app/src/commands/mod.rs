@@ -3,6 +3,8 @@ pub mod emulate;
 mod evidence;
 pub mod graph;
 pub mod impact;
+mod impact_paths;
+mod impact_scoring;
 pub mod init;
 mod resolve_service;
 pub mod scan;

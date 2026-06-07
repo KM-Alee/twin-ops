@@ -35,6 +35,18 @@ pub struct EmulationImpact {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct EmulationImpactPathView {
+    pub terminal_id: String,
+    pub terminal_label: String,
+    pub depth: usize,
+    pub path_chain: String,
+    pub evidence: Vec<String>,
+    pub is_cycle_capped: bool,
+    pub is_depth_capped: bool,
+    pub cycle_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EmulationResult {
     pub action: String,
     pub target: String,
@@ -53,6 +65,12 @@ pub struct EmulationResult {
     pub evidence_lines: Vec<String>,
     pub general_safety_statement: String,
     pub unknowns: Vec<ImpactUnknown>,
+    #[serde(default)]
+    pub impact_paths: Vec<EmulationImpactPathView>,
+    #[serde(default)]
+    pub paths_requested: bool,
+    #[serde(default)]
+    pub max_depth: usize,
 }
 
 impl EmulationResult {
@@ -161,6 +179,22 @@ impl EmulationResult {
             evidence_lines: report.evidence_lines,
             general_safety_statement: report.general_safety_statement,
             unknowns,
+            impact_paths: report
+                .impact_paths
+                .into_iter()
+                .map(|p| EmulationImpactPathView {
+                    terminal_id: p.terminal_id,
+                    terminal_label: p.terminal_label,
+                    depth: p.depth,
+                    path_chain: p.path_chain,
+                    evidence: p.evidence,
+                    is_cycle_capped: p.is_cycle_capped,
+                    is_depth_capped: p.is_depth_capped,
+                    cycle_note: p.cycle_note,
+                })
+                .collect(),
+            paths_requested: report.paths_requested,
+            max_depth: report.max_depth,
         }
     }
 }
