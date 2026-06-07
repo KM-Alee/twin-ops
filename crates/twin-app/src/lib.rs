@@ -4,16 +4,18 @@ mod error;
 mod model;
 pub mod paths;
 
-pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError};
+pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError};
 pub use model::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
-    EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
-    EvidenceStrengthView, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult,
-    GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
+    DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore, DoctorDatabase,
+    DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
+    EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
+    GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult, GraphNodeResult,
+    GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult,
+    GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
     ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
     PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
-    ScanWarningDetail,
+    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WhatChangedEdge,
+    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -209,4 +211,70 @@ pub fn emulate_in(
     request: EmulateRequest,
 ) -> Result<EmulationResult, AppError> {
     commands::emulate::run(layout, &request)
+}
+
+#[derive(Debug, Clone)]
+pub struct WhatChangedRequest {
+    pub config_override: Option<PathBuf>,
+    pub since: String,
+    pub verbose: bool,
+}
+
+pub fn what_changed(request: WhatChangedRequest) -> Result<WhatChangedResult, AppError> {
+    commands::what_changed::run_home(request)
+}
+
+pub fn what_changed_in(
+    layout: &TwinLayout,
+    request: WhatChangedRequest,
+) -> Result<WhatChangedResult, AppError> {
+    commands::what_changed::run(layout, &request)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotCreateRequest {
+    pub config_override: Option<PathBuf>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotListRequest {
+    pub config_override: Option<PathBuf>,
+}
+
+pub fn snapshot_create(request: SnapshotCreateRequest) -> Result<SnapshotCreateResult, AppError> {
+    commands::snapshot::create_home(request)
+}
+
+pub fn snapshot_create_in(
+    layout: &TwinLayout,
+    request: SnapshotCreateRequest,
+) -> Result<SnapshotCreateResult, AppError> {
+    commands::snapshot::create_in(layout, request)
+}
+
+pub fn snapshot_list(request: SnapshotListRequest) -> Result<SnapshotListResult, AppError> {
+    commands::snapshot::list_home(request)
+}
+
+pub fn snapshot_list_in(
+    layout: &TwinLayout,
+    request: SnapshotListRequest,
+) -> Result<SnapshotListResult, AppError> {
+    commands::snapshot::list_in(layout, request)
+}
+
+#[derive(Debug, Clone)]
+pub struct DiffRequest {
+    pub config_override: Option<PathBuf>,
+    pub left: String,
+    pub right: String,
+}
+
+pub fn diff(request: DiffRequest) -> Result<DiffResult, AppError> {
+    commands::diff::run_home(request)
+}
+
+pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, AppError> {
+    commands::diff::run(layout, &request)
 }

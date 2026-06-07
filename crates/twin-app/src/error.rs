@@ -18,6 +18,8 @@ pub enum AppError {
     Impact(#[from] ImpactError),
     #[error("emulation failed: {0}")]
     Emulate(#[from] EmulateError),
+    #[error("temporal command failed: {0}")]
+    Temporal(#[from] TemporalError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -151,5 +153,37 @@ pub enum EmulateError {
         kind: &'static str,
         id: String,
         reason: String,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TemporalError {
+    #[error("path resolution failed: {0}")]
+    Paths(#[from] PathError),
+    #[error("database is not initialized; run `twin init` first")]
+    DatabaseNotInitialized,
+    #[error("cannot open database: {0}")]
+    StoreOpen(#[from] StoreOpenError),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("invalid duration `{value}`: {reason}")]
+    InvalidDuration { value: String, reason: String },
+    #[error("invalid snapshot name `{value}`: {source}")]
+    InvalidSnapshotName {
+        value: String,
+        #[source]
+        source: ParseError,
+    },
+    #[error("snapshot `{name}` already exists")]
+    DuplicateSnapshot { name: String },
+    #[error("no active graph rows to snapshot; run `twin scan` first")]
+    EmptyGraph,
+    #[error("snapshot `{name}` not found")]
+    SnapshotNotFound { name: String },
+    #[error("invalid graph ref `{value}`: {source}")]
+    InvalidGraphRef {
+        value: String,
+        #[source]
+        source: ParseError,
     },
 }

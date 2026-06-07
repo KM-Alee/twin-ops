@@ -85,7 +85,7 @@ impl Store {
             .prepare(
                 "SELECT id, kind, label, state, first_seen_ns, last_seen_ns,
                         valid_from_ns, valid_to_ns, metadata_json
-                 FROM nodes WHERE kind = ?1 ORDER BY id",
+                 FROM nodes WHERE kind = ?1 AND state = 'active' ORDER BY id",
             )
             .map_err(|source| StoreError::Query { source })?;
 

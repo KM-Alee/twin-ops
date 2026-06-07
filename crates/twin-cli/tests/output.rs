@@ -996,6 +996,285 @@ fn emulate_restart_output_renders_depth_and_cycle_cap_notes() {
 }
 
 #[test]
+fn what_changed_output_has_new_disappeared_changed_sections() {
+    use twin_app::{WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult};
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![WhatChangedNode {
+            id: "process:pid:2241".to_string(),
+            label: "python".to_string(),
+            kind: "process".to_string(),
+            state: "active".to_string(),
+        }],
+        new_edges: vec![],
+        disappeared_nodes: vec![WhatChangedNode {
+            id: "service:redis.service".to_string(),
+            label: "redis.service".to_string(),
+            kind: "service".to_string(),
+            state: "gone".to_string(),
+        }],
+        disappeared_edges: vec![],
+        stale_nodes: vec![],
+        stale_edges: vec![],
+        changed_nodes: vec![WhatChangedNodeDelta {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+            kind: "service".to_string(),
+            summary: "state active -> stale".to_string(),
+        }],
+        changed_edges: vec![],
+        reappeared_nodes: vec![],
+        reappeared_edges: vec![],
+        unknowns: vec![],
+    };
+    let text = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions::concise(),
+    );
+    assert!(text.contains("twin what-changed"));
+    assert!(text.contains("summary"));
+    assert!(text.contains("1 new"));
+    assert!(text.contains("1 disappeared"));
+    assert!(text.contains("1 changed"));
+    assert!(text.contains("new"));
+    assert!(text.contains("disappeared"));
+    assert!(text.contains("changed"));
+    assert!(text.contains("process:pid:2241"));
+}
+
+#[test]
+fn snapshot_list_output_is_stable_and_readable() {
+    use twin_app::{SnapshotEntry, SnapshotListResult};
+    let result = SnapshotListResult {
+        snapshots: vec![SnapshotEntry {
+            name: "before-change".to_string(),
+            created_at_ns: 1_700_000_000_000_000_000,
+            node_count: 12,
+            edge_count: 8,
+        }],
+    };
+    let text = output::snapshot::render_list(&result);
+    assert!(text.contains("twin snapshot list"));
+    assert!(text.contains("before-change"));
+    assert!(text.contains("12 nodes"));
+    assert!(text.contains("8 edges"));
+}
+
+#[test]
+fn diff_output_shows_direction_and_grouped_changes() {
+    use twin_app::{DiffNode, DiffResult};
+    let result = DiffResult {
+        left_ref: "snapshot:before-change".to_string(),
+        right_ref: "current".to_string(),
+        nodes_added: vec![DiffNode {
+            id: "port:tcp:127.0.0.1:8000".to_string(),
+            label: "127.0.0.1:8000".to_string(),
+            kind: "port".to_string(),
+            state: "active".to_string(),
+        }],
+        nodes_removed: vec![],
+        nodes_changed: vec![],
+        edges_added: vec![],
+        edges_removed: vec![],
+        edges_changed: vec![],
+    };
+    let text = output::diff::render(&result);
+    assert!(text.contains("twin diff"));
+    assert!(text.contains("snapshot:before-change -> current"));
+    assert!(text.contains("added"));
+}
+
+#[test]
+fn what_changed_json_is_structured() {
+    use twin_app::{WhatChangedNode, WhatChangedResult};
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![WhatChangedNode {
+            id: "process:pid:1".to_string(),
+            label: "systemd".to_string(),
+            kind: "process".to_string(),
+            state: "active".to_string(),
+        }],
+        new_edges: vec![],
+        disappeared_nodes: vec![],
+        disappeared_edges: vec![],
+        stale_nodes: vec![],
+        stale_edges: vec![],
+        changed_nodes: vec![],
+        changed_edges: vec![],
+        reappeared_nodes: vec![],
+        reappeared_edges: vec![],
+        unknowns: vec![],
+    };
+    let json = output::json::render(&result).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert!(value.get("new_nodes").is_some());
+    assert!(value.get("since_ns").is_some());
+}
+
+#[test]
+fn what_changed_renders_readable_edges() {
+    use twin_app::{WhatChangedEdge, WhatChangedResult};
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![],
+        disappeared_nodes: vec![],
+        stale_nodes: vec![],
+        changed_nodes: vec![],
+        reappeared_nodes: vec![],
+        disappeared_edges: vec![],
+        stale_edges: vec![],
+        changed_edges: vec![],
+        reappeared_edges: vec![],
+        unknowns: vec![],
+        new_edges: vec![WhatChangedEdge {
+            id: "service:nginx.service|listens_on|port:tcp:0.0.0.0:80".to_string(),
+            from_node_id: "service:nginx.service".to_string(),
+            to_node_id: "port:tcp:0.0.0.0:80".to_string(),
+            kind: "listens_on".to_string(),
+            class: "inferred".to_string(),
+            state: "active".to_string(),
+        }],
+    };
+    let text = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions::concise(),
+    );
+    assert!(text.contains(
+        "service:nginx.service → listens_on → port:tcp:0.0.0.0:80"
+    ));
+    assert!(text.contains("(edges: 1 new)"));
+}
+
+#[test]
+fn what_changed_hides_declared_depends_on_noise() {
+    use twin_app::{WhatChangedEdge, WhatChangedResult};
+    let mut reappeared_edges = vec![WhatChangedEdge {
+        id: "service:nginx.service|listens_on|port:tcp:0.0.0.0:80".to_string(),
+        from_node_id: "service:nginx.service".to_string(),
+        to_node_id: "port:tcp:0.0.0.0:80".to_string(),
+        kind: "listens_on".to_string(),
+        class: "inferred".to_string(),
+        state: "active".to_string(),
+    }];
+    for i in 0..5 {
+        reappeared_edges.push(WhatChangedEdge {
+            id: format!("service:unit{i}.service|depends_on|service:mount{i}.mount"),
+            from_node_id: format!("service:unit{i}.service"),
+            to_node_id: format!("service:mount{i}.mount"),
+            kind: "depends_on".to_string(),
+            class: "observed".to_string(),
+            state: "active".to_string(),
+        });
+    }
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![],
+        disappeared_nodes: vec![],
+        stale_nodes: vec![],
+        changed_nodes: vec![],
+        reappeared_nodes: vec![],
+        new_edges: vec![],
+        disappeared_edges: vec![],
+        stale_edges: vec![],
+        changed_edges: vec![],
+        reappeared_edges,
+        unknowns: vec![],
+    };
+    let text = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions::concise(),
+    );
+    assert!(text.contains("listens_on"));
+    assert!(text.contains("5 declared depends_on edges reappeared"));
+    assert!(!text.contains("unit0.service|depends_on"));
+}
+
+#[test]
+fn what_changed_truncates_large_sections() {
+    use twin_app::{WhatChangedNode, WhatChangedResult};
+    let reappeared_nodes: Vec<_> = (0..25)
+        .map(|i| WhatChangedNode {
+            id: format!("process:pid:{i}"),
+            label: format!("proc{i}"),
+            kind: "process".to_string(),
+            state: "active".to_string(),
+        })
+        .collect();
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![],
+        disappeared_nodes: vec![],
+        stale_nodes: vec![],
+        changed_nodes: vec![],
+        reappeared_nodes,
+        new_edges: vec![],
+        disappeared_edges: vec![],
+        stale_edges: vec![],
+        changed_edges: vec![],
+        reappeared_edges: vec![],
+        unknowns: vec![],
+    };
+    let text = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions::concise(),
+    );
+    let line_count = text.lines().count();
+    assert!(line_count < 80, "expected concise output, got {line_count} lines");
+    assert!(text.contains("… and 7 more (use --json)"));
+    assert!(text.contains("25 reappeared"));
+}
+
+#[test]
+fn what_changed_verbose_shows_hidden_edges() {
+    use twin_app::{WhatChangedEdge, WhatChangedResult};
+    let result = WhatChangedResult {
+        since_ns: 1,
+        since_label: "10m".to_string(),
+        generated_at_ns: 2,
+        new_nodes: vec![],
+        disappeared_nodes: vec![],
+        stale_nodes: vec![],
+        changed_nodes: vec![],
+        reappeared_nodes: vec![],
+        new_edges: vec![],
+        disappeared_edges: vec![],
+        stale_edges: vec![],
+        changed_edges: vec![],
+        reappeared_edges: vec![WhatChangedEdge {
+            id: "service:foo.service|depends_on|service:bar.mount".to_string(),
+            from_node_id: "service:foo.service".to_string(),
+            to_node_id: "service:bar.mount".to_string(),
+            kind: "depends_on".to_string(),
+            class: "observed".to_string(),
+            state: "active".to_string(),
+        }],
+        unknowns: vec![],
+    };
+    let concise = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions::concise(),
+    );
+    assert!(!concise.contains("foo.service → depends_on"));
+    let verbose = output::what_changed::render(
+        &result,
+        output::what_changed::WhatChangedRenderOptions { verbose: true },
+    );
+    assert!(verbose.contains("foo.service → depends_on → service:bar.mount"));
+    assert!(!verbose.contains("hidden"));
+}
+
+#[test]
 fn init_json_includes_schema_version() {
     let result = sample_init_result();
     let json = output::json::render(&result).expect("json");

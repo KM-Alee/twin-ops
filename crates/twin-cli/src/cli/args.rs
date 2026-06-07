@@ -26,6 +26,9 @@ pub enum Command {
     Graph(GraphArgs),
     Impact(ImpactArgs),
     Emulate(EmulateArgs),
+    WhatChanged(WhatChangedArgs),
+    Snapshot(SnapshotArgs),
+    Diff(DiffArgs),
 }
 
 #[derive(Args)]
@@ -121,6 +124,57 @@ pub struct EmulateDeleteArgs {
         help = "Absolute file path or file: node id (e.g. /etc/nginx/nginx.conf)"
     )]
     pub target: String,
+}
+
+#[derive(Args)]
+pub struct WhatChangedArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Report changes since this window (e.g. 10m, 1h, yesterday)"
+    )]
+    pub since: String,
+
+    #[arg(
+        long,
+        help = "Show full change lists in human output (default is concise)"
+    )]
+    pub verbose: bool,
+}
+
+#[derive(Args)]
+pub struct SnapshotArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[command(subcommand)]
+    pub action: SnapshotActionArgs,
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotActionArgs {
+    #[command(about = "Create a named graph snapshot")]
+    Create {
+        #[arg(help = "Snapshot name (letters, digits, '.', '_', '-')")]
+        name: String,
+    },
+    #[command(about = "List saved graph snapshots")]
+    List,
+}
+
+#[derive(Args)]
+pub struct DiffArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(help = "Left graph ref (`current` or `snapshot:NAME`)")]
+    pub left: String,
+
+    #[arg(help = "Right graph ref (`current` or `snapshot:NAME`)")]
+    pub right: String,
 }
 
 #[derive(Args)]

@@ -1,3 +1,10 @@
+pub const NEW: &str = "new";
+pub const DISAPPEARED: &str = "disappeared";
+pub const STALE: &str = "stale";
+pub const CHANGED: &str = "changed";
+pub const REAPPEARED: &str = "reappeared";
+pub const ADDED: &str = "added";
+pub const REMOVED: &str = "removed";
 pub const TARGET: &str = "target";
 pub const RISK: &str = "risk";
 pub const EVIDENCE_STRENGTH: &str = "evidence strength";

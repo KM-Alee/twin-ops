@@ -113,7 +113,7 @@ pub(crate) fn load_typed_service_dependents(
     let mut unknowns = target_unknowns_for_service(store, target, &tcp_index, &unix_index)?;
 
     let incoming = store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(ImpactError::Store)?;
     for row in incoming {
         let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
@@ -271,7 +271,7 @@ fn port_impact(
     let mut unknowns = target_unknowns_for_socket(target, target_kind, &tcp_index, &unix_index)?;
 
     let incoming = store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(ImpactError::Store)?;
     for row in incoming {
         let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
@@ -893,7 +893,7 @@ fn socket_peers_for_service(
     let mut ports = Vec::new();
     let mut unix_sockets = Vec::new();
     for row in store
-        .list_edges_from(service_id.as_str())
+        .list_active_edges_from(service_id.as_str())
         .map_err(ImpactError::Store)?
     {
         let Ok(edge) = GraphEdge::try_from(&row) else {

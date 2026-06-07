@@ -113,7 +113,7 @@ fn list_by_kind(store: &Store, kind: NodeKind) -> Result<GraphResult, AppError> 
     let node_ids: HashSet<String> = summaries.iter().map(|n| n.id.clone()).collect();
 
     let parent_edges = store
-        .list_edges_by_kind(&EdgeKind::ParentOf.to_string())
+        .list_active_edges_by_kind(&EdgeKind::ParentOf.to_string())
         .map_err(GraphError::Store)?
         .into_iter()
         .filter_map(|row| {
@@ -188,7 +188,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     let mut seen_evidence = HashSet::new();
 
     let outgoing = store
-        .list_edges_from(target.as_str())
+        .list_active_edges_from(target.as_str())
         .map_err(GraphError::Store)?;
     for row in outgoing {
         let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
@@ -341,7 +341,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     }
 
     let incoming = store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(GraphError::Store)?;
     for row in incoming {
         let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
@@ -435,7 +435,7 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
     let mut seen_evidence = HashSet::new();
 
     for row in store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(GraphError::Store)?
     {
         let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
@@ -505,7 +505,7 @@ where
     let mut seen_evidence = HashSet::new();
 
     let incoming_rows = store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(GraphError::Store)?;
     let mut incoming_edges = Vec::new();
     let mut peer_id_strs = Vec::new();
@@ -1007,11 +1007,11 @@ fn peer_parent_edges(
 ) -> Result<Vec<GraphEdgeSummary>, AppError> {
     let rows = if outgoing {
         store
-            .list_edges_from(target.as_str())
+            .list_active_edges_from(target.as_str())
             .map_err(GraphError::Store)?
     } else {
         store
-            .list_edges_to(target.as_str())
+            .list_active_edges_to(target.as_str())
             .map_err(GraphError::Store)?
     };
 

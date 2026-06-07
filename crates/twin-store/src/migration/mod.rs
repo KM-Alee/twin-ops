@@ -94,4 +94,95 @@ pub const MIGRATION_003: &str = r"
 ALTER TABLE collector_runs ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
 ";
 
-pub const LATEST_VERSION: i64 = 3;
+pub const MIGRATION_004: &str = r"
+CREATE TABLE IF NOT EXISTS node_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    state TEXT NOT NULL,
+    first_seen_ns INTEGER NOT NULL,
+    last_seen_ns INTEGER NOT NULL,
+    valid_from_ns INTEGER NOT NULL,
+    valid_to_ns INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    change_kind TEXT NOT NULL,
+    recorded_at_ns INTEGER NOT NULL,
+    collector_run_id INTEGER,
+    FOREIGN KEY (collector_run_id) REFERENCES collector_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_history_recorded ON node_history(recorded_at_ns);
+CREATE INDEX IF NOT EXISTS idx_node_history_node ON node_history(node_id);
+CREATE INDEX IF NOT EXISTS idx_node_history_change_kind ON node_history(change_kind);
+
+CREATE TABLE IF NOT EXISTS edge_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    edge_id TEXT NOT NULL,
+    from_node_id TEXT NOT NULL,
+    to_node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    class TEXT NOT NULL,
+    state TEXT NOT NULL,
+    evidence_score INTEGER NOT NULL DEFAULT 0,
+    evidence_label TEXT NOT NULL DEFAULT 'weak',
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_ns INTEGER NOT NULL,
+    last_seen_ns INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    change_kind TEXT NOT NULL,
+    recorded_at_ns INTEGER NOT NULL,
+    collector_run_id INTEGER,
+    FOREIGN KEY (collector_run_id) REFERENCES collector_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_edge_history_recorded ON edge_history(recorded_at_ns);
+CREATE INDEX IF NOT EXISTS idx_edge_history_edge ON edge_history(edge_id);
+CREATE INDEX IF NOT EXISTS idx_edge_history_change_kind ON edge_history(change_kind);
+
+CREATE TABLE IF NOT EXISTS snapshots (
+    name TEXT PRIMARY KEY,
+    created_at_ns INTEGER NOT NULL,
+    node_count INTEGER NOT NULL,
+    edge_count INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_nodes (
+    snapshot_name TEXT NOT NULL,
+    id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    state TEXT NOT NULL,
+    first_seen_ns INTEGER NOT NULL,
+    last_seen_ns INTEGER NOT NULL,
+    valid_from_ns INTEGER NOT NULL,
+    valid_to_ns INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (snapshot_name, id),
+    FOREIGN KEY (snapshot_name) REFERENCES snapshots(name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_nodes_snapshot ON snapshot_nodes(snapshot_name);
+
+CREATE TABLE IF NOT EXISTS snapshot_edges (
+    snapshot_name TEXT NOT NULL,
+    id TEXT NOT NULL,
+    from_node_id TEXT NOT NULL,
+    to_node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    class TEXT NOT NULL,
+    state TEXT NOT NULL,
+    evidence_score INTEGER NOT NULL DEFAULT 0,
+    evidence_label TEXT NOT NULL DEFAULT 'weak',
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_ns INTEGER NOT NULL,
+    last_seen_ns INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (snapshot_name, id),
+    FOREIGN KEY (snapshot_name) REFERENCES snapshots(name) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshot_edges_snapshot ON snapshot_edges(snapshot_name);
+";
+
+pub const LATEST_VERSION: i64 = 4;

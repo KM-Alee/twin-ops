@@ -109,6 +109,13 @@ pub fn open_v2_only(path: &Path) -> Store {
     store
 }
 
+pub fn open_v3_only(path: &Path) -> Store {
+    let store = Store::open(path).expect("open");
+    store.apply_migrations_through(3).expect("v3");
+    assert_eq!(store.schema_version().expect("version"), 3);
+    store
+}
+
 pub fn column_exists(path: &Path, table: &str, column: &str) -> bool {
     let conn = rusqlite::Connection::open(path).expect("open");
     conn.query_row(

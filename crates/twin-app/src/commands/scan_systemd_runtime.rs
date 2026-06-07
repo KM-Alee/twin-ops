@@ -16,6 +16,7 @@ pub(crate) struct RuntimeDependsOnCounts<'a> {
 
 pub(crate) fn persist_runtime_in_scan(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut super::scan::ScanEdgeCache,
     batch: &SystemdRuntimeBatch,
     observations: &[Observation],
@@ -62,7 +63,7 @@ pub(crate) fn persist_runtime_in_scan(
         let Some(unit) = obs.metadata().get("unit").and_then(|v| v.as_str()) else {
             continue;
         };
-        upsert_service_state_node(store, unit, obs, scan_time)?;
+        upsert_service_state_node(store, history, unit, obs, scan_time)?;
     }
 
     for ((from_unit, to_unit), obs_ids) in &dep_groups {
@@ -76,9 +77,13 @@ pub(crate) fn persist_runtime_in_scan(
                     .get(oid)
                     .filter(|o| o.kind() == ObservationKind::SystemdUnitStateSeen)
             }) {
-                upsert_service_state_node(store, unit, state_obs, scan_time)?;
+                upsert_service_state_node(store, history, unit, state_obs, scan_time)?;
             } else if existing.is_none() {
-                store.upsert_node_typed(&GraphNode::service(unit, scan_time, None))?;
+                super::scan_history::upsert_node(
+                    store,
+                    history,
+                    &GraphNode::service(unit, scan_time, None),
+                )?;
             }
         }
         let Some(primary) = obs_ids.iter().find_map(|id| obs_by_id.get(id)) else {
@@ -103,6 +108,7 @@ pub(crate) fn persist_runtime_in_scan(
                     .unwrap_or("wants");
                 super::scan_systemd_groups::persist_depends_on_group(
                     store,
+                    history,
                     edge_cache,
                     &source_id,
                     &target_id,
@@ -122,6 +128,7 @@ pub(crate) fn persist_runtime_in_scan(
             _ if primary.source() == ObservationSource::SystemdDBus => {
                 super::scan_systemd_groups::persist_depends_on_group(
                     store,
+                    history,
                     edge_cache,
                     &source_id,
                     &target_id,
@@ -148,6 +155,7 @@ pub(crate) fn persist_runtime_in_scan(
 
 fn upsert_service_state_node(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     unit: &str,
     obs: &Observation,
     scan_time: TimestampNs,
@@ -200,5 +208,5 @@ fn upsert_service_state_node(
         valid_to: None,
         metadata: GraphMetadata::from_json(serde_json::Value::Object(meta).to_string()),
     });
-    store.upsert_node_typed(&node)
+    super::scan_history::upsert_node(store, history, &node)
 }

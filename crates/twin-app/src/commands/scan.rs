@@ -249,6 +249,9 @@ fn persist_scan(
     }
 
     let live_cgroup_reader = super::scan_cgroup_validate::dbus_reader_for_scan();
+    let prefer_stale =
+        super::scan_history::ScanHistorySession::prefer_stale_from_warnings(batch.warnings());
+    let finalize_missing = sample_index + 1 == samples_total;
     store
         .with_transaction(|store| {
             let mut listener_obs_by_port: HashMap<NodeId, ObservationId> = HashMap::new();
@@ -265,6 +268,12 @@ fn persist_scan(
                     batch.warnings(),
                 ),
             })?;
+            let mut history = super::scan_history::ScanHistorySession::new(
+                scan_time.as_i64(),
+                Some(run_id),
+                prefer_stale,
+                finalize_missing,
+            );
 
             for obs in &observations {
                 store.insert_observation_typed_for_run(obs, run_id)?;
@@ -275,7 +284,7 @@ fn persist_scan(
                 let existing = store.get_node_typed(&node_id)?;
                 let node =
                     GraphNode::process(record.pid(), record.label(), scan_time, existing.as_ref());
-                store.upsert_node_typed(&node)?;
+                super::scan_history::upsert_node(store, &mut history, &node)?;
                 process_count += 1;
 
                 if let Some(exe) = record.exe() {
@@ -283,15 +292,19 @@ fn persist_scan(
                     let file_id = NodeId::file(&exe_str);
                     let file_existing = store.get_node_typed(&file_id)?;
                     let file_node = GraphNode::file(&exe_str, scan_time, file_existing.as_ref());
-                    store.upsert_node_typed(&file_node)?;
+                    super::scan_history::upsert_node(store, &mut history, &file_node)?;
                 }
 
                 let process_id = NodeId::process(record.pid());
                 for membership in record.cgroup_memberships() {
                     let cgroup_id = NodeId::cgroup(&membership.path);
-                    if upsert_node_once(store, &mut seen_cgroups, cgroup_id.clone(), |existing| {
-                        GraphNode::cgroup(&membership.path, scan_time, existing)
-                    })? {
+                    if upsert_node_once(
+                        store,
+                        &mut history,
+                        &mut seen_cgroups,
+                        cgroup_id.clone(),
+                        |existing| GraphNode::cgroup(&membership.path, scan_time, existing),
+                    )? {
                         cgroup_count += 1;
                     }
 
@@ -304,6 +317,7 @@ fn persist_scan(
                         let service_id = NodeId::service(unit);
                         if upsert_node_once(
                             store,
+                            &mut history,
                             &mut seen_services,
                             service_id.clone(),
                             |existing| GraphNode::service(unit, scan_time, existing),
@@ -326,7 +340,7 @@ fn persist_scan(
                                 )?
                                 .as_ref(),
                             );
-                            upsert_edge_with_link(store, &edge, cgroup_obs_support)?;
+                            upsert_edge_with_link(store, &mut history, &edge, cgroup_obs_support)?;
                             service_owns_edge_count += 1;
                         }
                     }
@@ -344,7 +358,7 @@ fn persist_scan(
                         )?
                         .as_ref(),
                     );
-                    upsert_edge_with_link(store, &in_cgroup, cgroup_obs_direct)?;
+                    upsert_edge_with_link(store, &mut history, &in_cgroup, cgroup_obs_direct)?;
                     in_cgroup_edge_count += 1;
                 }
 
@@ -360,7 +374,7 @@ fn persist_scan(
                 if parent_existing.is_none() {
                     let parent_node =
                         GraphNode::process(ppid, format!("pid:{ppid}"), scan_time, None);
-                    store.upsert_node_typed(&parent_node)?;
+                    super::scan_history::upsert_node(store, &mut history, &parent_node)?;
                 }
                 let edge_id = EdgeId::new(&parent_id, EdgeKind::ParentOf, &child_id);
                 let edge_existing = store.get_edge(edge_id.as_str())?;
@@ -373,7 +387,7 @@ fn persist_scan(
                     scan_time,
                     existing_edge.as_ref(),
                 );
-                store.upsert_edge_typed(&edge)?;
+                super::scan_history::upsert_edge(store, &mut history, &edge)?;
                 parent_edge_count += 1;
 
                 if let Some(obs_id) = parent_obs_by_child.get(&record.pid()) {
@@ -388,12 +402,13 @@ fn persist_scan(
             for record in batch.records() {
                 prune_stale_service_owns(
                     store,
+                    &mut history,
                     &NodeId::process(record.pid()),
                     &expected_service_owns,
                 )?;
             }
             for cgroup_id in &seen_cgroups {
-                prune_stale_service_owns(store, cgroup_id, &expected_service_owns)?;
+                prune_stale_service_owns(store, &mut history, cgroup_id, &expected_service_owns)?;
             }
 
             for (inode, port_id) in &resolved_listeners {
@@ -408,7 +423,7 @@ fn persist_scan(
                 .map_err(|e| StoreError::Decode {
                     detail: e.to_string(),
                 })?;
-                store.upsert_node_typed(&port_node)?;
+                super::scan_history::upsert_node(store, &mut history, &port_node)?;
                 if seen_ports.insert(port_id.clone()) {
                     port_count += 1;
                 }
@@ -436,9 +451,11 @@ fn persist_scan(
                             .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
-                        store.upsert_node_typed(&GraphNode::process(
-                            owner.pid, label, scan_time, None,
-                        ))?;
+                        super::scan_history::upsert_node(
+                            store,
+                            &mut history,
+                            &GraphNode::process(owner.pid, label, scan_time, None),
+                        )?;
                     }
                     let edge = GraphEdge::observed_process_listens_on(
                         &process_id,
@@ -453,7 +470,7 @@ fn persist_scan(
                         )?
                         .as_ref(),
                     );
-                    upsert_edge_with_link(store, &edge, socket_obs)?;
+                    upsert_edge_with_link(store, &mut history, &edge, socket_obs)?;
                     if seen_process_listeners.insert((process_id.clone(), port_id.clone())) {
                         process_listens_on_edge_count += 1;
                     }
@@ -477,7 +494,7 @@ fn persist_scan(
                                 )?
                                 .as_ref(),
                             );
-                            upsert_edge_with_link(store, &edge, socket_obs)?;
+                            upsert_edge_with_link(store, &mut history, &edge, socket_obs)?;
                             service_listens_on_edge_count += 1;
                             let listeners = listeners_by_port.entry(port_id.clone()).or_default();
                             if !listeners.contains(service_id) {
@@ -506,7 +523,7 @@ fn persist_scan(
                 .map_err(|e| StoreError::Decode {
                     detail: e.to_string(),
                 })?;
-                store.upsert_node_typed(&port_node)?;
+                super::scan_history::upsert_node(store, &mut history, &port_node)?;
                 if seen_ports.insert(remote_port_id.clone()) {
                     port_count += 1;
                 }
@@ -537,9 +554,11 @@ fn persist_scan(
                             .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
-                        store.upsert_node_typed(&GraphNode::process(
-                            owner.pid, label, scan_time, None,
-                        ))?;
+                        super::scan_history::upsert_node(
+                            store,
+                            &mut history,
+                            &GraphNode::process(owner.pid, label, scan_time, None),
+                        )?;
                     }
                     let edge = GraphEdge::observed_process_connects_to(
                         &process_id,
@@ -554,7 +573,7 @@ fn persist_scan(
                         )?
                         .as_ref(),
                     );
-                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    upsert_edge_with_link(store, &mut history, &edge, conn_obs)?;
                     if seen_process_connects.insert((process_id.clone(), remote_port_id.clone())) {
                         process_connects_to_edge_count += 1;
                     }
@@ -576,6 +595,7 @@ fn persist_scan(
                             );
                             upsert_edge_with_link(
                                 store,
+                                &mut history,
                                 &edge,
                                 conn_obs.map(|(id, _)| (id, "support")),
                             )?;
@@ -627,7 +647,7 @@ fn persist_scan(
                             .as_ref(),
                         );
                         let first_pair = seen_service_depends.insert(pair);
-                        upsert_edge_with_link(store, &edge, conn_obs)?;
+                        upsert_edge_with_link(store, &mut history, &edge, conn_obs)?;
                         if first_pair {
                             if let Some(link) = listener_obs {
                                 store.link_edge_observation(
@@ -654,7 +674,7 @@ fn persist_scan(
                         .map_err(|e| StoreError::Decode {
                             detail: e.to_string(),
                         })?;
-                store.upsert_node_typed(&unix_node)?;
+                super::scan_history::upsert_node(store, &mut history, &unix_node)?;
                 if seen_unix_sockets.insert(unix_id.clone()) {
                     unix_socket_count += 1;
                 }
@@ -682,9 +702,11 @@ fn persist_scan(
                             .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
-                        store.upsert_node_typed(&GraphNode::process(
-                            owner.pid, label, scan_time, None,
-                        ))?;
+                        super::scan_history::upsert_node(
+                            store,
+                            &mut history,
+                            &GraphNode::process(owner.pid, label, scan_time, None),
+                        )?;
                     }
                     let edge = GraphEdge::observed_process_listens_on(
                         &process_id,
@@ -699,7 +721,7 @@ fn persist_scan(
                         )?
                         .as_ref(),
                     );
-                    upsert_edge_with_link(store, &edge, socket_obs)?;
+                    upsert_edge_with_link(store, &mut history, &edge, socket_obs)?;
                     if seen_process_unix_listeners.insert((process_id.clone(), unix_id.clone())) {
                         process_listens_on_unix_edge_count += 1;
                     }
@@ -724,7 +746,7 @@ fn persist_scan(
                                 )?
                                 .as_ref(),
                             );
-                            upsert_edge_with_link(store, &edge, socket_obs)?;
+                            upsert_edge_with_link(store, &mut history, &edge, socket_obs)?;
                             service_listens_on_unix_edge_count += 1;
                             listeners_by_unix_path
                                 .entry(listener.path.clone())
@@ -750,7 +772,7 @@ fn persist_scan(
                         .map_err(|e| StoreError::Decode {
                             detail: e.to_string(),
                         })?;
-                store.upsert_node_typed(&unix_node)?;
+                super::scan_history::upsert_node(store, &mut history, &unix_node)?;
                 if seen_unix_sockets.insert(unix_id.clone()) {
                     unix_socket_count += 1;
                 }
@@ -778,9 +800,11 @@ fn persist_scan(
                             .get(&owner.pid)
                             .and_then(|r| r.comm().map(str::to_string))
                             .unwrap_or_else(|| format!("pid:{}", owner.pid));
-                        store.upsert_node_typed(&GraphNode::process(
-                            owner.pid, label, scan_time, None,
-                        ))?;
+                        super::scan_history::upsert_node(
+                            store,
+                            &mut history,
+                            &GraphNode::process(owner.pid, label, scan_time, None),
+                        )?;
                     }
                     let edge = GraphEdge::observed_process_connects_to(
                         &process_id,
@@ -795,7 +819,7 @@ fn persist_scan(
                         )?
                         .as_ref(),
                     );
-                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    upsert_edge_with_link(store, &mut history, &edge, conn_obs)?;
                     if seen_process_unix_connects.insert((process_id.clone(), unix_id.clone())) {
                         process_connects_to_unix_edge_count += 1;
                     }
@@ -817,6 +841,7 @@ fn persist_scan(
                             );
                             upsert_edge_with_link(
                                 store,
+                                &mut history,
                                 &edge,
                                 conn_obs.map(|(id, _)| (id, "support")),
                             )?;
@@ -864,7 +889,7 @@ fn persist_scan(
                         .as_ref(),
                     );
                     let first_pair = seen_service_depends.insert(pair);
-                    upsert_edge_with_link(store, &edge, conn_obs)?;
+                    upsert_edge_with_link(store, &mut history, &edge, conn_obs)?;
                     if first_pair {
                         if let Some(link) = listener_obs {
                             store.link_edge_observation(
@@ -880,12 +905,15 @@ fn persist_scan(
 
             systemd_unit_count = super::scan_systemd::persist_systemd_in_scan(
                 store,
+                &mut history,
                 &mut edge_cache,
                 &unit_batch,
                 &unit_observations,
                 scan_time,
-                &mut declared_depends_on_edge_count,
-                &mut seen_service_depends,
+                super::scan_systemd::DeclaredDependsOnCounts {
+                    declared: &mut declared_depends_on_edge_count,
+                    seen: &mut seen_service_depends,
+                },
             )?;
 
             let service_units = super::scan_config_files::existing_service_units(store)?;
@@ -896,6 +924,7 @@ fn persist_scan(
             );
             super::scan_config_files::persist_config_files_in_scan(
                 store,
+                &mut history,
                 &mut edge_cache,
                 &config_discoveries,
                 scan_time,
@@ -904,6 +933,7 @@ fn persist_scan(
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
                     store,
+                    &mut history,
                     &mut edge_cache,
                     &unit_observations,
                     scan_time,
@@ -912,6 +942,7 @@ fn persist_scan(
 
             super::scan_systemd_runtime::persist_runtime_in_scan(
                 store,
+                &mut history,
                 &mut edge_cache,
                 &runtime_batch,
                 &runtime_observations,
@@ -933,11 +964,14 @@ fn persist_scan(
                 });
             cgroup_correction_count = super::scan_cgroup_validate::apply_cgroup_corrections(
                 store,
+                &mut history,
                 &mut edge_cache,
                 batch.records(),
                 scan_time,
                 cgroup_reader,
             )?;
+
+            history.finalize_missing_rows(store)?;
 
             store.update_collector_run_metadata(
                 run_id,
@@ -1462,6 +1496,7 @@ fn detailed_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarningDetail> {
 
 fn prune_stale_service_owns(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     target: &NodeId,
     expected: &HashSet<(NodeId, NodeId)>,
 ) -> Result<(), StoreError> {
@@ -1479,13 +1514,14 @@ fn prune_stale_service_owns(
         if expected.contains(&(service_id.clone(), target.clone())) {
             continue;
         }
-        store.delete_edge(edge.id().as_str())?;
+        super::scan_history::delete_edge(store, history, edge.id().as_str())?;
     }
     Ok(())
 }
 
 fn upsert_node_once(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     seen: &mut HashSet<NodeId>,
     id: NodeId,
     build: impl FnOnce(Option<&GraphNode>) -> GraphNode,
@@ -1494,7 +1530,7 @@ fn upsert_node_once(
         return Ok(false);
     }
     let existing = store.get_node_typed(&id)?;
-    store.upsert_node_typed(&build(existing.as_ref()))?;
+    super::scan_history::upsert_node(store, history, &build(existing.as_ref()))?;
     Ok(true)
 }
 
@@ -1533,10 +1569,11 @@ pub(crate) fn load_existing_edge(
 
 pub(crate) fn upsert_edge_with_link(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge: &GraphEdge,
     link: Option<(&ObservationId, &str)>,
 ) -> Result<(), StoreError> {
-    store.upsert_edge_typed(edge)?;
+    super::scan_history::upsert_edge(store, history, edge)?;
     if let Some((obs_id, role)) = link {
         store.link_edge_observation(edge.id().as_str(), &obs_id.to_string(), role)?;
     }

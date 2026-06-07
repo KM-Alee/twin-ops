@@ -4,12 +4,15 @@ use std::process;
 use clap::Parser;
 use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
 use twin_cli::cli::args::{
-    Cli, Command, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs, ImpactArgs,
-    InitArgs, ScanArgs,
+    Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
+    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WhatChangedArgs,
 };
+use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
 use twin_cli::cli::graph;
 use twin_cli::cli::impact;
+use twin_cli::cli::snapshot;
+use twin_cli::cli::what_changed;
 use twin_cli::output;
 use twin_cli::output::format::ScanFreshness;
 
@@ -26,6 +29,9 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Graph(args) => run_graph(&cli.global, &args),
         Command::Impact(args) => run_impact(&cli.global, &args),
         Command::Emulate(args) => run_emulate(&cli.global, &args),
+        Command::WhatChanged(args) => run_what_changed(&cli.global, &args),
+        Command::Snapshot(args) => run_snapshot(&cli.global, &args),
+        Command::Diff(args) => run_diff(&cli.global, &args),
     }
 }
 
@@ -170,6 +176,75 @@ fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
     match twin_app::impact(request) {
         Ok(result) => {
             emit_after_scan(global.json, &result, output::impact::render_with_scan, scan);
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_what_changed(global: &GlobalArgs, args: &WhatChangedArgs) -> i32 {
+    let request = what_changed::what_changed_request(args);
+    let verbose = request.verbose;
+    match twin_app::what_changed(request) {
+        Ok(result) => {
+            let rendered = if global.json {
+                output::json::render(&result)
+                    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+            } else {
+                output::what_changed::render(
+                    &result,
+                    output::what_changed::WhatChangedRenderOptions { verbose },
+                )
+            };
+            println!("{rendered}");
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_snapshot(global: &GlobalArgs, args: &SnapshotArgs) -> i32 {
+    match &args.action {
+        SnapshotActionArgs::Create { name } => {
+            let request = snapshot::snapshot_create_request(args, name);
+            match twin_app::snapshot_create(request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::snapshot::render_create);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+        SnapshotActionArgs::List => {
+            let request = snapshot::snapshot_list_request(args);
+            match twin_app::snapshot_list(request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::snapshot::render_list);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+    }
+}
+
+fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> i32 {
+    let request = diff::diff_request(args);
+    match twin_app::diff(request) {
+        Ok(result) => {
+            emit(global.json, &result, output::diff::render);
             0
         }
         Err(error) => {

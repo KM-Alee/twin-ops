@@ -8,6 +8,7 @@ use twin_store::{Store, StoreError};
 
 pub(crate) fn persist_socket_activation_in_scan(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut super::scan::ScanEdgeCache,
     observations: &[Observation],
     scan_time: TimestampNs,
@@ -32,10 +33,11 @@ pub(crate) fn persist_socket_activation_in_scan(
         let socket_id = NodeId::service(socket_unit);
         let service_id = NodeId::service(service_unit);
         for unit in [socket_unit, service_unit] {
-            upsert_service_unit_node(store, unit, scan_time)?;
+            upsert_service_unit_node(store, history, unit, scan_time)?;
         }
         super::scan_systemd_groups::persist_depends_on_group(
             store,
+            history,
             edge_cache,
             &socket_id,
             &service_id,
@@ -59,6 +61,7 @@ pub(crate) fn persist_socket_activation_in_scan(
 
 fn upsert_service_unit_node(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     unit: &str,
     scan_time: TimestampNs,
 ) -> Result<(), StoreError> {
@@ -84,7 +87,7 @@ fn upsert_service_unit_node(
         valid_to: None,
         metadata: service_unit_metadata(unit, existing.as_ref()),
     });
-    store.upsert_node_typed(&node)
+    super::scan_history::upsert_node(store, history, &node)
 }
 
 fn service_unit_metadata(unit: &str, existing: Option<&GraphNode>) -> GraphMetadata {

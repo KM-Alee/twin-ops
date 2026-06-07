@@ -15,6 +15,11 @@ fn fresh_database_has_domain_tables_at_latest_version() {
         "edges",
         "edge_observations",
         "collector_runs",
+        "node_history",
+        "edge_history",
+        "snapshots",
+        "snapshot_nodes",
+        "snapshot_edges",
     ] {
         assert!(support::table_exists(&path, table), "missing table {table}");
     }

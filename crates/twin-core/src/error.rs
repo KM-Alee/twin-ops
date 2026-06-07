@@ -10,6 +10,10 @@ pub enum ParseError {
     InvalidNodeId { value: String },
     #[error("invalid edge id: {value}")]
     InvalidEdgeId { value: String },
+    #[error("invalid snapshot name `{value}`: {reason}")]
+    SnapshotName { value: String, reason: String },
+    #[error("invalid graph ref `{value}`: {reason}")]
+    GraphRef { value: String, reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]

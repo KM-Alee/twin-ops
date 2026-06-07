@@ -36,6 +36,7 @@ pub(crate) enum EdgeObservationLink<'a> {
 
 pub(crate) fn persist_depends_on_group(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     cache: &mut super::scan::ScanEdgeCache,
     from: &NodeId,
     to: &NodeId,
@@ -46,10 +47,10 @@ pub(crate) fn persist_depends_on_group(
     let edge = build_edge(existing.as_ref());
     match link {
         EdgeObservationLink::Single(obs_id, role) => {
-            super::scan::upsert_edge_with_link(store, &edge, Some((obs_id, role)))?;
+            super::scan::upsert_edge_with_link(store, history, &edge, Some((obs_id, role)))?;
         }
         EdgeObservationLink::AllIds(obs_ids) => {
-            super::scan::upsert_edge_with_link(store, &edge, None)?;
+            super::scan::upsert_edge_with_link(store, history, &edge, None)?;
             for obs_id in obs_ids {
                 store.link_edge_observation(edge.id().as_str(), &obs_id.to_string(), "direct")?;
             }

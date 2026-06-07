@@ -5,14 +5,19 @@ use twin_core::{GraphEdge, GraphNode, NodeId, ObservationId, TimestampNs};
 use twin_observation::{Observation, ObservationKind};
 use twin_store::{CollectorRunRow, Store, StoreError};
 
+pub(crate) struct DeclaredDependsOnCounts<'a> {
+    pub declared: &'a mut usize,
+    pub seen: &'a mut HashSet<(NodeId, NodeId)>,
+}
+
 pub(crate) fn persist_systemd_in_scan(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut super::scan::ScanEdgeCache,
     batch: &SystemdUnitBatch,
     observations: &[Observation],
     scan_time: TimestampNs,
-    declared_depends_on_edge_count: &mut usize,
-    seen_service_depends: &mut HashSet<(NodeId, NodeId)>,
+    counts: DeclaredDependsOnCounts<'_>,
 ) -> Result<usize, StoreError> {
     let dep_groups = super::scan_systemd_groups::group_unit_dep_observations(observations, |obs| {
         matches!(
@@ -50,7 +55,7 @@ pub(crate) fn persist_systemd_in_scan(
         let service_id = NodeId::service(unit);
         let existing = store.get_node_typed(&service_id)?;
         let node = GraphNode::service(unit, scan_time, existing.as_ref());
-        store.upsert_node_typed(&node)?;
+        super::scan_history::upsert_node(store, history, &node)?;
         units_seen += 1;
     }
 
@@ -61,7 +66,7 @@ pub(crate) fn persist_systemd_in_scan(
             let id = NodeId::service(unit);
             let existing = store.get_node_typed(&id)?;
             let node = GraphNode::service(unit, scan_time, existing.as_ref());
-            store.upsert_node_typed(&node)?;
+            super::scan_history::upsert_node(store, history, &node)?;
         }
         let Some(primary) = obs_ids.iter().find_map(|id| obs_by_id.get(id)) else {
             continue;
@@ -78,6 +83,7 @@ pub(crate) fn persist_systemd_in_scan(
             .unwrap_or("Requires");
         super::scan_systemd_groups::persist_depends_on_group(
             store,
+            history,
             edge_cache,
             &source_id,
             &target_id,
@@ -88,8 +94,8 @@ pub(crate) fn persist_systemd_in_scan(
                 )
             },
         )?;
-        if seen_service_depends.insert((source_id.clone(), target_id.clone())) {
-            *declared_depends_on_edge_count += 1;
+        if counts.seen.insert((source_id.clone(), target_id.clone())) {
+            *counts.declared += 1;
         }
     }
 

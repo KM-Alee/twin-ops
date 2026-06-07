@@ -35,6 +35,7 @@ impl CgroupUnitLookup {
 
 pub(crate) fn apply_cgroup_corrections(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut super::scan::ScanEdgeCache,
     records: &[ProcessRecord],
     scan_time: TimestampNs,
@@ -73,11 +74,11 @@ pub(crate) fn apply_cgroup_corrections(
             let process_id = NodeId::process(record.pid());
             let cgroup_id = NodeId::cgroup(&path);
             let existing = store.get_node_typed(&corrected_id)?;
-            store.upsert_node_typed(&GraphNode::service(
-                &dbus_unit,
-                scan_time,
-                existing.as_ref(),
-            ))?;
+            super::scan_history::upsert_node(
+                store,
+                history,
+                &GraphNode::service(&dbus_unit, scan_time, existing.as_ref()),
+            )?;
             for target in [&process_id, &cgroup_id] {
                 let edge = GraphEdge::inferred_service_owns(
                     &corrected_id,
@@ -92,7 +93,7 @@ pub(crate) fn apply_cgroup_corrections(
                     )?
                     .as_ref(),
                 );
-                super::scan::upsert_edge_with_link(store, &edge, None)?;
+                super::scan::upsert_edge_with_link(store, history, &edge, None)?;
                 if let Ok(Some(stale)) = super::scan::load_existing_edge(
                     store,
                     edge_cache,
@@ -101,7 +102,7 @@ pub(crate) fn apply_cgroup_corrections(
                     target,
                 ) {
                     if stale.class() == EdgeClass::Inferred {
-                        store.delete_edge(stale.id().as_str())?;
+                        super::scan_history::delete_edge(store, history, stale.id().as_str())?;
                     }
                 }
             }

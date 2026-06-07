@@ -154,7 +154,7 @@ fn delete_file_emulate(store: &Store, raw_path: &str) -> Result<EmulationResult,
     let mut unknowns: Vec<ImpactUnknown> = Vec::new();
 
     for row in store
-        .list_edges_to(target.as_str())
+        .list_active_edges_to(target.as_str())
         .map_err(EmulateError::Store)?
     {
         let edge = GraphEdge::try_from(&row).map_err(EmulateError::Store)?;
@@ -428,7 +428,7 @@ fn load_listening_sockets(store: &Store, target: &NodeId) -> Result<Vec<Emulatio
     let mut nodes = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for row in store
-        .list_edges_from(target.as_str())
+        .list_active_edges_from(target.as_str())
         .map_err(EmulateError::Store)?
     {
         let edge = GraphEdge::try_from(&row).map_err(EmulateError::Store)?;

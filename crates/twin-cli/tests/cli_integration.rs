@@ -570,6 +570,63 @@ fn emulate_restart_service_json_with_fake_proc() {
 }
 
 #[test]
+fn what_changed_after_fixture_scan_transition() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let proc_v2 = home.proc_root.join("sample-2");
+    if proc_v2.is_dir() {
+        std::fs::remove_dir_all(&proc_v2).ok();
+    }
+    std::fs::create_dir_all(&proc_v2).expect("proc v2");
+    write_slice5_fixture(&proc_v2);
+    assert!(home.run(&["scan"]).status.success());
+    let out = home.run(&["what-changed", "--since", "1h"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("twin what-changed"));
+}
+
+#[test]
+fn snapshot_create_list_and_diff_current() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    let create = home.run(&["snapshot", "create", "checkpoint"]);
+    assert!(create.status.success(), "{}", stderr_utf8(&create));
+    let list = home.run(&["snapshot", "list"]);
+    assert!(list.status.success(), "{}", stderr_utf8(&list));
+    assert!(stdout_utf8(&list).contains("checkpoint"));
+    assert!(home.run(&["scan"]).status.success());
+    let diff = home.run(&["diff", "snapshot:checkpoint", "current"]);
+    assert!(diff.status.success(), "{}", stderr_utf8(&diff));
+    assert!(stdout_utf8(&diff).contains("twin diff"));
+}
+
+#[test]
+fn temporal_commands_do_not_require_root_or_real_systemd() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    assert!(home.run(&["scan"]).status.success());
+    assert!(home
+        .run(&["what-changed", "--since", "1h"])
+        .status
+        .success());
+    assert!(home
+        .run(&["snapshot", "create", "fixture-check"])
+        .status
+        .success());
+    assert!(home.run(&["snapshot", "list"]).status.success());
+    assert!(home
+        .run(&["diff", "snapshot:fixture-check", "current"])
+        .status
+        .success());
+}
+
+#[test]
 fn emulate_restart_rejects_port_target() {
     let home = TwinHome::new();
     assert!(home.run(&["init"]).status.success());

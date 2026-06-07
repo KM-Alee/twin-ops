@@ -1,3 +1,4 @@
+pub mod change_kind;
 pub mod config;
 pub mod edge;
 pub mod error;
@@ -8,8 +9,10 @@ pub mod id;
 pub mod impact_kind;
 pub mod node;
 pub mod risk;
+pub mod snapshot_id;
 pub mod unknown_kind;
 
+pub use change_kind::ChangeKind;
 pub use edge::{EdgeClass, EdgeId, EdgeKind, EdgeState};
 pub use error::{ConfigError, ParseError};
 pub use graph_edge::{GraphEdge, GraphEdgeParts};
@@ -22,6 +25,7 @@ pub use risk::{
     cap_dependent_evidence_score, EvidenceLabel, EvidenceStrength, RiskLevel,
     EVIDENCE_CAP_INFERRED_ONLY, EVIDENCE_CAP_NO_OBSERVATIONS, EVIDENCE_CAP_WEAKENING_UNKNOWN,
 };
+pub use snapshot_id::{parse_graph_ref, validate_snapshot_name, GraphRef, SnapshotId};
 pub use unknown_kind::UnknownKind;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

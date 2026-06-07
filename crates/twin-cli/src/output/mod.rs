@@ -1,3 +1,4 @@
+pub mod diff;
 pub mod doctor;
 pub mod emulate;
 pub mod format;
@@ -7,4 +8,6 @@ pub mod init;
 pub mod json;
 pub mod scan;
 pub mod sections;
+pub mod snapshot;
 pub mod unknowns;
+pub mod what_changed;

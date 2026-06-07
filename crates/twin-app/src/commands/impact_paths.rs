@@ -167,7 +167,7 @@ impl<'a> PathCollector<'a> {
         let mut edges = Vec::new();
         for row in self
             .store
-            .list_edges_to(current.as_str())
+            .list_active_edges_to(current.as_str())
             .map_err(ImpactError::Store)?
         {
             let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
@@ -249,7 +249,7 @@ impl<'a> PathCollector<'a> {
         for step in steps {
             let edge = self
                 .store
-                .list_edges_to(step.to.id.as_str())
+                .list_active_edges_to(step.to.id.as_str())
                 .map_err(ImpactError::Store)?
                 .into_iter()
                 .find(|row| row.id == step.edge_id)
@@ -360,7 +360,7 @@ fn service_has_public_listener(store: &Store, service_id: &str) -> Option<String
     if service.kind() != Some(NodeKind::Service) {
         return None;
     }
-    for row in store.list_edges_from(service_id).ok()? {
+    for row in store.list_active_edges_from(service_id).ok()? {
         let edge = GraphEdge::try_from(&row).ok()?;
         if edge.state() != EdgeState::Active || edge.kind() != EdgeKind::ListensOn {
             continue;

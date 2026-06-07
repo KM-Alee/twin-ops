@@ -92,14 +92,32 @@ impl Store {
     }
 
     pub fn list_edges_from(&self, node_id: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_from_filtered(node_id, false)
+    }
+
+    pub fn list_active_edges_from(&self, node_id: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_from_filtered(node_id, true)
+    }
+
+    fn list_edges_from_filtered(
+        &self,
+        node_id: &str,
+        active_only: bool,
+    ) -> Result<Vec<EdgeRow>, StoreError> {
+        let sql = if active_only {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE from_node_id = ?1 AND state = 'active' ORDER BY id"
+        } else {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE from_node_id = ?1 ORDER BY id"
+        };
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, from_node_id, to_node_id, kind, class, state,
-                        evidence_score, evidence_label, evidence_count,
-                        first_seen_ns, last_seen_ns, metadata_json
-                 FROM edges WHERE from_node_id = ?1 ORDER BY id",
-            )
+            .prepare(sql)
             .map_err(|source| StoreError::Query { source })?;
 
         let rows = stmt
@@ -110,14 +128,32 @@ impl Store {
     }
 
     pub fn list_edges_to(&self, node_id: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_to_filtered(node_id, false)
+    }
+
+    pub fn list_active_edges_to(&self, node_id: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_to_filtered(node_id, true)
+    }
+
+    fn list_edges_to_filtered(
+        &self,
+        node_id: &str,
+        active_only: bool,
+    ) -> Result<Vec<EdgeRow>, StoreError> {
+        let sql = if active_only {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE to_node_id = ?1 AND state = 'active' ORDER BY id"
+        } else {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE to_node_id = ?1 ORDER BY id"
+        };
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, from_node_id, to_node_id, kind, class, state,
-                        evidence_score, evidence_label, evidence_count,
-                        first_seen_ns, last_seen_ns, metadata_json
-                 FROM edges WHERE to_node_id = ?1 ORDER BY id",
-            )
+            .prepare(sql)
             .map_err(|source| StoreError::Query { source })?;
 
         let rows = stmt
@@ -128,14 +164,32 @@ impl Store {
     }
 
     pub fn list_edges_by_kind(&self, kind: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_by_kind_filtered(kind, false)
+    }
+
+    pub fn list_active_edges_by_kind(&self, kind: &str) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_edges_by_kind_filtered(kind, true)
+    }
+
+    fn list_edges_by_kind_filtered(
+        &self,
+        kind: &str,
+        active_only: bool,
+    ) -> Result<Vec<EdgeRow>, StoreError> {
+        let sql = if active_only {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE kind = ?1 AND state = 'active' ORDER BY id"
+        } else {
+            "SELECT id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edges WHERE kind = ?1 ORDER BY id"
+        };
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, from_node_id, to_node_id, kind, class, state,
-                        evidence_score, evidence_label, evidence_count,
-                        first_seen_ns, last_seen_ns, metadata_json
-                 FROM edges WHERE kind = ?1 ORDER BY id",
-            )
+            .prepare(sql)
             .map_err(|source| StoreError::Query { source })?;
 
         let rows = stmt
@@ -165,7 +219,7 @@ impl Store {
     }
 }
 
-fn row_from_edge(row: &Row<'_>) -> Result<EdgeRow, rusqlite::Error> {
+pub(crate) fn row_from_edge(row: &Row<'_>) -> Result<EdgeRow, rusqlite::Error> {
     Ok(EdgeRow {
         id: row.get(0)?,
         from_node_id: row.get(1)?,

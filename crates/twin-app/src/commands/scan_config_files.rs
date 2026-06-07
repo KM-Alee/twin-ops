@@ -30,6 +30,7 @@ fn path_exists_for_discovery(path: &Path) -> bool {
 
 pub(crate) fn persist_config_files_in_scan(
     store: &mut Store,
+    history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut ScanEdgeCache,
     discoveries: &[ServiceConfigFileDiscovery],
     scan_time: TimestampNs,
@@ -40,7 +41,7 @@ pub(crate) fn persist_config_files_in_scan(
         let file_id = NodeId::file(&path_str);
         let existing_file = store.get_node_typed(&file_id)?;
         let file_node = GraphNode::file(&path_str, scan_time, existing_file.as_ref());
-        store.upsert_node_typed(&file_node)?;
+        super::scan_history::upsert_node(store, history, &file_node)?;
 
         let service_id = NodeId::service(&discovery.service_unit);
         let existing_service = store.get_node_typed(&service_id)?;
@@ -67,7 +68,7 @@ pub(crate) fn persist_config_files_in_scan(
             discovery.source.metadata_key(),
             &path_str,
         );
-        super::scan::upsert_edge_with_link(store, &edge, Some((&obs_id, "direct")))?;
+        super::scan::upsert_edge_with_link(store, history, &edge, Some((&obs_id, "direct")))?;
         edge_count += 1;
     }
     Ok(edge_count)
