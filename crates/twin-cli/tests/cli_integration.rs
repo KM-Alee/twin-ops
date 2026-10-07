@@ -627,6 +627,121 @@ fn temporal_commands_do_not_require_root_or_real_systemd() {
 }
 
 #[test]
+fn watch_streams_changes_and_stops_on_tick_limit() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    let out = home.run(&["watch", "--interval", "0s", "--ticks", "2"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("twin watch"));
+    assert!(text.contains("every 0s"));
+    assert!(text.contains("after 2 scans"));
+    assert!(text.contains("process"));
+    assert!(text.contains("no significant changes"));
+    assert!(text.contains("tick limit"));
+    assert!(text.contains("2 scans"));
+}
+
+#[test]
+fn watch_json_emits_tick_and_summary_records() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    let out = home.run(&["--json", "watch", "--interval", "0s", "--ticks", "1"]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let mut records = Vec::new();
+    for line in stdout_utf8(&out).lines().filter(|line| !line.is_empty()) {
+        let value: serde_json::Value = serde_json::from_str(line).expect(line);
+        records.push(value);
+    }
+    assert_eq!(records.len(), 2, "{records:?}");
+    assert_eq!(records[0]["record"], "tick");
+    assert_eq!(records[1]["record"], "summary");
+    assert_eq!(records[1]["stop"], "max_ticks");
+}
+
+#[test]
+fn watch_without_init_and_bad_interval_fail_cleanly() {
+    let home = TwinHome::new();
+    let missing = home.run(&["watch", "--ticks", "1"]);
+    assert!(!missing.status.success());
+    assert!(stderr_utf8(&missing).contains("not initialized"));
+    assert!(home.run(&["init"]).status.success());
+    let bad = home.run(&["watch", "--interval", "nope", "--ticks", "1"]);
+    assert!(!bad.status.success());
+    assert!(stderr_utf8(&bad).contains("invalid interval"));
+}
+
+#[test]
+fn watch_stops_on_sigint() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    let mut child = Command::new(twin_bin())
+        .env("HOME", home.home_path())
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CONFIG_HOME")
+        .env_remove("XDG_STATE_HOME")
+        .env("TWIN_PROC_ROOT", &home.proc_root)
+        .args(["watch", "--interval", "30s"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn watch");
+    let stdout = child.stdout.take().expect("stdout");
+    let collected = Arc::new(Mutex::new(String::new()));
+    let sink = Arc::clone(&collected);
+    let reader = std::thread::spawn(move || {
+        let mut lines = BufReader::new(stdout);
+        let mut line = String::new();
+        while lines.read_line(&mut line).unwrap_or(0) > 0 {
+            sink.lock().expect("stdout lock").push_str(&line);
+            line.clear();
+        }
+    });
+    let started = Instant::now();
+    loop {
+        if collected.lock().expect("lock").contains("watching") {
+            break;
+        }
+        if started.elapsed() > Duration::from_secs(20) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("watch did not start: {}", collected.lock().expect("lock"));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let signaled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("signal");
+    assert!(signaled.success(), "kill -INT failed");
+    let signaled_at = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if signaled_at.elapsed() > Duration::from_secs(20) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("watch ignored SIGINT: {}", collected.lock().expect("lock"));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(error) => panic!("wait: {error}"),
+        }
+    };
+    reader.join().expect("reader");
+    assert!(status.success(), "watch exit {status}");
+    let text = collected.lock().expect("lock").clone();
+    assert!(text.contains("interrupted"), "{text}");
+}
+
+#[test]
 fn emulate_restart_rejects_port_target() {
     let home = TwinHome::new();
     assert!(home.run(&["init"]).status.success());

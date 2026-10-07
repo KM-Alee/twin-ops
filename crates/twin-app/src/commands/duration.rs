@@ -16,6 +16,21 @@ pub fn parse_since_duration(input: &str, now: TimestampNs) -> Result<i64, Tempor
         let since = now.as_i64().saturating_sub(24 * 60 * 60 * 1_000_000_000);
         return Ok(since);
     }
+    let secs = parse_duration_secs(input)?;
+    let since = now
+        .as_i64()
+        .saturating_sub((secs as i64).saturating_mul(1_000_000_000));
+    Ok(since)
+}
+
+pub(crate) fn parse_duration_secs(input: &str) -> Result<u64, TemporalError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(TemporalError::InvalidDuration {
+            value: input.to_string(),
+            reason: "duration cannot be empty".to_string(),
+        });
+    }
     let (num_str, unit) = split_duration(trimmed)?;
     let amount: u64 = num_str
         .parse()
@@ -47,10 +62,7 @@ pub fn parse_since_duration(input: &str, now: TimestampNs) -> Result<i64, Tempor
             reason: "duration is unreasonably large".to_string(),
         });
     }
-    let since = now
-        .as_i64()
-        .saturating_sub((secs as i64).saturating_mul(1_000_000_000));
-    Ok(since)
+    Ok(secs)
 }
 
 fn split_duration(input: &str) -> Result<(&str, char), TemporalError> {

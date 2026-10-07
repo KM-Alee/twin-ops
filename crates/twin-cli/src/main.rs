@@ -1,17 +1,21 @@
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use clap::Parser;
-use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
+use twin_app::{AppError, GraphError, InitRequest, ScanRequest, WatchTick};
 use twin_cli::cli::args::{
     Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
-    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WhatChangedArgs,
+    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
 use twin_cli::cli::graph;
 use twin_cli::cli::impact;
 use twin_cli::cli::snapshot;
+use twin_cli::cli::watch;
 use twin_cli::cli::what_changed;
 use twin_cli::output;
 use twin_cli::output::format::ScanFreshness;
@@ -26,6 +30,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Init(args) => run_init(&cli.global, &args),
         Command::Doctor(args) => run_doctor(&cli.global, &args),
         Command::Scan(args) => run_scan(&cli.global, &args),
+        Command::Watch(args) => run_watch(&cli.global, &args),
         Command::Graph(args) => run_graph(&cli.global, &args),
         Command::Impact(args) => run_impact(&cli.global, &args),
         Command::Emulate(args) => run_emulate(&cli.global, &args),
@@ -102,6 +107,82 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     match result {
         Ok(result) => {
             emit(global.json, &result, output::scan::render);
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_watch(global: &GlobalArgs, args: &WatchArgs) -> i32 {
+    let request = watch::watch_request(args);
+    let interval_label = request.interval.clone();
+    let duration_label = request.duration.clone();
+    let max_ticks = request.max_ticks;
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    if let Err(error) = ctrlc::set_handler(move || {
+        flag.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("Error: cannot install interrupt handler: {error}");
+        return 1;
+    }
+    let paths = match twin_app::paths::resolve_command_paths(request.config_override.as_deref()) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
+    let proc_root = std::env::var_os("TWIN_PROC_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/proc"));
+    let mut printed_header = false;
+    let result = twin_app::watch_in(
+        &paths.layout,
+        request,
+        &proc_root,
+        &stop,
+        |tick: &WatchTick| {
+            if !global.json && !printed_header {
+                println!(
+                    "{}",
+                    output::watch::render_header(
+                        &interval_label,
+                        duration_label.as_deref(),
+                        max_ticks
+                    )
+                );
+                printed_header = true;
+            }
+            if global.json {
+                println!("{}", output::watch::render_tick_json(tick));
+            } else {
+                println!("{}", output::watch::render_tick(tick));
+            }
+            let _ = io::stdout().flush();
+        },
+    );
+    match result {
+        Ok(result) => {
+            if !global.json && !printed_header {
+                println!(
+                    "{}",
+                    output::watch::render_header(
+                        &interval_label,
+                        duration_label.as_deref(),
+                        max_ticks
+                    )
+                );
+            }
+            if global.json {
+                println!("{}", output::watch::render_summary_json(&result));
+            } else {
+                println!("{}", output::watch::render_summary(&result));
+            }
+            let _ = io::stdout().flush();
             0
         }
         Err(error) => {
@@ -191,8 +272,7 @@ fn run_what_changed(global: &GlobalArgs, args: &WhatChangedArgs) -> i32 {
     match twin_app::what_changed(request) {
         Ok(result) => {
             let rendered = if global.json {
-                output::json::render(&result)
-                    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+                output::json::render(&result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
             } else {
                 output::what_changed::render(
                     &result,

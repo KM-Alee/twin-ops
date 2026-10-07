@@ -91,6 +91,26 @@ impl Store {
         Ok(())
     }
 
+    pub fn list_collector_runs_since(
+        &self,
+        since_ns: i64,
+    ) -> Result<Vec<CollectorRunRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, collector, started_at_ns, ended_at_ns, status,
+                        observation_count, warning_count, error_message, metadata_json
+                 FROM collector_runs
+                 WHERE started_at_ns >= ?1
+                 ORDER BY started_at_ns, id",
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        let rows = stmt
+            .query_map(params![since_ns], row_from_collector_run)
+            .map_err(|source| StoreError::Query { source })?;
+        collect_rows(rows)
+    }
+
     pub fn latest_collector_run(
         &self,
         collector: &str,

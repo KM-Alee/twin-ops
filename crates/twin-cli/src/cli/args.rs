@@ -23,6 +23,7 @@ pub enum Command {
     Init(InitArgs),
     Doctor(DoctorArgs),
     Scan(ScanArgs),
+    Watch(WatchArgs),
     Graph(GraphArgs),
     Impact(ImpactArgs),
     Emulate(EmulateArgs),
@@ -60,6 +61,25 @@ pub struct ScanArgs {
         help = "Seconds between samples when samples > 1"
     )]
     pub interval: u64,
+}
+
+#[derive(Args)]
+pub struct WatchArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value = "5s",
+        help = "Time between scans (e.g. 5s, 1m). 0s scans back to back"
+    )]
+    pub interval: String,
+
+    #[arg(long, help = "Stop after this long (e.g. 10m, 30s)")]
+    pub duration: Option<String>,
+
+    #[arg(long, help = "Stop after this many scans")]
+    pub ticks: Option<u32>,
 }
 
 #[derive(Args)]

@@ -10,4 +10,5 @@ pub mod scan;
 pub mod sections;
 pub mod snapshot;
 pub mod unknowns;
+pub mod watch;
 pub mod what_changed;
