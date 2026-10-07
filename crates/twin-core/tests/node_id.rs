@@ -37,6 +37,21 @@ fn service_strips_slice() {
 #[test]
 fn kind_roundtrip() {
     assert_eq!(NodeId::process(1).kind(), Some(NodeKind::Process));
+    assert_eq!(NodeId::mount("/var").kind(), Some(NodeKind::Mount));
+    assert_eq!(
+        NodeId::directory("/var/log").kind(),
+        Some(NodeKind::Directory)
+    );
+    assert_eq!(
+        NodeId::from_str("mount:/var").expect("mount").as_str(),
+        "mount:/var"
+    );
+    assert_eq!(
+        NodeId::from_str("directory:/var/log")
+            .expect("directory")
+            .as_str(),
+        "directory:/var/log"
+    );
 }
 
 #[test]

@@ -86,6 +86,21 @@ pub struct GraphServiceResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GraphMountResult {
+    pub mount: GraphNodeSummary,
+    pub used_percent: Option<u8>,
+    pub mounted: Vec<GraphOwnedNode>,
+    pub affected: Vec<GraphOwnedNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphDirectoryResult {
+    pub directory: GraphNodeSummary,
+    pub mount: Option<GraphOwnedNode>,
+    pub services: Vec<GraphOwnedNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphFileResult {
     pub file: GraphNodeSummary,
     pub configures: Vec<GraphOwnedNode>,
@@ -123,6 +138,8 @@ pub enum GraphResult {
     Port(GraphPortResult),
     UnixSocket(GraphUnixSocketResult),
     File(GraphFileResult),
+    Mount(GraphMountResult),
+    Directory(GraphDirectoryResult),
 }
 
 impl GraphResult {
@@ -171,6 +188,32 @@ impl GraphResult {
             process_callers,
             service_callers,
             evidence,
+        })
+    }
+
+    pub fn mount(
+        mount: GraphNodeSummary,
+        used_percent: Option<u8>,
+        mounted: Vec<GraphOwnedNode>,
+        affected: Vec<GraphOwnedNode>,
+    ) -> Self {
+        Self::Mount(GraphMountResult {
+            mount,
+            used_percent,
+            mounted,
+            affected,
+        })
+    }
+
+    pub fn directory(
+        directory: GraphNodeSummary,
+        mount: Option<GraphOwnedNode>,
+        services: Vec<GraphOwnedNode>,
+    ) -> Self {
+        Self::Directory(GraphDirectoryResult {
+            directory,
+            mount,
+            services,
         })
     }
 

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphFileResult, GraphListResult, GraphNodeResult, GraphOwnedNode, GraphParentEdge,
-    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
+    GraphDirectoryResult, GraphFileResult, GraphListResult, GraphMountResult, GraphNodeResult,
+    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
+    GraphUnixSocketResult,
 };
 
 use twin_app::{GraphEvidenceLine, RuntimeDependency};
@@ -21,6 +22,8 @@ pub fn render_with_scan(result: &GraphResult, scan: Option<ScanFreshness>) -> St
         GraphResult::Port(port) => render_port(port, scan),
         GraphResult::UnixSocket(unix) => render_unix_socket(unix, scan),
         GraphResult::File(file) => render_file(file, scan),
+        GraphResult::Mount(mount) => render_mount(mount, scan),
+        GraphResult::Directory(directory) => render_directory(directory, scan),
     }
 }
 
@@ -240,6 +243,50 @@ fn render_file(file: &GraphFileResult, scan: Option<ScanFreshness>) -> String {
     render_dependency_section(&mut lines, "references", file.references.iter());
     append_evidence_lines(&mut lines, &file.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_mount(mount: &GraphMountResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("mount neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", mount.mount.id, mount.mount.label));
+    let usage = match mount.used_percent {
+        Some(percent) => format!("{percent}% used"),
+        None => "usage unknown".to_string(),
+    };
+    lines.push(usage);
+    render_dependency_section(&mut lines, "mounted", mount.mounted.iter());
+    render_affected(&mut lines, &mount.affected);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_directory(directory: &GraphDirectoryResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("directory neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{}  {}",
+        directory.directory.id, directory.directory.label
+    ));
+    if let Some(mount) = &directory.mount {
+        lines.push(String::new());
+        lines.push("mounted on".to_string());
+        lines.push(format!("└── {}", format_peer(&mount.id, &mount.label)));
+    }
+    render_affected(&mut lines, &directory.services);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_affected(lines: &mut Vec<String>, nodes: &[GraphOwnedNode]) {
+    if nodes.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push("likely affected".to_string());
+    for (i, node) in nodes.iter().enumerate() {
+        let is_last = i + 1 == nodes.len();
+        let branch = if is_last { "└──" } else { "├──" };
+        let detail = node.tag.as_deref().unwrap_or(node.label.as_str());
+        lines.push(format!("{branch} {}  {detail}", node.label));
+    }
 }
 
 fn render_port(port: &GraphPortResult, scan: Option<ScanFreshness>) -> String {

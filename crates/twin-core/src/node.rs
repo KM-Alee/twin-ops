@@ -15,6 +15,8 @@ pub enum NodeKind {
     UnixSocket,
     File,
     Cgroup,
+    Mount,
+    Directory,
 }
 
 impl fmt::Display for NodeKind {
@@ -27,6 +29,8 @@ impl fmt::Display for NodeKind {
             Self::UnixSocket => "unix_socket",
             Self::File => "file",
             Self::Cgroup => "cgroup",
+            Self::Mount => "mount",
+            Self::Directory => "directory",
         })
     }
 }
@@ -43,6 +47,8 @@ impl FromStr for NodeKind {
             "unix_socket" => Ok(Self::UnixSocket),
             "file" => Ok(Self::File),
             "cgroup" => Ok(Self::Cgroup),
+            "mount" => Ok(Self::Mount),
+            "directory" => Ok(Self::Directory),
             other => Err(ParseError::Enum {
                 kind: "NodeKind",
                 value: other.to_string(),
@@ -129,6 +135,14 @@ impl NodeId {
         Self(format!("file:{}", lexical_canonical(path)))
     }
 
+    pub fn mount(path: &str) -> Self {
+        Self(format!("mount:{}", lexical_canonical(path)))
+    }
+
+    pub fn directory(path: &str) -> Self {
+        Self(format!("directory:{}", lexical_canonical(path)))
+    }
+
     pub fn cgroup(path: &str) -> Self {
         Self(format!("cgroup:{}", lexical_canonical(path)))
     }
@@ -152,6 +166,12 @@ impl NodeId {
         }
         if s.starts_with("file:") && s.len() > "file:".len() {
             return Some(NodeKind::File);
+        }
+        if s.starts_with("mount:") && s.len() > "mount:".len() {
+            return Some(NodeKind::Mount);
+        }
+        if s.starts_with("directory:") && s.len() > "directory:".len() {
+            return Some(NodeKind::Directory);
         }
         if s.starts_with("cgroup:") && s.len() > "cgroup:".len() {
             return Some(NodeKind::Cgroup);
@@ -222,6 +242,28 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
 
     if let Some(path) = s.strip_prefix("cgroup:") {
         if path.is_empty() {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(path) = s.strip_prefix("mount:") {
+        if path.is_empty() {
+            return Err(invalid());
+        }
+        let canonical = NodeId::mount(path);
+        if canonical.as_str() != s {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(path) = s.strip_prefix("directory:") {
+        if path.is_empty() {
+            return Err(invalid());
+        }
+        let canonical = NodeId::directory(path);
+        if canonical.as_str() != s {
             return Err(invalid());
         }
         return Ok(());

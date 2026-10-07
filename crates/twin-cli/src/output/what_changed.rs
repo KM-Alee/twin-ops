@@ -271,6 +271,9 @@ fn is_high_signal_edge_kind(kind: &str) -> bool {
             | "depends_on"
             | "proxies_to"
             | "references"
+            | "mounted_on"
+            | "logs_to"
+            | "uses"
     )
 }
 

@@ -5,9 +5,10 @@ use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind,
 };
 use twin_emulate::{
-    emulate_delete_file, emulate_restart_service, DeleteFileInput, EmulationConfiguredService,
-    EmulationEvidenceLine, EmulationImpactPath, EmulationNode, EmulationPathStep,
-    RestartPathScoringInput, RestartServiceInput,
+    emulate_delete_file, emulate_fill_mount, emulate_restart_service, DeleteFileInput,
+    EmulationConfiguredService, EmulationEvidenceLine, EmulationImpactPath, EmulationNode,
+    EmulationPathStep, FillAffectedService, FillMountInput, RestartPathScoringInput,
+    RestartServiceInput,
 };
 use twin_store::Store;
 
@@ -79,6 +80,9 @@ fn emulate_at(
         EmulateActionRequest::DeleteFile { path } => {
             delete_file_emulate(&store, path, request.show_evidence)
         }
+        EmulateActionRequest::FillDisk { mount, to_percent } => {
+            fill_disk_emulate(&store, mount, *to_percent, request.show_evidence)
+        }
     }
 }
 
@@ -142,6 +146,99 @@ fn resolve_delete_file_target(raw: &str) -> Result<NodeId, AppError> {
         .into());
     }
     Ok(NodeId::file(raw))
+}
+
+fn fill_disk_emulate(
+    store: &Store,
+    raw_mount: &str,
+    to_percent: u8,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
+    let target = resolve_fill_mount(raw_mount)?;
+    let mount_node = store.get_node_typed(&target).map_err(EmulateError::Store)?;
+    if let Some(node) = &mount_node {
+        if node.kind() != NodeKind::Mount {
+            return Err(EmulateError::UnsupportedTarget {
+                kind: node.kind().to_string(),
+            }
+            .into());
+        }
+    }
+    let label = mount_node
+        .as_ref()
+        .map(|node| node.label().to_string())
+        .unwrap_or_else(|| {
+            target
+                .as_str()
+                .strip_prefix("mount:")
+                .unwrap_or(target.as_str())
+                .to_string()
+        });
+    let current_used_percent = mount_node
+        .as_ref()
+        .and_then(|node| super::scan_mounts::used_percent_of(node.metadata().as_str()));
+    let affected = if mount_node.is_some() {
+        super::scan_mounts::services_on_mount(store, &target)
+            .map_err(EmulateError::Store)?
+            .into_iter()
+            .map(|item| FillAffectedService {
+                id: item.service,
+                label: item.service_label,
+                path: item.path,
+                logs: item.logs,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut unknowns = Vec::new();
+    if mount_node.is_none() {
+        unknowns.push(impact_unknown_to_emulation(&ImpactUnknown {
+            kind: UnknownKind::MissingEvidence.as_str().to_string(),
+            detail: "target mount is not in the graph; run `twin scan` first".to_string(),
+            source: None,
+            weakens_evidence: true,
+        }));
+    }
+    let input = FillMountInput {
+        mount: EmulationNode { id: target, label },
+        to_percent,
+        current_used_percent,
+        mount_in_graph: mount_node.is_some(),
+        affected,
+        unknowns,
+    };
+    let report = emulate_fill_mount(input);
+    let result_unknowns = if mount_node.is_none() {
+        vec![ImpactUnknown {
+            kind: UnknownKind::MissingEvidence.as_str().to_string(),
+            detail: "target mount is not in the graph; run `twin scan` first".to_string(),
+            source: None,
+            weakens_evidence: true,
+        }]
+    } else {
+        Vec::new()
+    };
+    let mut result = EmulationResult::from_domain(report, result_unknowns);
+    result.show_evidence = show_evidence;
+    Ok(result)
+}
+
+fn resolve_fill_mount(raw: &str) -> Result<NodeId, AppError> {
+    let raw = raw.trim();
+    if raw.starts_with("mount:") {
+        return NodeId::from_str(raw).map_err(|source| AppError::InvalidEmulateTarget {
+            value: raw.to_string(),
+            source,
+        });
+    }
+    if !raw.starts_with('/') {
+        return Err(EmulateError::RelativeFillPath {
+            value: raw.to_string(),
+        }
+        .into());
+    }
+    Ok(NodeId::mount(raw))
 }
 
 fn delete_file_emulate(

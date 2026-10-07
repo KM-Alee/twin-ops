@@ -6,6 +6,7 @@ use crate::action::EmulationAction;
 pub enum OverlayNodeState {
     TemporarilyUnavailable,
     HypotheticallyDeleted,
+    HypotheticallyFilled,
 }
 
 #[derive(Debug, Clone)]

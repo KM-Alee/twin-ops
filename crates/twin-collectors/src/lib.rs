@@ -1,8 +1,10 @@
 pub mod error;
+pub mod mounts;
 pub mod process;
 pub mod systemd;
 
 pub use error::CollectorError;
+pub use mounts::{parse_mounts, MountRecord};
 pub use process::{
     parse_socket_fd_target, parse_tcp_table, parse_unix_table, ProcessBatch, ProcessCollector,
     ProcessRecord, ProcessWarning, ProcessWarningKind, SocketOwner, TcpConnectionRecord,

@@ -152,6 +152,10 @@ pub enum EmulateError {
     RelativeDeletePath { value: String },
     #[error("delete emulation requires a file target; got `{value}` ({reason})")]
     InvalidDeleteTarget { value: String, reason: String },
+    #[error("fill-disk percent `{value}` must be from 1% to 100%")]
+    InvalidFillPercent { value: String },
+    #[error("fill-disk requires a mount path; got relative path `{value}`")]
+    RelativeFillPath { value: String },
     #[error("invalid graph {kind} id `{id}`: {reason}")]
     InvalidGraphId {
         kind: &'static str,

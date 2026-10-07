@@ -271,6 +271,16 @@ fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
                 }
             },
         ),
+        EmulateActionArgs::FillDisk(fill_args) => (
+            fill_args.config.clone(),
+            match emulate::emulate_fill_disk_request(fill_args) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            },
+        ),
         EmulateActionArgs::Delete(delete_args) => (
             delete_args.config.clone(),
             match emulate::emulate_delete_request(delete_args) {

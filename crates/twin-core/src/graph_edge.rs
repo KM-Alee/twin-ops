@@ -216,6 +216,59 @@ impl GraphEdge {
         }
     }
 
+    pub fn observed_mounted_on(
+        path_node: &NodeId,
+        mount: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let kind = EdgeKind::MountedOn;
+        let id = EdgeId::new(path_node, kind, mount);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        Self {
+            id,
+            from: path_node.clone(),
+            to: mount.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::empty(),
+        }
+    }
+
+    pub fn inferred_service_uses(
+        service: &NodeId,
+        directory: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        path: &str,
+    ) -> Self {
+        service_path_edge(EdgeKind::Uses, service, directory, seen_at, existing, path)
+    }
+
+    pub fn inferred_service_logs_to(
+        service: &NodeId,
+        directory: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        path: &str,
+    ) -> Self {
+        service_path_edge(
+            EdgeKind::LogsTo,
+            service,
+            directory,
+            seen_at,
+            existing,
+            path,
+        )
+    }
+
     pub fn observed_parent(
         parent: &NodeId,
         child: &NodeId,
@@ -580,5 +633,33 @@ impl GraphEdge {
 
     pub fn metadata(&self) -> &GraphMetadata {
         &self.metadata
+    }
+}
+
+fn service_path_edge(
+    kind: EdgeKind,
+    service: &NodeId,
+    directory: &NodeId,
+    seen_at: TimestampNs,
+    existing: Option<&GraphEdge>,
+    path: &str,
+) -> GraphEdge {
+    let id = EdgeId::new(service, kind, directory);
+    let (first_seen, evidence_count) = match existing {
+        Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+        None => (seen_at, 1),
+    };
+    let metadata = serde_json::json!({ "path": path }).to_string();
+    GraphEdge {
+        id,
+        from: service.clone(),
+        to: directory.clone(),
+        kind,
+        class: EdgeClass::Inferred,
+        state: EdgeState::Active,
+        evidence_count,
+        first_seen,
+        last_seen: seen_at,
+        metadata: GraphMetadata::from_json(&metadata),
     }
 }

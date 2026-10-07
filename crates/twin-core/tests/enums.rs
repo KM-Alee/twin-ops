@@ -22,6 +22,8 @@ fn all_variants_roundtrip() {
         NodeKind::Port,
         NodeKind::File,
         NodeKind::Cgroup,
+        NodeKind::Mount,
+        NodeKind::Directory,
     ]);
     roundtrip(&[NodeState::Active, NodeState::Stale, NodeState::Gone]);
     roundtrip(&[
@@ -34,6 +36,9 @@ fn all_variants_roundtrip() {
         EdgeKind::DependsOn,
         EdgeKind::ProxiesTo,
         EdgeKind::References,
+        EdgeKind::MountedOn,
+        EdgeKind::LogsTo,
+        EdgeKind::Uses,
     ]);
     roundtrip(&[
         EdgeClass::Observed,

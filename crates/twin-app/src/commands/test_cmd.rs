@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -139,7 +138,7 @@ fn disk_facts(document: &TestDocument) -> Vec<DiskFact> {
     let mut disks = Vec::new();
     for check in &document.checks {
         if let CheckKind::Disk { mount, .. } = &check.kind {
-            if let Some(used_percent) = mount_used_percent(mount) {
+            if let Some(used_percent) = super::disk_usage::mount_used_percent(mount) {
                 disks.push(DiskFact {
                     mount: mount.clone(),
                     used_percent,
@@ -148,25 +147,6 @@ fn disk_facts(document: &TestDocument) -> Vec<DiskFact> {
         }
     }
     disks
-}
-
-fn mount_used_percent(mount: &str) -> Option<u8> {
-    let path = CString::new(mount).ok()?;
-    let mut stat = unsafe { std::mem::zeroed::<libc::statvfs>() };
-    // SAFETY: `path` is NUL-terminated. `stat` is a writable statvfs buffer.
-    // statvfs only reads filesystem metadata for the mount.
-    let rc = unsafe { libc::statvfs(path.as_ptr(), &mut stat) };
-    if rc != 0 {
-        return None;
-    }
-    let blocks = stat.f_blocks as u128;
-    if blocks == 0 {
-        return None;
-    }
-    let available = stat.f_bavail as u128;
-    let used = blocks.saturating_sub(available);
-    let percent = used.saturating_mul(100) / blocks;
-    u8::try_from(percent.min(100)).ok()
 }
 
 fn unknown_facts(store: &Store) -> Result<Vec<UnknownFact>, AppError> {

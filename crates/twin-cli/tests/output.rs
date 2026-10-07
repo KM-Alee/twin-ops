@@ -443,6 +443,64 @@ fn graph_file_render_lists_references() {
 }
 
 #[test]
+fn graph_mount_render_shows_usage_and_affected_services() {
+    let result = GraphResult::mount(
+        GraphNodeSummary {
+            id: "mount:/var".to_string(),
+            label: "/var".to_string(),
+        },
+        Some(42),
+        vec![GraphOwnedNode {
+            id: "directory:/var/lib/postgresql".to_string(),
+            label: "/var/lib/postgresql".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+        vec![GraphOwnedNode {
+            id: "service:postgresql.service".to_string(),
+            label: "postgresql.service".to_string(),
+            edge_class: "inferred".to_string(),
+            tag: Some("uses /var/lib/postgresql".to_string()),
+            observation_ids: vec![],
+        }],
+    );
+    let text = output::graph::render(&result);
+    assert!(text.contains("mount neighborhood"));
+    assert!(text.contains("42% used"));
+    assert!(text.contains("directory:/var/lib/postgresql"));
+    assert!(text.contains("likely affected"));
+    assert!(text.contains("uses /var/lib/postgresql"));
+}
+
+#[test]
+fn emulate_fill_disk_render_names_risk_and_affected_services() {
+    let mut result = sample_emulation_result();
+    result.action = "fill-disk".to_string();
+    result.target = "mount:/var".to_string();
+    result.target_label = "/var".to_string();
+    result.safety_statement = "No disk was written.".to_string();
+    result.general_safety_statement = "No action was performed.".to_string();
+    result.risk.level = twin_core::RiskLevel::Critical;
+    result.risk.reasons = vec!["hypothetical fill to 95%".to_string()];
+    result.persistent_impacts = vec![EmulationImpact {
+        id: "service:postgresql.service".to_string(),
+        label: "postgresql.service".to_string(),
+        statement: "postgresql.service uses /var/lib/postgresql".to_string(),
+        path: String::new(),
+        evidence: vec!["postgresql.service uses /var/lib/postgresql".to_string()],
+    }];
+    result.evidence_lines = vec!["postgresql.service uses /var/lib/postgresql".to_string()];
+    let text = output::emulate::render(&result);
+    assert!(text.contains("Emulation: fill mount:/var to 95%"));
+    assert!(text.contains("critical"));
+    assert!(text.contains("likely affected"));
+    assert!(text.contains("postgresql.service uses /var/lib/postgresql"));
+    assert!(text.contains("No disk was written."));
+    assert!(text.contains("No action was performed."));
+}
+
+#[test]
 fn graph_service_render_inferred_ownership() {
     let result = GraphResult::service(GraphServiceResult {
         service: GraphNodeSummary {

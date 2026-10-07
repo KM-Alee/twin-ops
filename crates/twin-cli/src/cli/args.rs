@@ -97,6 +97,11 @@ pub enum EmulateActionArgs {
     Restart(EmulateRestartArgs),
     #[command(about = "Hypothetically delete a config file (no action performed)")]
     Delete(EmulateDeleteArgs),
+    #[command(
+        name = "fill-disk",
+        about = "Hypothetically fill a mount (no write performed)"
+    )]
+    FillDisk(EmulateFillDiskArgs),
 }
 
 #[derive(Args)]
@@ -135,6 +140,28 @@ pub struct EmulateDeleteArgs {
         help = "Absolute file path or file: node id (e.g. /etc/nginx/nginx.conf)"
     )]
     pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
+}
+
+#[derive(Args)]
+pub struct EmulateFillDiskArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "MOUNT",
+        help = "Mount path or mount: node id (e.g. /var, mount:/var)"
+    )]
+    pub target: String,
+
+    #[arg(
+        long = "to",
+        value_name = "PERCENT",
+        help = "Hypothetical used percent, for example 95%"
+    )]
+    pub to_percent: String,
 
     #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
     pub evidence: bool,

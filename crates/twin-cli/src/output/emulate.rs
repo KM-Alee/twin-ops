@@ -20,6 +20,9 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     if result.action == "delete" {
         return render_delete_with_scan(result, scan);
     }
+    if result.action == "fill-disk" {
+        return render_fill_with_scan(result, scan);
+    }
     let mut out = Lines::new();
     out.title(&format!("twin emulate restart {}", result.target_label));
     let status = emulate_status(result);
@@ -162,6 +165,68 @@ fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>
         out.section(&title);
         let grouped = group_unknown_refs(unknowns.iter().copied());
         render_unknown_groups(&mut out, &grouped);
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", &result.general_safety_statement);
+    out.into_string()
+}
+
+fn render_fill_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    let percent = result
+        .risk
+        .reasons
+        .iter()
+        .find_map(|reason| {
+            reason
+                .strip_prefix("hypothetical fill to ")
+                .and_then(|rest| rest.strip_suffix('%'))
+        })
+        .unwrap_or("");
+    let title_percent = if percent.is_empty() {
+        result.target_label.clone()
+    } else {
+        format!("{} to {percent}%", result.target)
+    };
+    out.title(&format!("Emulation: fill {title_percent}"));
+    let status = emulate_status(result);
+    out.status_row(
+        status,
+        "summary",
+        &format!(
+            "{} risk · {} affected service(s)",
+            result.risk.level,
+            result.persistent_impacts.len()
+        ),
+    );
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.status_row(status, "view", "emulation report");
+    out.blank();
+    out.section(RISK);
+    out.tree_leaf(false, "level", &result.risk.level.to_string());
+    out.tree_leaf(true, EVIDENCE_STRENGTH, &result.evidence_strength.label);
+    if result.persistent_impacts.is_empty() {
+        out.blank();
+        out.section("likely affected");
+        out.tree_leaf(true, "services", "none recorded on this mount");
+    } else {
+        render_impact_section(&mut out, "likely affected", &result.persistent_impacts);
+    }
+    if !result.evidence_lines.is_empty() {
+        out.blank();
+        out.section(EVIDENCE);
+        for (i, line) in result.evidence_lines.iter().enumerate() {
+            let is_last = i + 1 == result.evidence_lines.len();
+            out.tree_leaf(is_last, "source", line);
+        }
     }
     out.blank();
     out.section(SAFETY);

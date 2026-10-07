@@ -22,9 +22,10 @@ pub use emulation_result::{
     EmulationResult,
 };
 pub use graph_result::{
-    edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult,
-    GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge,
-    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult, RuntimeDependency,
+    edge_summary, node_summary, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
+    GraphFileResult, GraphListResult, GraphMountResult, GraphNodeResult, GraphNodeSummary,
+    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
+    GraphUnixSocketResult, RuntimeDependency,
 };
 pub use impact_result::{
     EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,

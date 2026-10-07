@@ -98,6 +98,63 @@ impl GraphNode {
         node
     }
 
+    pub fn mount(
+        path: &str,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        device: &str,
+        fstype: &str,
+        used_percent: Option<u8>,
+    ) -> Self {
+        let id = NodeId::mount(path);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "device".to_string(),
+            serde_json::Value::String(device.to_string()),
+        );
+        meta.insert(
+            "fstype".to_string(),
+            serde_json::Value::String(fstype.to_string()),
+        );
+        if let Some(percent) = used_percent {
+            meta.insert("used_percent".to_string(), serde_json::json!(percent));
+        }
+        Self {
+            id,
+            kind: NodeKind::Mount,
+            label: path.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(serde_json::Value::Object(meta).to_string()),
+        }
+    }
+
+    pub fn directory(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::directory(path);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind: NodeKind::Directory,
+            label: path.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::empty(),
+        }
+    }
+
     pub fn cgroup(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::cgroup(path);
         let (first_seen, valid_from) = match existing {

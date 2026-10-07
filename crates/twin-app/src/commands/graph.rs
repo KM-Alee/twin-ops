@@ -63,6 +63,8 @@ fn graph_at(
             Some(NodeKind::Port) => port_neighborhood(&store, target),
             Some(NodeKind::UnixSocket) => unix_socket_neighborhood(&store, target),
             Some(NodeKind::File) => file_neighborhood(&store, target),
+            Some(NodeKind::Mount) => mount_neighborhood(&store, target),
+            Some(NodeKind::Directory) => directory_neighborhood(&store, target),
             Some(kind) => Err(AppError::UnsupportedGraphKind {
                 kind: kind.to_string(),
             }),
@@ -94,7 +96,11 @@ fn list_by_kind(store: &Store, kind: NodeKind) -> Result<GraphResult, AppError> 
         .map(|n| node_summary(n.id(), n.label()))
         .collect();
 
-    if kind == NodeKind::Service || kind == NodeKind::Port {
+    if kind == NodeKind::Service
+        || kind == NodeKind::Port
+        || kind == NodeKind::Mount
+        || kind == NodeKind::Directory
+    {
         let mut nodes = summaries;
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
         return Ok(GraphResult::list(kind, nodes, Vec::new()));
@@ -570,6 +576,131 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
     Ok(GraphResult::file(summary, configures, references, evidence))
+}
+
+fn mount_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Mount {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+    let used_percent = super::scan_mounts::used_percent_of(node.metadata().as_str());
+    let mut mounted = Vec::new();
+    for row in store
+        .list_active_edges_to(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::MountedOn {
+            continue;
+        }
+        let Some(peer) = store
+            .get_node_typed(edge.from())
+            .map_err(GraphError::Store)?
+        else {
+            continue;
+        };
+        mounted.push(GraphOwnedNode {
+            id: peer.id().as_str().to_string(),
+            label: peer.label().to_string(),
+            edge_class: edge.class().to_string(),
+            tag: None,
+            observation_ids: Vec::new(),
+        });
+    }
+    mounted.sort_by(|a, b| a.id.cmp(&b.id));
+    let affected = affected_nodes(store, target)?;
+    Ok(GraphResult::mount(
+        node_summary(node.id(), node.label()),
+        used_percent,
+        mounted,
+        affected,
+    ))
+}
+
+fn directory_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Directory {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+    let mut mount = None;
+    for row in store
+        .list_active_edges_from(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::MountedOn {
+            continue;
+        }
+        let Some(peer) = store.get_node_typed(edge.to()).map_err(GraphError::Store)? else {
+            continue;
+        };
+        mount = Some(GraphOwnedNode {
+            id: peer.id().as_str().to_string(),
+            label: peer.label().to_string(),
+            edge_class: edge.class().to_string(),
+            tag: None,
+            observation_ids: Vec::new(),
+        });
+        break;
+    }
+    let mut services = Vec::new();
+    for row in store
+        .list_active_edges_to(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        let logs = match edge.kind() {
+            EdgeKind::LogsTo => true,
+            EdgeKind::Uses => false,
+            _ => continue,
+        };
+        let Some(peer) = store
+            .get_node_typed(edge.from())
+            .map_err(GraphError::Store)?
+        else {
+            continue;
+        };
+        let verb = if logs { "writes to" } else { "uses" };
+        services.push(GraphOwnedNode {
+            id: peer.id().as_str().to_string(),
+            label: peer.label().to_string(),
+            edge_class: edge.class().to_string(),
+            tag: Some(format!("{verb} {}", node.label())),
+            observation_ids: Vec::new(),
+        });
+    }
+    services.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(GraphResult::directory(
+        node_summary(node.id(), node.label()),
+        mount,
+        services,
+    ))
+}
+
+fn affected_nodes(store: &Store, mount: &NodeId) -> Result<Vec<GraphOwnedNode>, AppError> {
+    let uses = super::scan_mounts::services_on_mount(store, mount).map_err(GraphError::Store)?;
+    let mut affected = Vec::new();
+    for item in uses {
+        let verb = if item.logs { "writes to" } else { "uses" };
+        affected.push(GraphOwnedNode {
+            id: item.service.as_str().to_string(),
+            label: item.service_label,
+            edge_class: "inferred".to_string(),
+            tag: Some(format!("{verb} {}", item.path)),
+            observation_ids: Vec::new(),
+        });
+    }
+    Ok(affected)
 }
 
 fn is_socket_activation_edge(edge: &GraphEdge) -> bool {

@@ -104,8 +104,11 @@ fn run_scan_pass(
         unit_batch,
         runtime_batch,
         unit_roots,
-        sample_index,
-        samples_total,
+        PersistSample {
+            index: sample_index,
+            total: samples_total,
+            proc_root,
+        },
     )
 }
 
@@ -144,14 +147,19 @@ fn systemd_unit_roots(proc_root: &Path) -> Vec<PathBuf> {
     Vec::new()
 }
 
+struct PersistSample<'a> {
+    index: u32,
+    total: u32,
+    proc_root: &'a Path,
+}
+
 fn persist_scan(
     db_path: &Path,
     mut batch: ProcessBatch,
     mut unit_batch: SystemdUnitBatch,
     mut runtime_batch: SystemdRuntimeBatch,
     unit_roots: Vec<PathBuf>,
-    sample_index: u32,
-    samples_total: u32,
+    sample: PersistSample<'_>,
 ) -> Result<(ScanResult, usize), AppError> {
     let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
     if !store.is_initialized().map_err(ScanError::Store)? {
@@ -163,17 +171,17 @@ fn persist_scan(
     let pipeline = twin_observation::Pipeline::default();
     let mut observations: Vec<Observation> = Vec::new();
     for mut raw in batch.drain_observations() {
-        tag_sample(&mut raw, sample_index, sample_at);
+        tag_sample(&mut raw, sample.index, sample_at);
         observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
     let mut unit_observations: Vec<Observation> = Vec::new();
     for mut raw in unit_batch.drain_observations() {
-        tag_sample(&mut raw, sample_index, sample_at);
+        tag_sample(&mut raw, sample.index, sample_at);
         unit_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
     let mut runtime_observations: Vec<Observation> = Vec::new();
     for mut raw in runtime_batch.drain_observations() {
-        tag_sample(&mut raw, sample_index, sample_at);
+        tag_sample(&mut raw, sample.index, sample_at);
         runtime_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
 
@@ -252,7 +260,7 @@ fn persist_scan(
     let live_cgroup_reader = super::scan_cgroup_validate::dbus_reader_for_scan();
     let prefer_stale =
         super::scan_history::ScanHistorySession::prefer_stale_from_warnings(batch.warnings());
-    let finalize_missing = sample_index + 1 == samples_total;
+    let finalize_missing = sample.index + 1 == sample.total;
     store
         .with_transaction(|store| {
             let mut listener_obs_by_port: HashMap<NodeId, ObservationId> = HashMap::new();
@@ -937,6 +945,13 @@ fn persist_scan(
                 &config_discoveries,
                 scan_time,
             )?);
+            super::scan_mounts::persist_mounts_in_scan(
+                store,
+                &mut history,
+                &mut edge_cache,
+                sample.proc_root,
+                scan_time,
+            )?;
 
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
@@ -986,8 +1001,8 @@ fn persist_scan(
                 &super::scan_quality::process_collector_metadata(
                     super::scan_quality::ProcessCollectorMetadataInput {
                         warnings: batch.warnings(),
-                        sample_index,
-                        samples_total,
+                        sample_index: sample.index,
+                        samples_total: sample.total,
                         tcp_connection_count,
                         unmapped_active_socket_count,
                         readable_processes: process_count,
