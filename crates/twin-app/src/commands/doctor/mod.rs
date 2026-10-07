@@ -72,6 +72,7 @@ fn map_report(report: &twin_ebpf::EbpfReport) -> DoctorEbpf {
         btf: map_check(&report.btf),
         capabilities: map_check(&report.capabilities),
         exec_tracing: map_check(&report.exec_tracing),
+        tcp_tracing: map_check(&report.tcp_tracing),
     }
 }
 

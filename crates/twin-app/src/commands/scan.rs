@@ -1325,7 +1325,7 @@ fn listener_obs_from_store(
         .map(|id| (id, "support"))
 }
 
-fn listener_port_candidates(remote_ip: &str, remote_port: u16) -> Vec<NodeId> {
+pub(crate) fn listener_port_candidates(remote_ip: &str, remote_port: u16) -> Vec<NodeId> {
     let mut out = Vec::new();
     if let Ok(exact) = NodeId::port_tcp(remote_ip, remote_port) {
         out.push(exact);

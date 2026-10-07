@@ -6,7 +6,7 @@ use twin_app::{
     init_in, watch_in, InitRequest, WatchEbpf, WatchExecEvent, WatchRun, WatchSink, WatchTick,
 };
 use twin_cli::output;
-use twin_ebpf::EbpfExec;
+use twin_ebpf::{EbpfExec, TcpConnect, TcpEvent};
 
 struct Lines {
     text: Vec<String>,
@@ -23,6 +23,10 @@ impl WatchSink for Lines {
 
     fn on_exec(&mut self, event: &WatchExecEvent) {
         self.text.push(output::watch::render_exec(event));
+    }
+
+    fn on_tcp(&mut self, event: &twin_app::WatchTcpEvent) {
+        self.text.push(output::watch::render_tcp(event));
     }
 
     fn on_warning(&mut self, message: &str) {
@@ -66,6 +70,49 @@ fn injected_exec_prints_and_stops_on_ticks() {
 }
 
 #[test]
+fn injected_tcp_prints_beside_the_tick_and_stops() {
+    let temp = tempfile::tempdir().expect("temp");
+    let layout = TwinLayout::isolated(temp.path());
+    init_in(&layout, InitRequest::default()).expect("init");
+    let proc_root = temp.path().join("proc");
+    std::fs::create_dir_all(&proc_root).expect("proc");
+    let mut lines = Lines { text: Vec::new() };
+    let event = TcpEvent::Connect(TcpConnect::new(
+        4421,
+        4,
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 8)),
+        5432,
+        1,
+    ));
+    let result = watch_in(
+        &layout,
+        WatchRun {
+            config_override: None,
+            interval: Duration::ZERO,
+            duration: None,
+            max_ticks: Some(1),
+            ebpf: WatchEbpf::InjectedTcp(vec![event]),
+        },
+        &proc_root,
+        &AtomicBool::new(false),
+        &mut lines,
+    )
+    .expect("watch");
+    assert_eq!(result.ticks_completed, 1);
+    assert_eq!(result.tcp_count, 1);
+    assert_eq!(result.exec_count, 0);
+    let rendered = lines.text.join("\n");
+    assert!(
+        rendered.contains("[tcp] process:pid:4421 connect 10.0.0.8:5432"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("baseline") || rendered.contains('['),
+        "{rendered}"
+    );
+}
+
 fn unavailable_ebpf_warning_keeps_polling_ticks() {
     let temp = tempfile::tempdir().expect("temp");
     let layout = TwinLayout::isolated(temp.path());

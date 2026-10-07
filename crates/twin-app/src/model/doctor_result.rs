@@ -21,6 +21,7 @@ pub struct DoctorEbpf {
     pub btf: DoctorEbpfCheck,
     pub capabilities: DoctorEbpfCheck,
     pub exec_tracing: DoctorEbpfCheck,
+    pub tcp_tracing: DoctorEbpfCheck,
 }
 
 #[derive(Debug, Clone, Serialize)]

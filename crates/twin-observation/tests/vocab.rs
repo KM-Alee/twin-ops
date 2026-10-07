@@ -51,6 +51,10 @@ fn systemd_observation_kinds_round_trip() {
         ObservationKind::ConfigFileSeen,
         ObservationKind::ServiceConfiguredByFile,
         ObservationKind::EbpfExecObserved,
+        ObservationKind::EbpfConnect,
+        ObservationKind::EbpfAccept,
+        ObservationKind::EbpfBind,
+        ObservationKind::EbpfDroppedEvents,
     ] {
         let s = kind.to_string();
         let parsed = ObservationKind::from_str(&s).expect("parse");

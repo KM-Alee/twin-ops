@@ -6,6 +6,7 @@ pub struct WatchResult {
     pub duration_secs: Option<u64>,
     pub ticks_completed: u32,
     pub exec_count: u64,
+    pub tcp_count: u64,
     pub ebpf_requested: bool,
     pub ebpf_attached: bool,
     pub warnings: Vec<String>,
@@ -31,4 +32,11 @@ pub struct WatchTick {
 pub struct WatchExecEvent {
     pub node_id: String,
     pub comm: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WatchTcpEvent {
+    pub node_id: String,
+    pub action: String,
+    pub endpoint: String,
 }

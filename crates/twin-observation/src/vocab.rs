@@ -78,6 +78,10 @@ pub enum ObservationKind {
     ConfigFileSeen,
     ServiceConfiguredByFile,
     EbpfExecObserved,
+    EbpfConnect,
+    EbpfAccept,
+    EbpfBind,
+    EbpfDroppedEvents,
 }
 
 impl fmt::Display for ObservationKind {
@@ -103,6 +107,10 @@ impl fmt::Display for ObservationKind {
             Self::ConfigFileSeen => "config_file_seen",
             Self::ServiceConfiguredByFile => "service_configured_by_file",
             Self::EbpfExecObserved => "ebpf_exec_observed",
+            Self::EbpfConnect => "ebpf_connect",
+            Self::EbpfAccept => "ebpf_accept",
+            Self::EbpfBind => "ebpf_bind",
+            Self::EbpfDroppedEvents => "ebpf_dropped_events",
         })
     }
 }
@@ -132,6 +140,10 @@ impl FromStr for ObservationKind {
             "config_file_seen" => Ok(Self::ConfigFileSeen),
             "service_configured_by_file" => Ok(Self::ServiceConfiguredByFile),
             "ebpf_exec_observed" => Ok(Self::EbpfExecObserved),
+            "ebpf_connect" => Ok(Self::EbpfConnect),
+            "ebpf_accept" => Ok(Self::EbpfAccept),
+            "ebpf_bind" => Ok(Self::EbpfBind),
+            "ebpf_dropped_events" => Ok(Self::EbpfDroppedEvents),
             other => Err(ParseError::Enum {
                 kind: "ObservationKind",
                 value: other.to_string(),

@@ -26,6 +26,8 @@ impl WatchSink for Rec {
         self.execs.push(event.clone());
     }
 
+    fn on_tcp(&mut self, _event: &twin_app::WatchTcpEvent) {}
+
     fn on_warning(&mut self, message: &str) {
         self.warnings.push(message.to_string());
     }
@@ -140,8 +142,25 @@ fn stop_flag_ends_the_loop_before_a_tick() {
 }
 
 #[test]
-fn tcp_events_are_a_typed_error() {
+fn unknown_events_are_a_typed_error() {
     let err = parse_watch(&WatchCommand {
+        config_override: None,
+        interval: "5s".to_string(),
+        duration: None,
+        ticks: Some(1),
+        ebpf: true,
+        events: Some("dns".to_string()),
+    })
+    .expect_err("dns");
+    let text = err.to_string();
+    assert!(text.contains("dns"), "{text}");
+    assert!(text.contains("exec"), "{text}");
+    assert!(text.contains("tcp"), "{text}");
+}
+
+#[test]
+fn tcp_events_are_accepted() {
+    let run = parse_watch(&WatchCommand {
         config_override: None,
         interval: "5s".to_string(),
         duration: None,
@@ -149,10 +168,8 @@ fn tcp_events_are_a_typed_error() {
         ebpf: true,
         events: Some("tcp".to_string()),
     })
-    .expect_err("tcp");
-    let text = err.to_string();
-    assert!(text.contains("tcp"), "{text}");
-    assert!(text.contains("exec"), "{text}");
+    .expect("tcp");
+    assert!(matches!(run.ebpf, WatchEbpf::LiveTcp));
 }
 
 #[test]
@@ -199,6 +216,7 @@ fn doctor_ebpf_names_the_failing_check() {
         btf_present: true,
         effective_caps: Some(1u64 << 21),
         exec_tracepoint_present: true,
+        tcp_tracepoint_present: true,
     };
     let result = doctor_ebpf_in(&home.layout, None, Some(facts)).expect("doctor");
     let ebpf = result.ebpf.expect("ebpf section");

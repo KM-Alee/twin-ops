@@ -6,7 +6,7 @@ use std::sync::Arc;
 use clap::Parser;
 use twin_app::{
     AppError, GraphError, InitRequest, ScanRequest, WatchCommand, WatchExecEvent, WatchSink,
-    WatchTick,
+    WatchTcpEvent, WatchTick,
 };
 use twin_cli::cli::args::{
     Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
@@ -154,6 +154,13 @@ impl WatchSink for WatchPrinter {
             return;
         }
         println!("{}", output::watch::render_exec(event));
+    }
+
+    fn on_tcp(&mut self, event: &WatchTcpEvent) {
+        if self.json {
+            return;
+        }
+        println!("{}", output::watch::render_tcp(event));
     }
 
     fn on_warning(&mut self, message: &str) {

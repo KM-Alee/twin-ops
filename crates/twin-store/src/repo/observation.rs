@@ -83,6 +83,34 @@ impl Store {
         }
     }
 
+    pub fn delete_observation(&mut self, id: &str) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM edge_observations WHERE observation_id = ?1",
+                params![id],
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        self.conn
+            .execute("DELETE FROM observations WHERE id = ?1", params![id])
+            .map_err(|source| StoreError::Query { source })?;
+        Ok(())
+    }
+
+    pub fn list_observations_by_kind(&self, kind: &str) -> Result<Vec<ObservationRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns,
+                        confidence_hint, redaction_state, metadata_json, collector_run_id
+                 FROM observations WHERE kind = ?1 ORDER BY timestamp_ns",
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        let rows = stmt
+            .query_map(params![kind], row_from_observation)
+            .map_err(|source| StoreError::Query { source })?;
+        collect_rows(rows)
+    }
+
     pub fn list_observations_by_source(
         &self,
         source: &str,

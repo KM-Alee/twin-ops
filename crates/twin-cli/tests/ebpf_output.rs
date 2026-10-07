@@ -49,6 +49,7 @@ fn ready_ebpf() -> DoctorEbpf {
         btf: check(true, "available"),
         capabilities: check(true, "available"),
         exec_tracing: check(true, "available"),
+        tcp_tracing: check(true, "available"),
     }
 }
 
@@ -85,6 +86,7 @@ fn each_failed_ebpf_check_renders_a_warn_tag() {
         ("BTF", "unavailable", 1),
         ("capabilities", "unavailable", 2),
         ("exec tracing", "unavailable", 3),
+        ("tcp tracing", "unavailable", 4),
     ];
     for (label, status, index) in cases {
         let mut ebpf = ready_ebpf();
@@ -93,7 +95,8 @@ fn each_failed_ebpf_check_renders_a_warn_tag() {
             0 => ebpf.kernel = failed,
             1 => ebpf.btf = failed,
             2 => ebpf.capabilities = failed,
-            _ => ebpf.exec_tracing = failed,
+            3 => ebpf.exec_tracing = failed,
+            _ => ebpf.tcp_tracing = failed,
         }
         let text = output::doctor::render(&doctor_with(ebpf));
         let row = line(&text, label);

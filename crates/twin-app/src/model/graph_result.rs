@@ -49,6 +49,16 @@ pub struct GraphOwnedNode {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RuntimeDependency {
+    pub from_id: String,
+    pub to_id: String,
+    pub relationship: String,
+    pub evidence_label: String,
+    pub evidence_score: u8,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphEvidenceLine {
     pub source: String,
     pub statement: String,
@@ -71,6 +81,8 @@ pub struct GraphServiceResult {
     pub configured_dependents: Vec<GraphOwnedNode>,
     pub configured_files: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_dependencies: Vec<RuntimeDependency>,
 }
 
 #[derive(Debug, Clone, Serialize)]

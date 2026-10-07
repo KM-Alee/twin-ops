@@ -60,11 +60,31 @@ fn watch_ebpf_warns_and_still_prints_a_tick() {
 }
 
 #[test]
-fn watch_rejects_tcp_events() {
+fn watch_tcp_unavailable_still_prints_a_tick() {
     let home = TwinHome::new();
-    let out = home.run(&["watch", "--ebpf", "--events", "tcp", "--ticks", "1"]);
+    assert!(home.run_without_proc(&["init"]).status.success());
+    let out = home.run(&[
+        "watch",
+        "--ebpf",
+        "--events",
+        "tcp",
+        "--interval",
+        "1s",
+        "--ticks",
+        "1",
+    ]);
+    assert!(out.status.success(), "{}", stderr_utf8(&out));
+    let text = stdout_utf8(&out);
+    assert!(text.contains("warn"), "{text}");
+    assert!(text.contains('['), "{text}");
+}
+
+fn watch_rejects_unknown_events() {
+    let home = TwinHome::new();
+    let out = home.run(&["watch", "--ebpf", "--events", "dns", "--ticks", "1"]);
     assert!(!out.status.success());
     let err = stderr_utf8(&out);
+    assert!(err.contains("dns"), "{err}");
     assert!(err.contains("tcp"), "{err}");
 }
 

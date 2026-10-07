@@ -5,7 +5,7 @@ use twin_app::{
     GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
-use twin_app::GraphEvidenceLine;
+use twin_app::{GraphEvidenceLine, RuntimeDependency};
 
 use crate::output::format::{Lines, ScanFreshness, Status};
 
@@ -200,6 +200,7 @@ fn render_service(service: &GraphServiceResult, scan: Option<ScanFreshness>) -> 
         service.configured_dependents.iter(),
     );
     render_dependency_section(&mut lines, "configured by", service.configured_files.iter());
+    append_runtime_dependencies(&mut lines, &service.runtime_dependencies);
     append_evidence_lines(&mut lines, &service.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
@@ -317,6 +318,37 @@ fn render_unix_socket(unix: &GraphUnixSocketResult, scan: Option<ScanFreshness>)
     }
     append_evidence_lines(&mut lines, &unix.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn append_runtime_dependencies(lines: &mut Vec<String>, dependencies: &[RuntimeDependency]) {
+    if dependencies.is_empty() {
+        return;
+    }
+    lines.push(String::new());
+    lines.push("Runtime dependency observed:".to_string());
+    for dependency in dependencies {
+        lines.push(String::new());
+        lines.push(format!(
+            "{} CONNECTS_TO {}",
+            dependency.from_id, dependency.to_id
+        ));
+        lines.push(String::new());
+        lines.push(format!(
+            "Evidence strength: {}",
+            strength_words(&dependency.evidence_label)
+        ));
+        lines.push("Reason:".to_string());
+        for reason in &dependency.reasons {
+            lines.push(format!("- {reason}"));
+        }
+    }
+}
+
+fn strength_words(label: &str) -> &str {
+    match label {
+        "very_strong" => "very strong",
+        other => other,
+    }
 }
 
 fn append_evidence_lines(lines: &mut Vec<String>, evidence: &[GraphEvidenceLine]) {

@@ -198,7 +198,7 @@ pub enum WatchError {
     InvalidDuration { value: String, reason: String },
     #[error("invalid tick count {value}: {reason}")]
     InvalidTicks { value: u32, reason: String },
-    #[error("unsupported watch event `{name}`; only `exec` is supported")]
+    #[error("unsupported watch event `{name}`; only `exec` and `tcp` are supported")]
     UnsupportedEvent { name: String },
     #[error("watch event `{name}` requires --ebpf")]
     EventsRequireEbpf { name: String },

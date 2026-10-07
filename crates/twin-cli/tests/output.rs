@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use twin_app::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
-    EmulationImpactPathView, EmulationOverlayNode, EmulationResult, GraphEvidenceLine,
-    GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphResult,
-    GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
-    InitResult, PermissionMode, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
+    DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult,
+    EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationResult,
+    GraphEvidenceLine, GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode,
+    GraphResult, GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult,
+    ImpactUnknown, InitResult, PermissionMode, RuntimeDependency, ScanQuality,
+    ScanQualityAssessment, ScanResult, ScanWarning, WatchTcpEvent,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -229,6 +230,7 @@ fn graph_service_evidence_is_deduped() {
                 relationship: "process listener observed".to_string(),
             },
         ],
+        runtime_dependencies: vec![],
     });
     let text = output::graph::render(&result);
     assert_eq!(text.matches("inode 20562 listening").count(), 1);
@@ -356,6 +358,7 @@ fn graph_service_render_declared_dependency() {
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![],
+        runtime_dependencies: vec![],
     });
     let text = output::graph::render(&result);
     assert!(text.contains("depends on (declared)"));
@@ -416,6 +419,7 @@ fn graph_service_render_inferred_ownership() {
             strength: "high".to_string(),
             relationship: "service ownership inferred from systemd cgroup path".to_string(),
         }],
+        runtime_dependencies: vec![],
     });
     let text = output::graph::render(&result);
     assert!(text.contains("owns (inferred)"));
@@ -1287,4 +1291,152 @@ fn init_json_includes_schema_version() {
         value.get("schema_version").and_then(|v| v.as_i64()),
         Some(LATEST_VERSION)
     );
+}
+
+#[test]
+fn graph_evidence_renders_runtime_dependency() {
+    let mut result = sample_service_graph();
+    result.runtime_dependencies.push(RuntimeDependency {
+        from_id: "service:django.service".to_string(),
+        to_id: "service:postgresql.service".to_string(),
+        relationship: "connects_to".to_string(),
+        evidence_label: "very_strong".to_string(),
+        evidence_score: 95,
+        reasons: vec![
+            "eBPF observed 2 connect events".to_string(),
+            "socket inode mapping confirmed listener ownership".to_string(),
+        ],
+    });
+    let text = output::graph::render(&GraphResult::Service(result.clone()));
+    assert!(text.contains("Runtime dependency observed:"));
+    assert!(text.contains("service:django.service CONNECTS_TO service:postgresql.service"));
+    assert!(text.contains("Evidence strength: very strong"));
+    assert!(text.contains("eBPF observed 2 connect events"));
+    assert!(text.contains("socket inode mapping confirmed listener ownership"));
+    let json = output::json::render(&GraphResult::Service(result)).expect("json");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(
+        value["runtime_dependencies"][0]["evidence_label"],
+        "very_strong"
+    );
+    assert_eq!(value["runtime_dependencies"][0]["evidence_score"], 95);
+}
+
+#[test]
+fn impact_and_emulate_render_ebpf_evidence() {
+    let mut impact = sample_impact_result();
+    impact.evidence.push(ImpactEvidenceLine {
+        source: "ebpf".to_string(),
+        statement: "eBPF observed 2 connect events".to_string(),
+        relationship: "connects_to".to_string(),
+        strength: "very_strong".to_string(),
+        observation_id: None,
+    });
+    let text = output::impact::render(&impact);
+    assert!(text.contains("eBPF observed 2 connect events"));
+    let json = output::json::render(&impact).expect("json");
+    assert!(json.contains("eBPF observed 2 connect events"));
+
+    let mut emulation = sample_emulation_result();
+    emulation.transient_impacts[0]
+        .evidence
+        .push("eBPF observed 2 connect events".to_string());
+    let text = output::emulate::render(&emulation);
+    assert!(text.contains("eBPF observed 2 connect events"));
+}
+
+#[test]
+fn watch_tcp_line_renders_beside_the_summary_shape() {
+    let line = output::watch::render_tcp(&WatchTcpEvent {
+        node_id: "process:pid:4421".to_string(),
+        action: "connect".to_string(),
+        endpoint: "10.0.0.8:5432".to_string(),
+    });
+    assert_eq!(line, "[tcp] process:pid:4421 connect 10.0.0.8:5432");
+}
+
+#[test]
+fn doctor_ebpf_renders_tcp_tracing() {
+    let mut result = sample_doctor_result();
+    result.ebpf = Some(DoctorEbpf {
+        kernel: DoctorEbpfCheck {
+            ok: true,
+            status: "supported".to_string(),
+            detail: None,
+        },
+        btf: DoctorEbpfCheck {
+            ok: true,
+            status: "available".to_string(),
+            detail: None,
+        },
+        capabilities: DoctorEbpfCheck {
+            ok: true,
+            status: "available".to_string(),
+            detail: None,
+        },
+        exec_tracing: DoctorEbpfCheck {
+            ok: true,
+            status: "available".to_string(),
+            detail: None,
+        },
+        tcp_tracing: DoctorEbpfCheck {
+            ok: false,
+            status: "unavailable".to_string(),
+            detail: Some("inet_sock_set_state tracepoint not present".to_string()),
+        },
+    });
+    let text = output::doctor::render(&result);
+    assert!(text.contains("tcp tracing"));
+    assert!(text.contains("warn"));
+    assert!(text.contains("unavailable"));
+    let without = sample_doctor_result();
+    let plain = output::doctor::render(&without);
+    assert!(!plain.contains("tcp tracing"));
+}
+
+fn sample_service_graph() -> GraphServiceResult {
+    GraphServiceResult {
+        service: GraphNodeSummary {
+            id: "service:django.service".to_string(),
+            label: "django.service".to_string(),
+        },
+        owned_processes: vec![],
+        owned_cgroups: vec![],
+        listening_ports: vec![],
+        listening_unix: vec![],
+        connected_ports: vec![],
+        connected_unix: vec![],
+        dependencies: vec![],
+        dependents: vec![],
+        socket_activation: vec![],
+        configured_dependents: vec![],
+        configured_files: vec![],
+        evidence: vec![],
+        runtime_dependencies: vec![],
+    }
+}
+
+fn sample_doctor_result() -> DoctorResult {
+    DoctorResult {
+        core: DoctorCore {
+            cli_ok: true,
+            config_found: true,
+            config_path: Some(PathBuf::from("/tmp/config.toml")),
+        },
+        database: DoctorDatabase {
+            initialized: true,
+            schema_version: Some(LATEST_VERSION),
+            db_path: Some(PathBuf::from("/tmp/twin.db")),
+            wal_mode: Some(true),
+        },
+        permissions: DoctorPermissions {
+            mode: PermissionMode::Unprivileged,
+            proc_accessible: true,
+            readable_process_count: Some(1),
+            restricted_process_count: Some(0),
+        },
+        scan_quality: None,
+        scan_quality_error: None,
+        ebpf: None,
+    }
 }

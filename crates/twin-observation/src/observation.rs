@@ -140,6 +140,13 @@ impl ObservationMetadata {
         );
     }
 
+    pub fn insert_u64(&mut self, key: &str, value: u64) {
+        self.0.insert(
+            key.to_string(),
+            serde_json::Value::Number(serde_json::Number::from(value)),
+        );
+    }
+
     pub fn insert_str_array(&mut self, key: &str, values: &[String]) {
         let array = values
             .iter()

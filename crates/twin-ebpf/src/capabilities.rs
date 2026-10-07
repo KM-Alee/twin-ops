@@ -13,6 +13,7 @@ pub struct EbpfFacts {
     pub btf_present: bool,
     pub effective_caps: Option<u64>,
     pub exec_tracepoint_present: bool,
+    pub tcp_tracepoint_present: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub struct EbpfProbePaths {
     pub btf: PathBuf,
     pub status: PathBuf,
     pub exec_tracepoints: Vec<PathBuf>,
+    pub tcp_tracepoints: Vec<PathBuf>,
 }
 
 impl EbpfProbePaths {
@@ -32,6 +34,10 @@ impl EbpfProbePaths {
             exec_tracepoints: vec![
                 PathBuf::from("/sys/kernel/tracing/events/sched/sched_process_exec"),
                 PathBuf::from("/sys/kernel/debug/tracing/events/sched/sched_process_exec"),
+            ],
+            tcp_tracepoints: vec![
+                PathBuf::from("/sys/kernel/tracing/events/sock/inet_sock_set_state"),
+                PathBuf::from("/sys/kernel/debug/tracing/events/sock/inet_sock_set_state"),
             ],
         }
     }
@@ -50,11 +56,16 @@ pub struct EbpfReport {
     pub btf: EbpfCheck,
     pub capabilities: EbpfCheck,
     pub exec_tracing: EbpfCheck,
+    pub tcp_tracing: EbpfCheck,
 }
 
 impl EbpfReport {
     pub fn is_ready(&self) -> bool {
         self.kernel.ok && self.btf.ok && self.capabilities.ok && self.exec_tracing.ok
+    }
+
+    pub fn is_tcp_ready(&self) -> bool {
+        self.kernel.ok && self.btf.ok && self.capabilities.ok && self.tcp_tracing.ok
     }
 
     pub fn failure_summary(&self) -> String {
@@ -63,6 +74,19 @@ impl EbpfReport {
         push_failure(&mut parts, "BTF", &self.btf);
         push_failure(&mut parts, "capabilities", &self.capabilities);
         push_failure(&mut parts, "exec tracing", &self.exec_tracing);
+        if parts.is_empty() {
+            "eBPF checks failed".to_string()
+        } else {
+            parts.join("; ")
+        }
+    }
+
+    pub fn tcp_failure_summary(&self) -> String {
+        let mut parts = Vec::new();
+        push_failure(&mut parts, "kernel", &self.kernel);
+        push_failure(&mut parts, "BTF", &self.btf);
+        push_failure(&mut parts, "capabilities", &self.capabilities);
+        push_failure(&mut parts, "tcp tracing", &self.tcp_tracing);
         if parts.is_empty() {
             "eBPF checks failed".to_string()
         } else {
@@ -81,6 +105,7 @@ pub fn read_facts(paths: &EbpfProbePaths) -> EbpfFacts {
         btf_present: btf_file_present(&paths.btf),
         effective_caps: parse_cap_eff(&read_to_string_lossy(&paths.status)),
         exec_tracepoint_present: paths.exec_tracepoints.iter().any(|path| path_exists(path)),
+        tcp_tracepoint_present: paths.tcp_tracepoints.iter().any(|path| path_exists(path)),
     }
 }
 
@@ -99,6 +124,12 @@ pub fn assess(facts: &EbpfFacts) -> EbpfReport {
             "available",
             "unavailable",
             "sched_process_exec tracepoint not present",
+        ),
+        tcp_tracing: flag_check(
+            facts.tcp_tracepoint_present,
+            "available",
+            "unavailable",
+            "inet_sock_set_state tracepoint not present",
         ),
     }
 }

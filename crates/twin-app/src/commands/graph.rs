@@ -53,12 +53,12 @@ fn graph_at(
                 detail: service_not_found_detail(known as usize),
             },
         )?;
-        return service_neighborhood(&store, &target);
+        return service_neighborhood(&store, &target, request.show_evidence);
     }
 
     if let Some(target) = &request.target {
         return match target.kind() {
-            Some(NodeKind::Service) => service_neighborhood(&store, target),
+            Some(NodeKind::Service) => service_neighborhood(&store, target, request.show_evidence),
             Some(NodeKind::Process) => process_neighborhood(&store, target),
             Some(NodeKind::Port) => port_neighborhood(&store, target),
             Some(NodeKind::UnixSocket) => unix_socket_neighborhood(&store, target),
@@ -161,7 +161,11 @@ fn process_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     ))
 }
 
-fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+fn service_neighborhood(
+    store: &Store,
+    target: &NodeId,
+    show_evidence: bool,
+) -> Result<GraphResult, AppError> {
     let node = store
         .get_node_typed(target)
         .map_err(GraphError::Store)?
@@ -400,6 +404,11 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
     configured_files.sort_by_key(|n| n.id.clone());
     socket_activation.sort_by_key(|n| n.id.clone());
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
+    let runtime_dependencies = if show_evidence {
+        super::ebpf_tcp::runtime_dependencies(store, target)?
+    } else {
+        Vec::new()
+    };
 
     Ok(GraphResult::service(GraphServiceResult {
         service: summary,
@@ -415,6 +424,7 @@ fn service_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, A
         configured_dependents,
         configured_files,
         evidence,
+        runtime_dependencies,
     }))
 }
 

@@ -1,6 +1,7 @@
 pub mod diff;
 pub mod doctor;
 mod duration;
+pub(crate) mod ebpf_tcp;
 pub mod emulate;
 mod evidence;
 pub mod graph;

@@ -1,4 +1,4 @@
-use twin_app::{WatchExecEvent, WatchTick};
+use twin_app::{WatchExecEvent, WatchTcpEvent, WatchTick};
 
 use crate::output::format::{Lines, Status};
 
@@ -75,6 +75,13 @@ pub fn render_exec(event: &WatchExecEvent) -> String {
     } else {
         format!("[exec] {} {}", event.node_id, event.comm)
     }
+}
+
+pub fn render_tcp(event: &WatchTcpEvent) -> String {
+    format!(
+        "[tcp] {} {} {}",
+        event.node_id, event.action, event.endpoint
+    )
 }
 
 pub fn render_warning(message: &str) -> String {

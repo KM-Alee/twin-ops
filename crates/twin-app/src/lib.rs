@@ -15,10 +15,10 @@ pub use model::{
     GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
     GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
     ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
-    PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
-    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WatchExecEvent,
-    WatchResult, WatchTick, WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode,
-    WhatChangedNodeDelta, WhatChangedResult,
+    PermissionMode, RiskAssessment, RuntimeDependency, ScanQuality, ScanQualityAssessment,
+    ScanResult, ScanWarning, ScanWarningDetail, SnapshotCreateResult, SnapshotEntry,
+    SnapshotListResult, WatchExecEvent, WatchResult, WatchTcpEvent, WatchTick, WhatChangedEdge,
+    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -118,6 +118,7 @@ pub struct GraphRequest {
     pub kind: Option<NodeKind>,
     pub target: Option<NodeId>,
     pub target_query: Option<String>,
+    pub show_evidence: bool,
 }
 
 pub fn graph(request: GraphRequest) -> Result<GraphResult, AppError> {
@@ -294,6 +295,7 @@ pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, 
     commands::diff::run(layout, &request)
 }
 
+pub use commands::ebpf_tcp::{connect_evidence_strength, TcpIngestor};
 pub use commands::watch::{WatchCommand, WatchEbpf, WatchRun, WatchSink};
 
 pub fn parse_watch(command: &WatchCommand) -> Result<WatchRun, AppError> {

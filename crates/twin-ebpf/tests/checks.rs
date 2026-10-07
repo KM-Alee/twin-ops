@@ -8,6 +8,7 @@ fn ready_facts() -> EbpfFacts {
         btf_present: true,
         effective_caps: Some(1u64 << 21),
         exec_tracepoint_present: true,
+        tcp_tracepoint_present: true,
     }
 }
 
@@ -19,6 +20,8 @@ fn all_checks_pass_for_a_ready_host() {
     assert_eq!(report.btf.status, "available");
     assert_eq!(report.capabilities.status, "available");
     assert_eq!(report.exec_tracing.status, "available");
+    assert!(report.tcp_tracing.ok);
+    assert!(report.is_tcp_ready());
 }
 
 #[test]
@@ -57,6 +60,16 @@ fn each_check_fails_alone() {
     assert!(!report.exec_tracing.ok);
     assert!(report.kernel.ok && report.btf.ok && report.capabilities.ok);
     assert!(report.failure_summary().contains("exec tracing"));
+    assert!(!report.failure_summary().contains("tcp tracing"));
+
+    let mut facts = ready_facts();
+    facts.tcp_tracepoint_present = false;
+    let report = assess(&facts);
+    assert!(!report.tcp_tracing.ok);
+    assert!(report.is_ready());
+    assert!(!report.is_tcp_ready());
+    assert!(report.tcp_failure_summary().contains("tcp tracing"));
+    assert!(!report.failure_summary().contains("tcp tracing"));
 }
 
 #[test]
@@ -98,6 +111,7 @@ fn missing_files_are_unsupported_not_a_crash() {
         btf: root.path().join("vmlinux"),
         status: root.path().join("status"),
         exec_tracepoints: vec![root.path().join("sched_process_exec")],
+        tcp_tracepoints: vec![root.path().join("inet_sock_set_state")],
     };
     let facts = read_facts(&paths);
     let report = assess(&facts);

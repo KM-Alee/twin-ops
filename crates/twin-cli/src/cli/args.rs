@@ -79,6 +79,9 @@ pub struct GraphArgs {
         help = "Node id, pid, or kind (e.g. process, 1234, process:pid:1234)"
     )]
     pub target: Option<String>,
+
+    #[arg(long, help = "Show runtime dependency evidence")]
+    pub evidence: bool,
 }
 
 #[derive(Args)]
@@ -198,7 +201,7 @@ pub struct WatchArgs {
     #[arg(long, help = "Observe exec events with eBPF when the kernel allows it")]
     pub ebpf: bool,
 
-    #[arg(long, help = "eBPF event stream to print (exec)")]
+    #[arg(long, help = "eBPF event stream to print (exec or tcp)")]
     pub events: Option<String>,
 }
 

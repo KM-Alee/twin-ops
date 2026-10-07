@@ -120,7 +120,7 @@ pub(crate) fn load_typed_service_dependents(
         if !is_active_edge(&edge) {
             continue;
         }
-        if edge.kind() != EdgeKind::DependsOn {
+        if edge.kind() != EdgeKind::DependsOn && edge.kind() != EdgeKind::ConnectsTo {
             continue;
         }
         let dependent_id = edge.from();
@@ -138,7 +138,9 @@ pub(crate) fn load_typed_service_dependents(
             unknowns.push(missing_evidence_unknown(edge.id().as_str()));
         }
         let mut dependent_evidence = Vec::new();
-        let relationship = if edge.class() == EdgeClass::Observed {
+        let relationship = if edge.kind() == EdgeKind::ConnectsTo {
+            "Inferred: runtime connection observed by eBPF"
+        } else if edge.class() == EdgeClass::Observed {
             "Configured: systemd unit file dependency"
         } else {
             "Inferred: service dependency inferred from active connection and listener match"
@@ -547,37 +549,45 @@ pub(crate) fn collect_edge_evidence(
     seen: &mut HashSet<String>,
     relationship: &str,
 ) {
-    if observation_ids.len() > 1 {
-        if let Ok(ctx) = crate::commands::evidence::EvidenceLoadContext::preload_observations(
-            store,
-            observation_ids,
-        ) {
-            for obs_id in observation_ids {
-                let Some(obs) = ctx.observation(obs_id) else {
-                    continue;
-                };
-                if let Some(line) = impact_evidence_line(obs, relationship) {
-                    let key = format!("{}|{}", line.source, line.statement);
-                    if seen.insert(key) {
-                        evidence.push(line);
-                    }
+    let loaded = if observation_ids.len() > 1 {
+        crate::commands::evidence::EvidenceLoadContext::preload_observations(store, observation_ids)
+            .ok()
+    } else {
+        None
+    };
+    if let Some(ctx) = loaded {
+        for obs_id in observation_ids {
+            let Some(obs) = ctx.observation(obs_id) else {
+                continue;
+            };
+            if let Some(line) = impact_evidence_line(obs, relationship) {
+                let key = format!("{}|{}", line.source, line.statement);
+                if seen.insert(key) {
+                    evidence.push(line);
                 }
             }
-            return;
+        }
+    } else {
+        for obs_id in observation_ids {
+            let Ok(id) = ObservationId::from_str(obs_id) else {
+                continue;
+            };
+            let Ok(Some(obs)) = store.get_observation_typed(id) else {
+                continue;
+            };
+            if let Some(line) = impact_evidence_line(&obs, relationship) {
+                let key = format!("{}|{}", line.source, line.statement);
+                if seen.insert(key) {
+                    evidence.push(line);
+                }
+            }
         }
     }
-    for obs_id in observation_ids {
-        let Ok(id) = ObservationId::from_str(obs_id) else {
-            continue;
-        };
-        let Ok(Some(obs)) = store.get_observation_typed(id) else {
-            continue;
-        };
-        if let Some(line) = impact_evidence_line(&obs, relationship) {
-            let key = format!("{}|{}", line.source, line.statement);
-            if seen.insert(key) {
-                evidence.push(line);
-            }
+    if let Some(line) = super::ebpf_tcp::ebpf_connect_evidence(store, observation_ids, relationship)
+    {
+        let key = format!("{}|{}", line.source, line.statement);
+        if seen.insert(key) {
+            evidence.push(line);
         }
     }
 }

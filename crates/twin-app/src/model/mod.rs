@@ -22,7 +22,7 @@ pub use emulation_result::{
 pub use graph_result::{
     edge_summary, node_summary, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult,
     GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge,
-    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
+    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult, RuntimeDependency,
 };
 pub use impact_result::{
     EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,
@@ -32,7 +32,7 @@ pub use init_result::InitResult;
 pub use scan_quality::{ScanQuality, ScanQualityAssessment};
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};
 pub use snapshot_result::{SnapshotCreateResult, SnapshotEntry, SnapshotListResult};
-pub use watch_result::{WatchExecEvent, WatchResult, WatchTick};
+pub use watch_result::{WatchExecEvent, WatchResult, WatchTcpEvent, WatchTick};
 pub use what_changed_result::{
     WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };

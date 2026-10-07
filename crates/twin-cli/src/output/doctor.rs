@@ -171,6 +171,7 @@ pub fn render(result: &DoctorResult) -> String {
             ("BTF", &ebpf.btf),
             ("capabilities", &ebpf.capabilities),
             ("exec tracing", &ebpf.exec_tracing),
+            ("tcp tracing", &ebpf.tcp_tracing),
         ];
         for (index, (label, check)) in rows.iter().enumerate() {
             let status = if check.ok { Status::Ok } else { Status::Warn };

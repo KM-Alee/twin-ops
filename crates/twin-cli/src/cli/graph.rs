@@ -31,6 +31,7 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
         kind,
         target,
         target_query,
+        show_evidence: args.evidence,
     })
 }
 
@@ -86,6 +87,7 @@ mod tests {
     fn defaults_to_process_list() {
         let req = request(GraphArgs {
             config: None,
+            evidence: false,
             kind: None,
             target: None,
         });
@@ -97,6 +99,7 @@ mod tests {
     fn positional_process_is_kind_list() {
         let req = request(GraphArgs {
             config: None,
+            evidence: false,
             kind: None,
             target: Some("process".to_string()),
         });
@@ -109,6 +112,7 @@ mod tests {
         for value in ["1234", "pid:1234", "process:pid:1234"] {
             let req = request(GraphArgs {
                 config: None,
+                evidence: false,
                 kind: None,
                 target: Some(value.to_string()),
             });
@@ -121,6 +125,7 @@ mod tests {
     fn kind_flag_still_works() {
         let req = request(GraphArgs {
             config: None,
+            evidence: false,
             kind: Some("process".to_string()),
             target: None,
         });
@@ -131,6 +136,7 @@ mod tests {
     fn invalid_port_target_errors() {
         let err = graph_request(&GraphArgs {
             config: None,
+            evidence: false,
             kind: None,
             target: Some("port:tcp:invalid:80".to_string()),
         })
@@ -142,6 +148,7 @@ mod tests {
     fn service_shorthand_passes_through_as_search() {
         let req = request(GraphArgs {
             config: None,
+            evidence: false,
             kind: None,
             target: Some("nginx".to_string()),
         });

@@ -6,6 +6,7 @@ use aya::programs::{ProgramError, TracePoint};
 
 use crate::decode::{decode_exec, EbpfExec};
 use crate::error::EbpfError;
+use crate::tcp::{decode_tcp_event, TcpEvent};
 
 const EXEC_PROGRAM_NAME: &str = "exec";
 const EXEC_MAP_NAME: &str = "EVENTS";
@@ -79,6 +80,82 @@ pub fn attach_from_bytes(bytes: &[u8]) -> Result<ExecSession, EbpfError> {
         reason: err.to_string(),
     })?;
     Ok(ExecSession {
+        _bpf: bpf,
+        ring: Some(ring),
+        link: Some(link),
+    })
+}
+
+const TCP_PROGRAM_NAME: &str = "tcp";
+const TCP_MAP_NAME: &str = "TCP_EVENTS";
+const TCP_TRACE_CATEGORY: &str = "sock";
+const TCP_TRACE_NAME: &str = "inet_sock_set_state";
+
+pub struct TcpSession {
+    _bpf: aya::Ebpf,
+    ring: Option<RingBuf<aya::maps::MapData>>,
+    link: Option<TracePointLink>,
+}
+
+impl TcpSession {
+    pub fn poll_event(&mut self) -> Result<Option<TcpEvent>, EbpfError> {
+        let Some(ring) = self.ring.as_mut() else {
+            return Ok(None);
+        };
+        match ring.next() {
+            Some(item) => decode_tcp_event(item.as_ref()).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub fn detach(&mut self) {
+        self.link.take();
+        self.ring.take();
+    }
+}
+
+impl Drop for TcpSession {
+    fn drop(&mut self) {
+        self.detach();
+    }
+}
+
+pub fn attach_tcp() -> Result<TcpSession, EbpfError> {
+    Err(EbpfError::Unavailable {
+        reason: "tcp tracing program is not embedded in this build".to_string(),
+    })
+}
+
+pub fn attach_tcp_from_bytes(bytes: &[u8]) -> Result<TcpSession, EbpfError> {
+    if bytes.is_empty() {
+        return Err(EbpfError::Unavailable {
+            reason: "tcp program object is empty".to_string(),
+        });
+    }
+    let owned = align4(bytes);
+    let view = aligned_prefix(&owned, bytes.len());
+    let mut bpf = aya::Ebpf::load(view).map_err(map_load_error)?;
+    let program: &mut TracePoint = bpf
+        .program_mut(TCP_PROGRAM_NAME)
+        .ok_or_else(|| EbpfError::Unavailable {
+            reason: format!("program `{TCP_PROGRAM_NAME}` not found"),
+        })?
+        .try_into()
+        .map_err(map_program_error)?;
+    program.load().map_err(map_program_error)?;
+    let link_id = program
+        .attach(TCP_TRACE_CATEGORY, TCP_TRACE_NAME)
+        .map_err(map_program_error)?;
+    let link = program.take_link(link_id).map_err(map_program_error)?;
+    let map = bpf
+        .take_map(TCP_MAP_NAME)
+        .ok_or_else(|| EbpfError::Unavailable {
+            reason: format!("map `{TCP_MAP_NAME}` not found"),
+        })?;
+    let ring = RingBuf::try_from(map).map_err(|err| EbpfError::Unavailable {
+        reason: err.to_string(),
+    })?;
+    Ok(TcpSession {
         _bpf: bpf,
         ring: Some(ring),
         link: Some(link),
