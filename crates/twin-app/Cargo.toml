@@ -16,6 +16,8 @@ twin-observation = { workspace = true }
 twin-store = { workspace = true }
 twin-emulate = { workspace = true }
 twin-ebpf = { workspace = true }
+twin-test = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

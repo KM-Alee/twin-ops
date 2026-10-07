@@ -22,6 +22,8 @@ pub enum AppError {
     Temporal(#[from] TemporalError),
     #[error("watch failed: {0}")]
     Watch(#[from] WatchError),
+    #[error("test failed: {0}")]
+    Test(#[from] TestCmdError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -188,6 +190,14 @@ pub enum TemporalError {
         #[source]
         source: ParseError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TestCmdError {
+    #[error("{0}")]
+    Test(#[from] twin_test::TestError),
+    #[error("cannot encode test report: {reason}")]
+    Encode { reason: String },
 }
 
 #[derive(Debug, thiserror::Error)]

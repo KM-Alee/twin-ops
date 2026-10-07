@@ -9,6 +9,7 @@ pub mod json;
 pub mod scan;
 pub mod sections;
 pub mod snapshot;
+pub mod test_report;
 pub mod unknowns;
 pub mod watch;
 pub mod what_changed;

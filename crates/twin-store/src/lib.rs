@@ -5,7 +5,7 @@ mod store;
 
 pub use repo::{
     CollectorRunRow, EdgeHistoryRow, EdgeRow, NodeHistoryRow, NodeRow, ObservationRow,
-    SnapshotError, SnapshotRow,
+    SnapshotError, SnapshotRow, TestRunRow,
 };
 pub use store::Store;
 

@@ -185,4 +185,19 @@ CREATE TABLE IF NOT EXISTS snapshot_edges (
 CREATE INDEX IF NOT EXISTS idx_snapshot_edges_snapshot ON snapshot_edges(snapshot_name);
 ";
 
-pub const LATEST_VERSION: i64 = 4;
+pub const MIGRATION_005: &str = r"
+CREATE TABLE IF NOT EXISTS test_runs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    started_at_ns INTEGER NOT NULL,
+    passed INTEGER NOT NULL,
+    warned INTEGER NOT NULL,
+    failed INTEGER NOT NULL,
+    report_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_test_runs_started ON test_runs(started_at_ns);
+";
+
+pub const LATEST_VERSION: i64 = 5;

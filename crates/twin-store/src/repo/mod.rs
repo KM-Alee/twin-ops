@@ -8,6 +8,7 @@ pub mod history;
 pub mod node;
 pub mod observation;
 pub mod snapshot;
+pub mod test_run;
 
 pub use collector_run::CollectorRunRow;
 pub use edge::EdgeRow;
@@ -15,3 +16,4 @@ pub use history::{EdgeHistoryRow, NodeHistoryRow};
 pub use node::NodeRow;
 pub use observation::ObservationRow;
 pub use snapshot::{SnapshotError, SnapshotRow};
+pub use test_run::TestRunRow;

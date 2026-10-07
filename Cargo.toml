@@ -8,6 +8,7 @@ members = [
     "crates/twin-collectors",
     "crates/twin-emulate",
     "crates/twin-ebpf",
+    "crates/twin-test",
 ]
 resolver = "2"
 
@@ -24,6 +25,8 @@ twin-observation = { path = "crates/twin-observation" }
 twin-collectors = { path = "crates/twin-collectors" }
 twin-emulate = { path = "crates/twin-emulate" }
 twin-ebpf = { path = "crates/twin-ebpf" }
+twin-test = { path = "crates/twin-test" }
+serde_yaml = "0.9"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

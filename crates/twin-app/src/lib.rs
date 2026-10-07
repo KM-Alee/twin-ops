@@ -5,7 +5,8 @@ mod model;
 pub mod paths;
 
 pub use error::{
-    AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, WatchError,
+    AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, TestCmdError,
+    WatchError,
 };
 pub use model::{
     CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore,
@@ -299,7 +300,9 @@ pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, 
 }
 
 pub use commands::ebpf_tcp::{connect_evidence_strength, TcpIngestor};
+pub use commands::test_cmd::{init_file, lint_file, run_file, TestInitOutcome, TestInitRequest};
 pub use commands::watch::{WatchCommand, WatchEbpf, WatchRun, WatchSink};
+pub use twin_test::{CheckKind, CheckResult, CheckStatus, TestCheck, TestDocument, TestRunReport};
 
 pub fn parse_watch(command: &WatchCommand) -> Result<WatchRun, AppError> {
     commands::watch::prepare(command)

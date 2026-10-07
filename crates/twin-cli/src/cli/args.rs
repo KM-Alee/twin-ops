@@ -30,6 +30,7 @@ pub enum Command {
     Snapshot(SnapshotArgs),
     Diff(DiffArgs),
     Watch(WatchArgs),
+    Test(TestArgs),
 }
 
 #[derive(Args)]
@@ -209,6 +210,37 @@ pub struct WatchArgs {
 
     #[arg(long, help = "eBPF event stream to print (exec or tcp)")]
     pub events: Option<String>,
+}
+
+#[derive(Args)]
+pub struct TestArgs {
+    #[command(subcommand)]
+    pub action: TestAction,
+}
+
+#[derive(Subcommand)]
+pub enum TestAction {
+    #[command(about = "Write a starter twin.yaml")]
+    Init(TestInitArgs),
+    #[command(about = "Validate a twin.yaml file")]
+    Lint(TestFileArgs),
+    #[command(about = "Run checks in a twin.yaml file against the stored graph")]
+    Run(TestFileArgs),
+}
+
+#[derive(Args)]
+pub struct TestInitArgs {
+    #[arg(long, help = "Replace an existing file")]
+    pub force: bool,
+
+    #[arg(default_value = "twin.yaml", help = "Path to write")]
+    pub path: PathBuf,
+}
+
+#[derive(Args)]
+pub struct TestFileArgs {
+    #[arg(default_value = "twin.yaml", help = "Path to the test file")]
+    pub path: PathBuf,
 }
 
 #[derive(Args)]

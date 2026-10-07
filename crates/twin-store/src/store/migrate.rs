@@ -54,6 +54,7 @@ impl Store {
             2 => migration::MIGRATION_002,
             3 => migration::MIGRATION_003,
             4 => migration::MIGRATION_004,
+            5 => migration::MIGRATION_005,
             _ => {
                 return Err(StoreError::Migration {
                     version,

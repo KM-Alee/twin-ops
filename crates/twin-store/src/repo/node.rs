@@ -79,6 +79,21 @@ impl Store {
         }
     }
 
+    pub fn list_nodes(&self) -> Result<Vec<NodeRow>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, label, state, first_seen_ns, last_seen_ns,
+                        valid_from_ns, valid_to_ns, metadata_json
+                 FROM nodes ORDER BY id",
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        let rows = stmt
+            .query_map([], row_from_node)
+            .map_err(|source| StoreError::Query { source })?;
+        collect_rows(rows)
+    }
+
     pub fn list_nodes_by_kind(&self, kind: &str) -> Result<Vec<NodeRow>, StoreError> {
         let mut stmt = self
             .conn

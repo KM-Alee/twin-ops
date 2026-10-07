@@ -22,5 +22,6 @@ mod scan_systemd_runtime;
 mod scan_systemd_socket;
 mod service_dependents;
 pub mod snapshot;
+pub(crate) mod test_cmd;
 pub mod watch;
 pub mod what_changed;

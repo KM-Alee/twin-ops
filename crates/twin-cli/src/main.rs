@@ -10,7 +10,8 @@ use twin_app::{
 };
 use twin_cli::cli::args::{
     Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
-    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WatchArgs, WhatChangedArgs,
+    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, TestAction, TestArgs,
+    WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
@@ -38,6 +39,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Snapshot(args) => run_snapshot(&cli.global, &args),
         Command::Diff(args) => run_diff(&cli.global, &args),
         Command::Watch(args) => run_watch(&cli.global, &args),
+        Command::Test(args) => run_test(&cli.global, &args),
     }
 }
 
@@ -168,6 +170,61 @@ impl WatchSink for WatchPrinter {
             return;
         }
         println!("{}", output::watch::render_warning(message));
+    }
+}
+
+fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
+    match &args.action {
+        TestAction::Init(init_args) => {
+            let request = twin_app::TestInitRequest {
+                path: init_args.path.clone(),
+                force: init_args.force,
+            };
+            match twin_app::init_file(&request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::test_report::render_init);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+        TestAction::Lint(file_args) => match twin_app::lint_file(&file_args.path) {
+            Ok(document) => {
+                emit(global.json, &document, output::test_report::render_lint);
+                0
+            }
+            Err(error) => {
+                eprintln!("Error: {error}");
+                1
+            }
+        },
+        TestAction::Run(file_args) => {
+            let paths = match twin_app::paths::resolve_command_paths(None) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            };
+            match twin_app::run_file(&paths.layout, &file_args.path) {
+                Ok(report) => {
+                    let failed = report.failed > 0;
+                    emit(global.json, &report, output::test_report::render_run);
+                    if failed {
+                        1
+                    } else {
+                        0
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
     }
 }
 

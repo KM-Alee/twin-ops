@@ -402,7 +402,7 @@ pub(crate) fn ebpf_drops_recorded(store: &Store) -> Result<bool, twin_store::Sto
     Ok(tcp_drop_count(store)? > 0)
 }
 
-fn tcp_drop_count(store: &Store) -> Result<u64, twin_store::StoreError> {
+pub(crate) fn tcp_drop_count(store: &Store) -> Result<u64, twin_store::StoreError> {
     let rows = store.list_observations_by_kind(&ObservationKind::EbpfDroppedEvents.to_string())?;
     let mut total = 0u64;
     for row in rows {
