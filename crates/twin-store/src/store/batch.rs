@@ -24,13 +24,9 @@ impl Store {
         let plan = match self.transaction() {
             Ok(guard) => {
                 let out = f(guard.store);
-                match out {
-                    Ok(value) => {
-                        guard.commit()?;
-                        TxPlan::Committed(value)
-                    }
-                    Err(err) => return Err(err),
-                }
+                let value = out?;
+                guard.commit()?;
+                TxPlan::Committed(value)
             }
             Err(StoreError::TransactionBegin { source })
                 if is_nested_transaction_begin(&source) =>
