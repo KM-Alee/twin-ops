@@ -19,7 +19,7 @@ impl CgroupUnitLookup {
             .filter(|u| !u.control_group.is_empty())
             .map(|u| (u.control_group, u.name))
             .collect();
-        by_prefix.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        by_prefix.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
         Ok(Self { by_prefix })
     }
 

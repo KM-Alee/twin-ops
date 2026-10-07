@@ -159,14 +159,18 @@ fn render_edges(
     }
     let (visible, truncated) = partition_by_limit(show.len(), options.verbose);
     for (i, edge) in show.iter().take(visible).enumerate() {
-        let is_last = i + 1 == visible
-            && truncated == 0
-            && declared_hidden == 0
-            && other_hidden == 0;
+        let is_last =
+            i + 1 == visible && truncated == 0 && declared_hidden == 0 && other_hidden == 0;
         out.tree_leaf(is_last, &edge.kind, &format_edge(edge));
     }
     render_more_line(out, truncated, options.verbose);
-    render_hidden_edge_line(out, declared_hidden, title, "declared depends_on", options.verbose);
+    render_hidden_edge_line(
+        out,
+        declared_hidden,
+        title,
+        "declared depends_on",
+        options.verbose,
+    );
     render_hidden_edge_line(out, other_hidden, title, "other", options.verbose);
 }
 
@@ -199,14 +203,18 @@ fn render_edge_deltas(
     };
     let (visible, truncated) = partition_by_limit(show.len(), options.verbose);
     for (i, edge) in show.iter().take(visible).enumerate() {
-        let is_last = i + 1 == visible
-            && truncated == 0
-            && hidden_declared == 0
-            && hidden_other == 0;
+        let is_last =
+            i + 1 == visible && truncated == 0 && hidden_declared == 0 && hidden_other == 0;
         out.tree_leaf(is_last, "edge", &format_edge_delta(edge));
     }
     render_more_line(out, truncated, options.verbose);
-    render_hidden_edge_line(out, hidden_declared, title, "declared depends_on", options.verbose);
+    render_hidden_edge_line(
+        out,
+        hidden_declared,
+        title,
+        "declared depends_on",
+        options.verbose,
+    );
     render_hidden_edge_line(out, hidden_other, title, "other", options.verbose);
 }
 
@@ -320,7 +328,11 @@ fn node_delta_kind_counts(nodes: &[WhatChangedNodeDelta]) -> String {
     kind_count_line(nodes.iter().map(|n| n.kind.as_str()))
 }
 
-fn edge_kind_counts(edges: &[WhatChangedEdge], declared_hidden: usize, other_hidden: usize) -> String {
+fn edge_kind_counts(
+    edges: &[WhatChangedEdge],
+    declared_hidden: usize,
+    other_hidden: usize,
+) -> String {
     let mut parts: Vec<String> = kind_count_parts(edges.iter().map(|e| e.kind.as_str()));
     if declared_hidden > 0 {
         parts.push(format!("depends_on edge ({declared_hidden} hidden)"));
@@ -364,11 +376,7 @@ fn render_more_line(out: &mut Lines, hidden: usize, verbose: bool) {
     if hidden == 0 || verbose {
         return;
     }
-    out.tree_leaf(
-        true,
-        "",
-        &format!("… and {hidden} more (use --json)"),
-    );
+    out.tree_leaf(true, "", &format!("… and {hidden} more (use --json)"));
 }
 
 fn render_hidden_edge_line(
@@ -384,8 +392,6 @@ fn render_hidden_edge_line(
     out.tree_leaf(
         true,
         "",
-        &format!(
-            "{hidden} {label} edges {section} (hidden — use --json for full list)"
-        ),
+        &format!("{hidden} {label} edges {section} (hidden — use --json for full list)"),
     );
 }
