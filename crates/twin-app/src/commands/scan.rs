@@ -211,6 +211,7 @@ fn persist_scan(
     let mut process_connects_to_unix_edge_count = 0usize;
     let mut service_connects_to_unix_edge_count = 0usize;
     let mut service_depends_on_unix_edge_count = 0usize;
+    let mut config_parse_warnings = Vec::new();
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
     let mut cgroup_correction_count = 0usize;
@@ -929,6 +930,13 @@ fn persist_scan(
                 &config_discoveries,
                 scan_time,
             )?;
+            config_parse_warnings.extend(super::scan_config_files::apply_nginx_proxies(
+                store,
+                &mut history,
+                &mut edge_cache,
+                &config_discoveries,
+                scan_time,
+            )?);
 
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
@@ -1055,7 +1063,17 @@ fn persist_scan(
             observation_count: total_observations,
             warning_count,
             warnings,
-            warning_details: detailed_warnings(process_warnings),
+            warning_details: {
+                let mut details = detailed_warnings(process_warnings);
+                for warning in &config_parse_warnings {
+                    details.push(ScanWarningDetail {
+                        kind: "config_parse".to_string(),
+                        path: warning.path.clone(),
+                        detail: warning.detail.clone(),
+                    });
+                }
+                details
+            },
             coverage,
         },
         edges_new,

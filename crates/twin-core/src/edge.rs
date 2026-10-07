@@ -15,6 +15,8 @@ pub enum EdgeKind {
     ConnectsTo,
     ConfiguredBy,
     DependsOn,
+    ProxiesTo,
+    References,
 }
 
 impl fmt::Display for EdgeKind {
@@ -27,6 +29,8 @@ impl fmt::Display for EdgeKind {
             Self::ConnectsTo => "connects_to",
             Self::ConfiguredBy => "configured_by",
             Self::DependsOn => "depends_on",
+            Self::ProxiesTo => "proxies_to",
+            Self::References => "references",
         })
     }
 }
@@ -43,6 +47,8 @@ impl FromStr for EdgeKind {
             "connects_to" => Ok(Self::ConnectsTo),
             "configured_by" => Ok(Self::ConfiguredBy),
             "depends_on" => Ok(Self::DependsOn),
+            "proxies_to" => Ok(Self::ProxiesTo),
+            "references" => Ok(Self::References),
             other => Err(ParseError::Enum {
                 kind: "EdgeKind",
                 value: other.to_string(),

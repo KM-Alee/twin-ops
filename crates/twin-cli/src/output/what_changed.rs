@@ -264,7 +264,13 @@ fn parse_edge_kind(id: &str) -> &str {
 fn is_high_signal_edge_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "listens_on" | "connects_to" | "owns" | "configured_by" | "depends_on"
+        "listens_on"
+            | "connects_to"
+            | "owns"
+            | "configured_by"
+            | "depends_on"
+            | "proxies_to"
+            | "references"
     )
 }
 

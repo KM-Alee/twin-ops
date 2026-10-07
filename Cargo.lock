@@ -1233,6 +1233,7 @@ dependencies = [
  "thiserror",
  "toml",
  "twin-collectors",
+ "twin-config",
  "twin-core",
  "twin-ebpf",
  "twin-emulate",
@@ -1269,6 +1270,10 @@ dependencies = [
  "twin-observation",
  "zbus",
 ]
+
+[[package]]
+name = "twin-config"
+version = "0.1.0"
 
 [[package]]
 name = "twin-core"

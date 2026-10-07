@@ -182,7 +182,15 @@ fn render_service(service: &GraphServiceResult, scan: Option<ScanFreshness>) -> 
         service
             .dependencies
             .iter()
-            .filter(|d| d.tag.as_deref() != Some("declared")),
+            .filter(|d| d.tag.as_deref() != Some("declared") && d.tag.as_deref() != Some("proxy")),
+    );
+    render_dependency_section(
+        &mut lines,
+        "proxies to",
+        service
+            .dependencies
+            .iter()
+            .filter(|d| d.tag.as_deref() == Some("proxy")),
     );
     render_dependency_section(
         &mut lines,
@@ -229,6 +237,7 @@ fn render_file(file: &GraphFileResult, scan: Option<ScanFreshness>) -> String {
     lines.push(format!("{}  {}", file.file.id, file.file.label));
     lines.push(String::new());
     render_dependency_section(&mut lines, "configures", file.configures.iter());
+    render_dependency_section(&mut lines, "references", file.references.iter());
     append_evidence_lines(&mut lines, &file.evidence);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }

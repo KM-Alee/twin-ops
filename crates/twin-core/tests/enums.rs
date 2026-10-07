@@ -32,6 +32,8 @@ fn all_variants_roundtrip() {
         EdgeKind::ConnectsTo,
         EdgeKind::ConfiguredBy,
         EdgeKind::DependsOn,
+        EdgeKind::ProxiesTo,
+        EdgeKind::References,
     ]);
     roundtrip(&[
         EdgeClass::Observed,

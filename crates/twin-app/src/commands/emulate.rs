@@ -184,11 +184,12 @@ fn delete_file_emulate(
         let service_evidence = load_configured_by_evidence(store, &edge)?;
         evidence.extend(service_evidence.iter().cloned());
         configured_services.push(EmulationConfiguredService {
-            id: service_id,
+            id: service_id.clone(),
             label: service_node.label().to_string(),
             file_id: target.clone(),
             evidence: service_evidence,
         });
+        evidence.extend(proxy_loss_evidence(store, &service_id)?);
     }
     configured_services.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
 
@@ -237,6 +238,29 @@ fn delete_file_emulate(
     let mut result = EmulationResult::from_domain(report, unknowns);
     result.show_evidence = show_evidence;
     Ok(result)
+}
+
+fn proxy_loss_evidence(
+    store: &Store,
+    service: &NodeId,
+) -> Result<Vec<EmulationEvidenceLine>, AppError> {
+    let mut lines = Vec::new();
+    for row in store
+        .list_active_edges_from(service.as_str())
+        .map_err(EmulateError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(EmulateError::Store)?;
+        if edge.kind() != EdgeKind::ProxiesTo {
+            continue;
+        }
+        lines.push(EmulationEvidenceLine {
+            source: "nginx".to_string(),
+            statement: format!("proxy_pass to {} would be lost with this config", edge.to()),
+            relationship: "proxies_to".to_string(),
+            strength_score: 45,
+        });
+    }
+    Ok(lines)
 }
 
 fn load_configured_by_evidence(

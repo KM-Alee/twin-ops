@@ -246,6 +246,36 @@ fn service_neighborhood(
             }
             continue;
         }
+        if edge.kind() == EdgeKind::ProxiesTo {
+            let peer = edge.to();
+            let peer_node = store
+                .get_node_typed(peer)
+                .map_err(GraphError::Store)?
+                .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
+            let obs_links = store
+                .list_observations_for_edge(edge.id().as_str())
+                .map_err(GraphError::Store)?;
+            let observation_ids: Vec<String> = obs_links.iter().map(|(id, _)| id.clone()).collect();
+            if let Some(statement) =
+                proxy_evidence_statement(store, &observation_ids, peer_node.label())
+            {
+                evidence.push(GraphEvidenceLine {
+                    source: "nginx".to_string(),
+                    statement,
+                    strength: "moderate".to_string(),
+                    relationship: "service proxies to listener inferred from proxy_pass"
+                        .to_string(),
+                });
+            }
+            dependencies.push(GraphOwnedNode {
+                id: peer.as_str().to_string(),
+                label: peer_node.label().to_string(),
+                edge_class: edge.class().to_string(),
+                tag: Some("proxy".to_string()),
+                observation_ids,
+            });
+            continue;
+        }
         if edge.kind() == EdgeKind::DependsOn {
             let peer = edge.to();
             let peer_node = store
@@ -428,6 +458,50 @@ fn service_neighborhood(
     }))
 }
 
+fn proxy_evidence_statement(
+    store: &Store,
+    observation_ids: &[String],
+    listener: &str,
+) -> Option<String> {
+    for obs_id in observation_ids {
+        let Ok(id) = twin_core::ObservationId::from_str(obs_id) else {
+            continue;
+        };
+        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+            continue;
+        };
+        if obs.kind() != twin_observation::ObservationKind::ConfigProxyPass {
+            continue;
+        }
+        let stored = obs.metadata().get("proxy_pass").and_then(|v| v.as_str())?;
+        // http(s) targets are connection-string redacted; scheme is stored beside the endpoint.
+        let proxy = if stored == "<redacted>" {
+            let endpoint = obs
+                .metadata()
+                .get("maybe_endpoint")
+                .and_then(|v| v.as_str())
+                .unwrap_or("upstream");
+            let scheme = obs
+                .metadata()
+                .get("proxy_scheme")
+                .and_then(|v| v.as_str())
+                .unwrap_or("http");
+            format!("{scheme}://{endpoint}")
+        } else {
+            stored.to_string()
+        };
+        let target = obs
+            .metadata()
+            .get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("listener");
+        return Some(format!(
+            "proxy_pass {proxy}; {listener} listens on {target}"
+        ));
+    }
+    None
+}
+
 fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
     let node = store
         .get_node_typed(target)
@@ -441,6 +515,7 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
 
     let summary = node_summary(node.id(), node.label());
     let mut configures = Vec::new();
+    let mut references = Vec::new();
     let mut evidence = Vec::new();
     let mut seen_evidence = HashSet::new();
 
@@ -470,10 +545,31 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
             observation_ids,
         });
     }
+    for row in store
+        .list_active_edges_from(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::References {
+            continue;
+        }
+        let peer = edge.to();
+        let Some(peer_node) = store.get_node_typed(peer).map_err(GraphError::Store)? else {
+            continue;
+        };
+        references.push(GraphOwnedNode {
+            id: peer.as_str().to_string(),
+            label: peer_node.label().to_string(),
+            edge_class: edge.class().to_string(),
+            tag: None,
+            observation_ids: Vec::new(),
+        });
+    }
     configures.sort_by_key(|n| n.id.clone());
+    references.sort_by_key(|n| n.id.clone());
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
-    Ok(GraphResult::file(summary, configures, evidence))
+    Ok(GraphResult::file(summary, configures, references, evidence))
 }
 
 fn is_socket_activation_edge(edge: &GraphEdge) -> bool {

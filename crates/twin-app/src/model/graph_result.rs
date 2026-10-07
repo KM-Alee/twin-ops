@@ -89,6 +89,8 @@ pub struct GraphServiceResult {
 pub struct GraphFileResult {
     pub file: GraphNodeSummary,
     pub configures: Vec<GraphOwnedNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,
 }
 
@@ -175,11 +177,13 @@ impl GraphResult {
     pub fn file(
         file: GraphNodeSummary,
         configures: Vec<GraphOwnedNode>,
+        references: Vec<GraphOwnedNode>,
         evidence: Vec<GraphEvidenceLine>,
     ) -> Self {
         Self::File(GraphFileResult {
             file,
             configures,
+            references,
             evidence,
         })
     }

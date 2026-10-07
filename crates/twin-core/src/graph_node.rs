@@ -86,6 +86,18 @@ impl GraphNode {
         }
     }
 
+    pub fn file_fingerprinted(
+        path: &str,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        fingerprint: &str,
+    ) -> Self {
+        let mut node = Self::file(path, seen_at, existing);
+        let metadata = serde_json::json!({ "content_hash": fingerprint }).to_string();
+        node.metadata = GraphMetadata::from_json(&metadata);
+        node
+    }
+
     pub fn cgroup(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::cgroup(path);
         let (first_seen, valid_from) = match existing {

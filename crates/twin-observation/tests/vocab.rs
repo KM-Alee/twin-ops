@@ -49,6 +49,7 @@ fn systemd_observation_kinds_round_trip() {
         ObservationKind::SystemdSocketActivates,
         ObservationKind::SystemdCgroupCorrection,
         ObservationKind::ConfigFileSeen,
+        ObservationKind::ConfigProxyPass,
         ObservationKind::ServiceConfiguredByFile,
         ObservationKind::EbpfExecObserved,
         ObservationKind::EbpfConnect,

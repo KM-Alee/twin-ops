@@ -366,6 +366,83 @@ fn graph_service_render_declared_dependency() {
 }
 
 #[test]
+fn graph_service_render_separates_proxy_from_runtime_depends() {
+    let result = GraphResult::service(GraphServiceResult {
+        service: GraphNodeSummary {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+        },
+        owned_processes: vec![],
+        owned_cgroups: vec![],
+        listening_ports: vec![],
+        listening_unix: vec![],
+        connected_ports: vec![],
+        connected_unix: vec![],
+        dependencies: vec![
+            GraphOwnedNode {
+                id: "service:django.service".to_string(),
+                label: "django.service".to_string(),
+                edge_class: "inferred".to_string(),
+                tag: Some("proxy".to_string()),
+                observation_ids: vec![],
+            },
+            GraphOwnedNode {
+                id: "service:systemd.service".to_string(),
+                label: "systemd.service".to_string(),
+                edge_class: "inferred".to_string(),
+                tag: Some("runtime".to_string()),
+                observation_ids: vec![],
+            },
+        ],
+        dependents: vec![],
+        socket_activation: vec![],
+        configured_dependents: vec![],
+        configured_files: vec![],
+        evidence: vec![GraphEvidenceLine {
+            source: "nginx".to_string(),
+            statement: "proxy_pass http://127.0.0.1:8000; django.service listens on port:tcp:127.0.0.1:8000".to_string(),
+            strength: "moderate".to_string(),
+            relationship: "service proxies to listener inferred from proxy_pass".to_string(),
+        }],
+        runtime_dependencies: vec![],
+    });
+    let text = output::graph::render(&result);
+    assert!(text.contains("proxies to"));
+    assert!(text.contains("service:django.service"));
+    assert!(text.contains("depends on (runtime inferred)"));
+    assert!(text.contains("proxy_pass http://127.0.0.1:8000"));
+    let proxy_at = text.find("proxies to").expect("proxies section");
+    let runtime_at = text
+        .find("depends on (runtime inferred)")
+        .expect("runtime section");
+    assert!(runtime_at < proxy_at);
+    let django_at = text.find("service:django.service").expect("django");
+    assert!(django_at > proxy_at);
+}
+
+#[test]
+fn graph_file_render_lists_references() {
+    let result = GraphResult::file(
+        GraphNodeSummary {
+            id: "file:/etc/nginx/nginx.conf".to_string(),
+            label: "/etc/nginx/nginx.conf".to_string(),
+        },
+        vec![],
+        vec![GraphOwnedNode {
+            id: "port:tcp:127.0.0.1:8000".to_string(),
+            label: "tcp:127.0.0.1:8000".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+        vec![],
+    );
+    let text = output::graph::render(&result);
+    assert!(text.contains("references"));
+    assert!(text.contains("port:tcp:127.0.0.1:8000"));
+}
+
+#[test]
 fn graph_service_render_inferred_ownership() {
     let result = GraphResult::service(GraphServiceResult {
         service: GraphNodeSummary {

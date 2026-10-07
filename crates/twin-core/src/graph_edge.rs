@@ -156,6 +156,66 @@ impl GraphEdge {
         }
     }
 
+    pub fn inferred_service_proxies_to(
+        source: &NodeId,
+        target: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        proxy_pass: &str,
+    ) -> Self {
+        let kind = EdgeKind::ProxiesTo;
+        let id = EdgeId::new(source, kind, target);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({
+            "inference": "nginx_proxy_pass",
+            "proxy_pass": proxy_pass,
+        })
+        .to_string();
+        Self {
+            id,
+            from: source.clone(),
+            to: target.clone(),
+            kind,
+            class: EdgeClass::Inferred,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
+    pub fn observed_file_references(
+        file: &NodeId,
+        target: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        proxy_pass: &str,
+    ) -> Self {
+        let kind = EdgeKind::References;
+        let id = EdgeId::new(file, kind, target);
+        let (first_seen, evidence_count) = match existing {
+            Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+            None => (seen_at, 1),
+        };
+        let metadata = serde_json::json!({ "proxy_pass": proxy_pass }).to_string();
+        Self {
+            id,
+            from: file.clone(),
+            to: target.clone(),
+            kind,
+            class: EdgeClass::Observed,
+            state: EdgeState::Active,
+            evidence_count,
+            first_seen,
+            last_seen: seen_at,
+            metadata: GraphMetadata::from_json(&metadata),
+        }
+    }
+
     pub fn observed_parent(
         parent: &NodeId,
         child: &NodeId,
