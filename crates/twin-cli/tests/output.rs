@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use twin_app::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
+    CollectorTiming, DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact,
     EmulationImpactPathView, EmulationOverlayNode, EmulationResult, GraphEvidenceLine,
     GraphListResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphResult,
     GraphServiceResult, ImpactDependent, ImpactEvidenceLine, ImpactResult, ImpactUnknown,
     InitResult, PermissionMode, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
+    WatchResult, WatchStop, WatchTick,
 };
 use twin_cli::output;
 use twin_core::NodeKind;
@@ -1146,9 +1147,7 @@ fn what_changed_renders_readable_edges() {
         &result,
         output::what_changed::WhatChangedRenderOptions::concise(),
     );
-    assert!(text.contains(
-        "service:nginx.service → listens_on → port:tcp:0.0.0.0:80"
-    ));
+    assert!(text.contains("service:nginx.service → listens_on → port:tcp:0.0.0.0:80"));
     assert!(text.contains("(edges: 1 new)"));
 }
 
@@ -1230,7 +1229,10 @@ fn what_changed_truncates_large_sections() {
         output::what_changed::WhatChangedRenderOptions::concise(),
     );
     let line_count = text.lines().count();
-    assert!(line_count < 80, "expected concise output, got {line_count} lines");
+    assert!(
+        line_count < 80,
+        "expected concise output, got {line_count} lines"
+    );
     assert!(text.contains("… and 7 more (use --json)"));
     assert!(text.contains("25 reappeared"));
 }
@@ -1272,6 +1274,116 @@ fn what_changed_verbose_shows_hidden_edges() {
     );
     assert!(verbose.contains("foo.service → depends_on → service:bar.mount"));
     assert!(!verbose.contains("hidden"));
+}
+
+#[test]
+fn watch_header_names_interval_and_stop_plan() {
+    let text = output::watch::render_header("5s", Some("10m"), None);
+    assert!(text.contains("twin watch"));
+    assert!(text.contains("every 5s"));
+    assert!(text.contains("after 10m"));
+    assert!(text.contains('═'));
+}
+
+#[test]
+fn watch_tick_line_names_process_connection_and_port_deltas() {
+    let text = output::watch::render_tick(&sample_watch_tick());
+    assert!(text.contains("["));
+    assert!(text.contains("+2 processes"));
+    assert!(text.contains("-1 process"));
+    assert!(text.contains("+1 connection"));
+    assert!(text.contains("+1 listening port"));
+    assert!(text.contains("scan"));
+}
+
+#[test]
+fn watch_tick_line_says_when_nothing_significant_changed() {
+    let tick = WatchTick {
+        processes_added: 0,
+        processes_removed: 0,
+        connections_added: 0,
+        connections_removed: 0,
+        listening_ports_added: 0,
+        listening_ports_removed: 0,
+        services_added: 0,
+        services_removed: 0,
+        processes_stale: 0,
+        listening_ports_stale: 0,
+        services_stale: 0,
+        event_count: 0,
+        ..sample_watch_tick()
+    };
+    let text = output::watch::render_tick(&tick);
+    assert!(text.contains("no significant changes"));
+}
+
+#[test]
+fn watch_summary_reports_stop_reason_events_and_collector_timing() {
+    let text = output::watch::render_summary(&sample_watch_result());
+    assert!(text.contains("stopped"));
+    assert!(text.contains("tick limit"));
+    assert!(text.contains("2 scans"));
+    assert!(text.contains("4 events"));
+    assert!(text.contains("collectors"));
+    assert!(text.contains("proc_process"));
+}
+
+#[test]
+fn watch_json_lines_are_tick_and_summary_records() {
+    let tick: serde_json::Value =
+        serde_json::from_str(&output::watch::render_tick_json(&sample_watch_tick())).expect("tick");
+    assert_eq!(tick["record"], "tick");
+    assert_eq!(tick["processes_added"], 2);
+    assert_eq!(tick["connections_added"], 1);
+    let summary: serde_json::Value =
+        serde_json::from_str(&output::watch::render_summary_json(&sample_watch_result()))
+            .expect("summary");
+    assert_eq!(summary["record"], "summary");
+    assert_eq!(summary["stop"], "max_ticks");
+    assert_eq!(summary["ticks"], 2);
+}
+
+fn sample_watch_tick() -> WatchTick {
+    WatchTick {
+        index: 1,
+        at_ns: 1_700_000_000_000_000_000,
+        scan_started_at_ns: 1_700_000_000_000_000_000,
+        scan_ended_at_ns: 1_700_000_000_040_000_000,
+        processes_added: 2,
+        processes_removed: 1,
+        connections_added: 1,
+        connections_removed: 0,
+        listening_ports_added: 1,
+        listening_ports_removed: 0,
+        services_added: 0,
+        services_removed: 0,
+        processes_stale: 0,
+        listening_ports_stale: 0,
+        services_stale: 0,
+        event_count: 4,
+        collector_timings: vec![CollectorTiming {
+            collector: "proc_process".to_string(),
+            total_duration_ns: 12_000_000,
+            runs: 1,
+        }],
+    }
+}
+
+fn sample_watch_result() -> WatchResult {
+    WatchResult {
+        interval_secs: 5,
+        duration_secs: None,
+        ticks: 2,
+        event_count: 4,
+        stop: WatchStop::MaxTicks,
+        started_at_ns: 1_700_000_000_000_000_000,
+        ended_at_ns: 1_700_000_005_000_000_000,
+        collector_timings: vec![CollectorTiming {
+            collector: "proc_process".to_string(),
+            total_duration_ns: 24_000_000,
+            runs: 2,
+        }],
+    }
 }
 
 #[test]

@@ -234,6 +234,10 @@ fn collector_run_insert_list_and_latest() {
         .expect("latest")
         .expect("row");
     assert_eq!(latest.started_at_ns, TS + 10);
+    let since = store.list_collector_runs_since(TS + 10).expect("since");
+    assert_eq!(since.len(), 1);
+    assert_eq!(since[0].collector, "proc");
+    assert_eq!(since[0].started_at_ns, TS + 10);
 }
 
 #[test]

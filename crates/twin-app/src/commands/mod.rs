@@ -20,4 +20,5 @@ mod scan_systemd_runtime;
 mod scan_systemd_socket;
 mod service_dependents;
 pub mod snapshot;
+pub mod watch;
 pub mod what_changed;

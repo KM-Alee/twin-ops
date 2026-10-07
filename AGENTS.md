@@ -69,8 +69,8 @@ Follow `docs/code-layout.md`: command code under `twin-app/src/commands/`, resul
 
 ### Async
 
-- Async only where needed: watch mode, eBPF event streams, Docker API calls, K8s API calls.
-- `scan`, `graph`, `impact`, `emulate`, `test run` = sync. No tokio needed at call site.
+- Async only where needed: eBPF event streams, Docker API calls, K8s API calls. Polling `twin watch` stays sync.
+- `scan`, `graph`, `impact`, `emulate`, `twin watch`, `test run` = sync. No tokio needed at the call site. `twin watch` loops with `thread::sleep` and an `AtomicBool` stop flag. Install `ctrlc` only in `twin-cli`. eBPF watch is the later async case.
 - Collectors: sync unless they call async external APIs. If async, expose both sync wrapper and async fn.
 - Never make entire crate async just because one function needs it.
 

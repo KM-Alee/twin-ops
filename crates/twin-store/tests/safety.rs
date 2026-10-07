@@ -16,7 +16,9 @@ const SCAN_ROOTS: &[&str] = &[
     "../twin-app/src/commands/what_changed.rs",
     "../twin-app/src/commands/snapshot.rs",
     "../twin-app/src/commands/diff.rs",
+    "../twin-app/src/commands/watch.rs",
     "../twin-cli/src/main.rs",
+    "../twin-cli/src/output/watch.rs",
 ];
 
 fn scan_file(path: &Path, hits: &mut Vec<String>) {

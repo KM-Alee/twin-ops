@@ -96,6 +96,19 @@ twin scan --samples 5 --interval 2   # merge short-lived connections across samp
 
 Collectors cover processes, file descriptors, listening sockets, systemd units, and config file discovery. Missing permissions produce coverage gaps — the scan continues and reports what was hidden.
 
+### `twin watch`
+
+Rescan on an interval and print operational changes. The host is not modified.
+
+```bash
+twin watch
+twin watch --interval 5s
+twin watch --duration 10m
+twin watch --ticks 3
+```
+
+Stops on Ctrl+C, when `--duration` elapses, or after `--ticks` scans.
+
 ### `twin graph`
 
 Inspect the dependency graph.
@@ -183,12 +196,13 @@ Development follows [23 vertical slices](docs/plan-slices.md). Each slice ships 
 | Graph | process/service/file neighborhoods |
 | Impact | service and port blast radius |
 | Emulate | `restart`, `delete` with overlay impact |
+| Temporal | `what-changed`, `snapshot`, `diff` |
+| Watch | polling `twin watch` (interval, duration, Ctrl+C) |
 
 **Planned** (see [PRD](docs/prd.md))
 
 ```bash
 twin watch --ebpf
-twin what-changed --since 1h
 twin why nginx
 twin emulate block endpoint api.stripe.com:443
 twin test run twin.yaml

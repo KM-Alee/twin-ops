@@ -4,18 +4,21 @@ mod error;
 mod model;
 pub mod paths;
 
-pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError};
+pub use error::{
+    AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, WatchError,
+};
 pub use model::{
-    DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore, DoctorDatabase,
-    DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
+    CollectorTiming, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore,
+    DoctorDatabase, DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
     EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
     GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult, GraphNodeResult,
     GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult,
     GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
     ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
     PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
-    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WhatChangedEdge,
-    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
+    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WatchResult,
+    WatchStop, WatchTick, WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode,
+    WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -25,6 +28,7 @@ pub const DEFAULT_MAX_DEPTH: usize = 4;
 pub const MAX_DEPTH_LIMIT: usize = 8;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use twin_core::{NodeId, NodeKind};
 
@@ -277,4 +281,41 @@ pub fn diff(request: DiffRequest) -> Result<DiffResult, AppError> {
 
 pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, AppError> {
     commands::diff::run(layout, &request)
+}
+
+#[derive(Debug, Clone)]
+pub struct WatchRequest {
+    pub config_override: Option<PathBuf>,
+    pub interval: String,
+    pub duration: Option<String>,
+    pub max_ticks: Option<u32>,
+}
+
+impl Default for WatchRequest {
+    fn default() -> Self {
+        Self {
+            config_override: None,
+            interval: "5s".to_string(),
+            duration: None,
+            max_ticks: None,
+        }
+    }
+}
+
+pub fn watch(
+    request: WatchRequest,
+    stop: &AtomicBool,
+    on_tick: impl FnMut(&WatchTick),
+) -> Result<WatchResult, AppError> {
+    commands::watch::run_home(request, Path::new("/proc"), stop, on_tick)
+}
+
+pub fn watch_in(
+    layout: &TwinLayout,
+    request: WatchRequest,
+    proc_root: &Path,
+    stop: &AtomicBool,
+    on_tick: impl FnMut(&WatchTick),
+) -> Result<WatchResult, AppError> {
+    commands::watch::run(layout, &request, proc_root, stop, on_tick)
 }

@@ -20,6 +20,8 @@ pub enum AppError {
     Emulate(#[from] EmulateError),
     #[error("temporal command failed: {0}")]
     Temporal(#[from] TemporalError),
+    #[error("watch failed: {0}")]
+    Watch(#[from] WatchError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -186,4 +188,22 @@ pub enum TemporalError {
         #[source]
         source: ParseError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WatchError {
+    #[error("path resolution failed: {0}")]
+    Paths(#[from] PathError),
+    #[error("database is not initialized; run `twin init` first")]
+    DatabaseNotInitialized,
+    #[error("cannot open database: {0}")]
+    StoreOpen(#[from] StoreOpenError),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("invalid interval `{value}`: {reason}")]
+    InvalidInterval { value: String, reason: String },
+    #[error("invalid duration `{value}`: {reason}")]
+    InvalidDuration { value: String, reason: String },
+    #[error("invalid tick count {value}: {reason}")]
+    InvalidTickCount { value: u32, reason: String },
 }
