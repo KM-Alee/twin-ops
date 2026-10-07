@@ -48,6 +48,9 @@ pub fn render_run(report: &TestRunReport) -> String {
         if let Some(detail) = &check.detail {
             out.tree_leaf(false, "detail", detail);
         }
+        if let Some(evidence) = &check.evidence {
+            out.tree_leaf(false, "evidence", evidence);
+        }
     }
     out.blank();
     out.section("summary");
@@ -72,5 +75,9 @@ fn check_label(check: &twin_app::TestCheck) -> &'static str {
         CheckKind::Port(_) => "port",
         CheckKind::Service(_) => "service",
         CheckKind::Dependency { .. } => "dependency",
+        CheckKind::Emulate { .. } => "emulate",
+        CheckKind::Outbound { .. } => "endpoints",
+        CheckKind::Disk { .. } => "disk",
+        CheckKind::Unknowns { .. } => "unknowns",
     }
 }

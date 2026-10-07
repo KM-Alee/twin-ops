@@ -18,6 +18,7 @@ twin-emulate = { workspace = true }
 twin-ebpf = { workspace = true }
 twin-test = { workspace = true }
 uuid = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -82,5 +82,73 @@ fn init_writes_a_file_that_lints() {
     })
     .expect("init");
     let document = lint_file(&path).expect("lint");
-    assert_eq!(document.checks.len(), 4);
+    assert_eq!(document.checks.len(), 8);
+}
+
+#[test]
+fn run_calls_emulation_and_fails_unknown_endpoints_with_evidence() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    let seen = TimestampNs::new(1);
+    let process = NodeId::process(4421);
+    let port = NodeId::port_tcp("10.0.0.8", 443).expect("port");
+    store
+        .upsert_node_typed(&GraphNode::service("django.service", seen, None))
+        .expect("service");
+    store
+        .upsert_node_typed(&GraphNode::process(4421, "django", seen, None))
+        .expect("process");
+    store
+        .upsert_node_typed(&GraphNode::tcp_port("10.0.0.8", 443, seen, None).expect("port node"))
+        .expect("port");
+    store
+        .upsert_edge_typed(&GraphEdge::observed_process_connects_to(
+            &process, &port, seen, None,
+        ))
+        .expect("connect");
+    drop(store);
+
+    let path = home
+        .layout
+        .db_file()
+        .parent()
+        .expect("parent")
+        .join("ops.yaml");
+    let yaml = r#"
+version: 1
+name: local-readiness
+checks:
+  - name: django restart risk acceptable
+    emulate:
+      action: restart
+      target: service:django.service
+    expect:
+      max_risk: critical
+      require_evidence: false
+  - name: no unexpected outbound endpoints
+    assert:
+      outbound_endpoints:
+        allowed:
+          - 127.0.0.1:5432
+        fail_on_unknown: true
+"#;
+    std::fs::write(&path, yaml).expect("yaml");
+    let report = run_file(&home.layout, &path).expect("run");
+    assert!(report.checks[0]
+        .detail
+        .as_deref()
+        .unwrap_or("")
+        .contains("Risk:"));
+    assert_eq!(report.checks[1].status, CheckStatus::Fail);
+    assert!(report.checks[1]
+        .detail
+        .as_deref()
+        .unwrap_or("")
+        .contains("10.0.0.8:443"));
+    assert!(report.checks[1]
+        .evidence
+        .as_deref()
+        .unwrap_or("")
+        .contains("socket table observed"));
 }

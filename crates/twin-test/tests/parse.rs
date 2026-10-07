@@ -6,11 +6,15 @@ use twin_test::{parse_str, write_starter, CheckKind, STARTER_YAML};
 fn starter_parses_and_names_every_check_kind() {
     let doc = parse_str(STARTER_YAML, Path::new("twin.yaml")).expect("starter");
     assert_eq!(doc.name, "local-readiness");
-    assert_eq!(doc.checks.len(), 4);
+    assert_eq!(doc.checks.len(), 8);
     assert!(matches!(doc.checks[0].kind, CheckKind::Node(_)));
     assert!(matches!(doc.checks[1].kind, CheckKind::Port(_)));
     assert!(matches!(doc.checks[2].kind, CheckKind::Service(_)));
     assert!(matches!(doc.checks[3].kind, CheckKind::Dependency { .. }));
+    assert!(matches!(doc.checks[4].kind, CheckKind::Emulate { .. }));
+    assert!(matches!(doc.checks[5].kind, CheckKind::Outbound { .. }));
+    assert!(matches!(doc.checks[6].kind, CheckKind::Disk { .. }));
+    assert!(matches!(doc.checks[7].kind, CheckKind::Unknowns { .. }));
 }
 
 #[test]

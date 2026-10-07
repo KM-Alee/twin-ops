@@ -27,4 +27,31 @@ checks:
         from: service:django.service
         to: service:postgresql.service
       min_evidence: moderate
+
+  - name: postgres restart risk acceptable
+    emulate:
+      action: restart
+      target: service:postgresql.service
+    expect:
+      max_risk: high
+      require_evidence: true
+
+  - name: no unexpected outbound endpoints
+    assert:
+      outbound_endpoints:
+        allowed:
+          - 127.0.0.1:5432
+        fail_on_unknown: true
+
+  - name: root disk under limit
+    assert:
+      disk:
+        mount: /
+        max_used_percent: 95
+
+  - name: unmapped sockets stay visible
+    assert:
+      unknowns:
+        forbid:
+          - unmapped_sockets
 "#;

@@ -3,10 +3,11 @@ mod error;
 mod evaluate;
 mod starter;
 
-pub use document::{parse_file, parse_str, CheckKind, TestCheck, TestDocument};
+pub use document::{parse_file, parse_str, CheckKind, EmulateAction, TestCheck, TestDocument};
 pub use error::TestError;
 pub use evaluate::{
-    evaluate, CheckResult, CheckStatus, EdgeFact, GraphFacts, NodeFact, TestRunReport,
+    evaluate, CheckResult, CheckStatus, DiskFact, EdgeFact, EmulationFact, EndpointFact,
+    GraphFacts, NodeFact, TestRunReport, UnknownFact,
 };
 pub use starter::STARTER_YAML;
 

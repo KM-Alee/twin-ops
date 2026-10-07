@@ -10,19 +10,19 @@ fn test_run_output_has_pass_warn_fail_and_json() {
                 name: "postgres is listening".to_string(),
                 status: CheckStatus::Pass,
                 detail: None,
+                evidence: None,
             },
             CheckResult {
                 name: "stale listener".to_string(),
                 status: CheckStatus::Warn,
                 detail: Some("port:tcp:127.0.0.1:5432 is stale".to_string()),
+                evidence: None,
             },
             CheckResult {
                 name: "django depends on postgres".to_string(),
                 status: CheckStatus::Fail,
-                detail: Some(
-                    "service:django.service depends_on service:postgresql.service evidence is weak, minimum is moderate"
-                        .to_string(),
-                ),
+                detail: Some("Unexpected endpoint: telemetry.example.com:443".to_string()),
+                evidence: Some("eBPF observed service:api.service connecting 42 times".to_string()),
             },
         ],
         passed: 1,
@@ -40,5 +40,6 @@ fn test_run_output_has_pass_warn_fail_and_json() {
     assert!(text.contains("failed"));
     let json = output::json::render(&report).expect("json");
     assert!(json.contains("\"failed\": 1"));
-    assert!(json.contains("minimum is moderate"));
+    assert!(json.contains("telemetry.example.com:443"));
+    assert!(text.contains("eBPF observed service:api.service connecting 42 times"));
 }
