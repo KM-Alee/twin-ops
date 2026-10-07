@@ -163,5 +163,24 @@ pub fn render(result: &DoctorResult) -> String {
         out.tree_leaf(true, "scan quality", &format!("unavailable ({err})"));
     }
 
+    if let Some(ebpf) = &result.ebpf {
+        out.blank();
+        out.section("eBPF");
+        let rows = [
+            ("kernel", &ebpf.kernel),
+            ("BTF", &ebpf.btf),
+            ("capabilities", &ebpf.capabilities),
+            ("exec tracing", &ebpf.exec_tracing),
+        ];
+        for (index, (label, check)) in rows.iter().enumerate() {
+            let status = if check.ok { Status::Ok } else { Status::Warn };
+            let value = match &check.detail {
+                Some(detail) => format!("{}  {} ({detail})", status_tag(status), check.status),
+                None => format!("{}  {}", status_tag(status), check.status),
+            };
+            out.tree_leaf(index + 1 == rows.len(), label, &value);
+        }
+    }
+
     out.into_string()
 }

@@ -8,6 +8,7 @@ fn reports_uninitialized_before_init() {
     let home = support::IsolatedHome::new();
     let result = doctor_in(&home.layout, None).expect("doctor");
     assert!(!result.database.initialized);
+    assert!(result.ebpf.is_none());
 }
 
 #[test]

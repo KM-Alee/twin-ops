@@ -4,18 +4,21 @@ mod error;
 mod model;
 pub mod paths;
 
-pub use error::{AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError};
+pub use error::{
+    AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, WatchError,
+};
 pub use model::{
     DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore, DoctorDatabase,
-    DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
-    EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
-    GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult, GraphNodeResult,
-    GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult,
-    GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
+    DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult, EmulationImpact,
+    EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
+    EvidenceStrengthView, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult,
+    GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
     ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
     PermissionMode, RiskAssessment, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
-    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WhatChangedEdge,
-    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
+    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WatchExecEvent,
+    WatchResult, WatchTick, WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode,
+    WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -51,6 +54,18 @@ pub fn doctor_in(
     config_override: Option<&std::path::Path>,
 ) -> Result<DoctorResult, AppError> {
     commands::doctor::run(layout, config_override)
+}
+
+pub fn doctor_ebpf(config_override: Option<&std::path::Path>) -> Result<DoctorResult, AppError> {
+    commands::doctor::run_ebpf_home(config_override)
+}
+
+pub fn doctor_ebpf_in(
+    layout: &TwinLayout,
+    config_override: Option<&std::path::Path>,
+    facts: Option<twin_ebpf::EbpfFacts>,
+) -> Result<DoctorResult, AppError> {
+    commands::doctor::run_ebpf(layout, config_override, facts)
 }
 
 pub fn read_config(
@@ -277,4 +292,31 @@ pub fn diff(request: DiffRequest) -> Result<DiffResult, AppError> {
 
 pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, AppError> {
     commands::diff::run(layout, &request)
+}
+
+pub use commands::watch::{WatchCommand, WatchEbpf, WatchRun, WatchSink};
+
+pub fn parse_watch(command: &WatchCommand) -> Result<WatchRun, AppError> {
+    commands::watch::prepare(command)
+}
+
+pub fn watch<S: WatchSink>(
+    command: WatchCommand,
+    proc_root: &Path,
+    stop: &std::sync::atomic::AtomicBool,
+    sink: &mut S,
+) -> Result<WatchResult, AppError> {
+    let paths = paths::resolve_command_paths(command.config_override.as_deref())?;
+    let run = commands::watch::prepare(&command)?;
+    commands::watch::run(&paths.layout, run, proc_root, stop, sink)
+}
+
+pub fn watch_in<S: WatchSink>(
+    layout: &TwinLayout,
+    run: WatchRun,
+    proc_root: &Path,
+    stop: &std::sync::atomic::AtomicBool,
+    sink: &mut S,
+) -> Result<WatchResult, AppError> {
+    commands::watch::run(layout, run, proc_root, stop, sink)
 }

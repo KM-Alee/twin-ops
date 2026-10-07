@@ -71,6 +71,7 @@ fn doctor_after_init_reports_ready() {
     let text = stdout_utf8(&out);
     assert!(text.contains("ready to scan"));
     assert!(text.contains("initialized"));
+    assert!(!text.contains("exec tracing"));
 }
 
 #[test]
@@ -280,6 +281,7 @@ fn doctor_json_after_init() {
     let value: serde_json::Value =
         serde_json::from_str(stdout_utf8(&out).trim()).expect("doctor json");
     assert_eq!(value["database"]["initialized"], true);
+    assert!(value.get("ebpf").is_none());
 }
 
 #[test]

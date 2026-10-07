@@ -1,11 +1,16 @@
 use std::path::Path;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use clap::Parser;
-use twin_app::{AppError, GraphError, InitRequest, ScanRequest};
+use twin_app::{
+    AppError, GraphError, InitRequest, ScanRequest, WatchCommand, WatchExecEvent, WatchSink,
+    WatchTick,
+};
 use twin_cli::cli::args::{
     Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
-    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WhatChangedArgs,
+    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
@@ -32,6 +37,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::WhatChanged(args) => run_what_changed(&cli.global, &args),
         Command::Snapshot(args) => run_snapshot(&cli.global, &args),
         Command::Diff(args) => run_diff(&cli.global, &args),
+        Command::Watch(args) => run_watch(&cli.global, &args),
     }
 }
 
@@ -68,7 +74,12 @@ fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
 }
 
 fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
-    match twin_app::doctor(args.config.as_deref()) {
+    let result = if args.ebpf {
+        twin_app::doctor_ebpf(args.config.as_deref())
+    } else {
+        twin_app::doctor(args.config.as_deref())
+    };
+    match result {
         Ok(result) => {
             emit(global.json, &result, output::doctor::render);
             0
@@ -77,6 +88,79 @@ fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
             eprintln!("Error: {error}");
             1
         }
+    }
+}
+
+fn run_watch(global: &GlobalArgs, args: &WatchArgs) -> i32 {
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stop);
+    if let Err(error) = ctrlc::set_handler(move || {
+        flag.store(true, Ordering::SeqCst);
+    }) {
+        eprintln!("Error: {error}");
+        return 1;
+    }
+    let command = WatchCommand {
+        config_override: args.config.clone(),
+        interval: args.interval.clone(),
+        duration: args.duration.clone(),
+        ticks: args.ticks,
+        ebpf: args.ebpf,
+        events: args.events.clone(),
+    };
+    let proc_root = std::env::var_os("TWIN_PROC_ROOT")
+        .map(|root| Path::new(&root).to_path_buf())
+        .unwrap_or_else(|| Path::new("/proc").to_path_buf());
+    let mut sink = WatchPrinter { json: global.json };
+    match twin_app::watch(command, &proc_root, &stop, &mut sink) {
+        Ok(result) => {
+            if global.json {
+                println!(
+                    "{}",
+                    output::json::render(&result)
+                        .unwrap_or_else(|err| format!("{{\"error\": \"{err}\"}}"))
+                );
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+struct WatchPrinter {
+    json: bool,
+}
+
+impl WatchSink for WatchPrinter {
+    fn on_start(&mut self, interval_secs: u64) {
+        if self.json {
+            return;
+        }
+        println!("{}", output::watch::render_banner(interval_secs));
+    }
+
+    fn on_tick(&mut self, tick: &WatchTick) {
+        if self.json {
+            return;
+        }
+        println!("{}", output::watch::render_tick(tick));
+    }
+
+    fn on_exec(&mut self, event: &WatchExecEvent) {
+        if self.json {
+            return;
+        }
+        println!("{}", output::watch::render_exec(event));
+    }
+
+    fn on_warning(&mut self, message: &str) {
+        if self.json {
+            return;
+        }
+        println!("{}", output::watch::render_warning(message));
     }
 }
 
@@ -191,8 +275,7 @@ fn run_what_changed(global: &GlobalArgs, args: &WhatChangedArgs) -> i32 {
     match twin_app::what_changed(request) {
         Ok(result) => {
             let rendered = if global.json {
-                output::json::render(&result)
-                    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+                output::json::render(&result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
             } else {
                 output::what_changed::render(
                     &result,

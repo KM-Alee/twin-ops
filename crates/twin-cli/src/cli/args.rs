@@ -29,6 +29,7 @@ pub enum Command {
     WhatChanged(WhatChangedArgs),
     Snapshot(SnapshotArgs),
     Diff(DiffArgs),
+    Watch(WatchArgs),
 }
 
 #[derive(Args)]
@@ -44,6 +45,9 @@ pub struct InitArgs {
 pub struct DoctorArgs {
     #[arg(long, help = "Config file path")]
     pub config: Option<PathBuf>,
+
+    #[arg(long, help = "Check kernel, BTF, capabilities, and exec tracing")]
+    pub ebpf: bool,
 }
 
 #[derive(Args)]
@@ -175,6 +179,27 @@ pub struct DiffArgs {
 
     #[arg(help = "Right graph ref (`current` or `snapshot:NAME`)")]
     pub right: String,
+}
+
+#[derive(Args)]
+pub struct WatchArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(long, default_value = "5s", help = "Scan interval, for example 5s")]
+    pub interval: String,
+
+    #[arg(long, help = "Stop after this duration, for example 10m")]
+    pub duration: Option<String>,
+
+    #[arg(long, help = "Stop after this many scans")]
+    pub ticks: Option<u32>,
+
+    #[arg(long, help = "Observe exec events with eBPF when the kernel allows it")]
+    pub ebpf: bool,
+
+    #[arg(long, help = "eBPF event stream to print (exec)")]
+    pub events: Option<String>,
 }
 
 #[derive(Args)]

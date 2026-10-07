@@ -11,6 +11,24 @@ pub struct DoctorResult {
     pub permissions: DoctorPermissions,
     pub scan_quality: Option<ScanQualityAssessment>,
     pub scan_quality_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ebpf: Option<DoctorEbpf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorEbpf {
+    pub kernel: DoctorEbpfCheck,
+    pub btf: DoctorEbpfCheck,
+    pub capabilities: DoctorEbpfCheck,
+    pub exec_tracing: DoctorEbpfCheck,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorEbpfCheck {
+    pub ok: bool,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

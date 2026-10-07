@@ -20,6 +20,8 @@ pub enum AppError {
     Emulate(#[from] EmulateError),
     #[error("temporal command failed: {0}")]
     Temporal(#[from] TemporalError),
+    #[error("watch failed: {0}")]
+    Watch(#[from] WatchError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -186,4 +188,18 @@ pub enum TemporalError {
         #[source]
         source: ParseError,
     },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WatchError {
+    #[error("invalid interval `{value}`: {reason}")]
+    InvalidInterval { value: String, reason: String },
+    #[error("invalid duration `{value}`: {reason}")]
+    InvalidDuration { value: String, reason: String },
+    #[error("invalid tick count {value}: {reason}")]
+    InvalidTicks { value: u32, reason: String },
+    #[error("unsupported watch event `{name}`; only `exec` is supported")]
+    UnsupportedEvent { name: String },
+    #[error("watch event `{name}` requires --ebpf")]
+    EventsRequireEbpf { name: String },
 }

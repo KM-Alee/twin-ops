@@ -7,11 +7,13 @@ mod init_result;
 mod scan_quality;
 mod scan_result;
 mod snapshot_result;
+mod watch_result;
 mod what_changed_result;
 
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
-    DoctorCore, DoctorDatabase, DoctorPermissions, DoctorResult, PermissionMode,
+    DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult,
+    PermissionMode,
 };
 pub use emulation_result::{
     EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary,
@@ -30,6 +32,7 @@ pub use init_result::InitResult;
 pub use scan_quality::{ScanQuality, ScanQualityAssessment};
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};
 pub use snapshot_result::{SnapshotCreateResult, SnapshotEntry, SnapshotListResult};
+pub use watch_result::{WatchExecEvent, WatchResult, WatchTick};
 pub use what_changed_result::{
     WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };

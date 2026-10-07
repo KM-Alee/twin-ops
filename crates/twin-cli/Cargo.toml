@@ -19,9 +19,11 @@ serde_json = { workspace = true }
 twin-app = { workspace = true }
 twin-collectors = { workspace = true }
 twin-core = { workspace = true }
+ctrlc = "3.4"
 
 [dev-dependencies]
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 twin-app = { workspace = true }
 twin-store = { workspace = true }
+twin-ebpf = { workspace = true }

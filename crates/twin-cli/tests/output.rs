@@ -64,6 +64,7 @@ fn doctor_render_sections() {
         },
         scan_quality: None,
         scan_quality_error: None,
+        ebpf: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("twin doctor"));
@@ -288,6 +289,7 @@ fn doctor_render_scan_quality_degraded() {
             ephemeral_capture_recommended: false,
         }),
         scan_quality_error: None,
+        ebpf: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("scan quality"));
@@ -322,6 +324,7 @@ fn doctor_render_ephemeral_capture_recommendation() {
             ephemeral_capture_recommended: true,
         }),
         scan_quality_error: None,
+        ebpf: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("ephemeral capture"));
@@ -1146,9 +1149,7 @@ fn what_changed_renders_readable_edges() {
         &result,
         output::what_changed::WhatChangedRenderOptions::concise(),
     );
-    assert!(text.contains(
-        "service:nginx.service → listens_on → port:tcp:0.0.0.0:80"
-    ));
+    assert!(text.contains("service:nginx.service → listens_on → port:tcp:0.0.0.0:80"));
     assert!(text.contains("(edges: 1 new)"));
 }
 
@@ -1230,7 +1231,10 @@ fn what_changed_truncates_large_sections() {
         output::what_changed::WhatChangedRenderOptions::concise(),
     );
     let line_count = text.lines().count();
-    assert!(line_count < 80, "expected concise output, got {line_count} lines");
+    assert!(
+        line_count < 80,
+        "expected concise output, got {line_count} lines"
+    );
     assert!(text.contains("… and 7 more (use --json)"));
     assert!(text.contains("25 reappeared"));
 }

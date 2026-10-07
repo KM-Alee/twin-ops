@@ -22,7 +22,7 @@ This file living. Add crate/dependency/convention/discover better pattern → up
 
 `cli` `app` `core` `observation` `collectors` `store` `graph` `rules` `emulate` `test` `ebpf` `container` `k8s` `package` `config` `output` `fixtures` `safety` — all prefixed `twin-`.
 
-**Dependency direction:** inward. `core` depends on almost nothing. `cli→app→{core,store,graph,collectors,emulate,test,output}`. Collectors → `core+observation`. Reasoning → `core+graph+rules`. **Forbidden:** `core→ebpf`, `core→k8s`, `core→container`, `graph→cli`, `emulate→collectors`.
+**Dependency direction:** inward. `core` depends on almost nothing. `cli→app→{core,store,graph,collectors,emulate,test,output,ebpf}`. Collectors → `core+observation`. `ebpf` → `core+observation`. Reasoning → `core+graph+rules`. **Forbidden:** `core→ebpf`, `core→k8s`, `core→container`, `graph→cli`, `emulate→collectors`.
 
 ## Code — Minimal Viable Code Only
 

@@ -15,6 +15,7 @@ pub enum ObservationSource {
     SystemdDBus,
     SystemdEnableSymlink,
     ConfigFileDiscovery,
+    Ebpf,
 }
 
 impl fmt::Display for ObservationSource {
@@ -28,6 +29,7 @@ impl fmt::Display for ObservationSource {
             Self::SystemdDBus => "systemd_dbus",
             Self::SystemdEnableSymlink => "systemd_enable_symlink",
             Self::ConfigFileDiscovery => "config_file_discovery",
+            Self::Ebpf => "ebpf",
         })
     }
 }
@@ -45,6 +47,7 @@ impl FromStr for ObservationSource {
             "systemd_dbus" => Ok(Self::SystemdDBus),
             "systemd_enable_symlink" => Ok(Self::SystemdEnableSymlink),
             "config_file_discovery" => Ok(Self::ConfigFileDiscovery),
+            "ebpf" => Ok(Self::Ebpf),
             other => Err(ParseError::Enum {
                 kind: "ObservationSource",
                 value: other.to_string(),
@@ -74,6 +77,7 @@ pub enum ObservationKind {
     SystemdCgroupCorrection,
     ConfigFileSeen,
     ServiceConfiguredByFile,
+    EbpfExecObserved,
 }
 
 impl fmt::Display for ObservationKind {
@@ -98,6 +102,7 @@ impl fmt::Display for ObservationKind {
             Self::SystemdCgroupCorrection => "systemd_cgroup_correction",
             Self::ConfigFileSeen => "config_file_seen",
             Self::ServiceConfiguredByFile => "service_configured_by_file",
+            Self::EbpfExecObserved => "ebpf_exec_observed",
         })
     }
 }
@@ -126,6 +131,7 @@ impl FromStr for ObservationKind {
             "systemd_cgroup_correction" => Ok(Self::SystemdCgroupCorrection),
             "config_file_seen" => Ok(Self::ConfigFileSeen),
             "service_configured_by_file" => Ok(Self::ServiceConfiguredByFile),
+            "ebpf_exec_observed" => Ok(Self::EbpfExecObserved),
             other => Err(ParseError::Enum {
                 kind: "ObservationKind",
                 value: other.to_string(),
