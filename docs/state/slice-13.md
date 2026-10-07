@@ -44,3 +44,15 @@
 - [x] Missing database and bad interval/duration/tick count return typed errors
 - [x] No host mutation paths in the watch command
 - [x] Tests use isolated HOME, temp stores, and fake `/proc` fixtures
+
+## Verification
+
+```bash
+cargo fmt --check
+cargo test --workspace
+cargo clippy --workspace -- -D warnings
+```
+
+All passed after implementation. `cargo test --workspace` includes the watch suite, CLI output locks, and a SIGINT stop of the `twin` binary.
+
+Fixture smoke (`--interval 0s --ticks 2`) printed `+2 processes`, then `no significant changes`, then `tick limit · 2 scans · 2 events` with per-collector timing.
