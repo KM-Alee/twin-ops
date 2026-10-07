@@ -982,6 +982,7 @@ fn persist_scan(
                         samples_total,
                         tcp_connection_count,
                         unmapped_active_socket_count,
+                        readable_processes: process_count,
                     },
                 ),
             )?;
@@ -1003,6 +1004,13 @@ fn persist_scan(
     let warning_count = process_warnings.len() + systemd_warnings.len() + runtime_warnings.len();
     let total_observations =
         observations.len() + unit_observations.len() + runtime_observations.len();
+    let coverage = super::coverage::from_scan_counts(
+        process_count,
+        process_warnings,
+        runtime_batch.dbus_available(),
+        unmapped_active_socket_count,
+        &super::coverage::AvailabilityProbe::host(),
+    );
     Ok((
         ScanResult {
             samples_requested: 1,
@@ -1048,6 +1056,7 @@ fn persist_scan(
             warning_count,
             warnings,
             warning_details: detailed_warnings(process_warnings),
+            coverage,
         },
         edges_new,
     ))

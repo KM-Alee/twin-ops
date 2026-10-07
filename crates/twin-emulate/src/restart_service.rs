@@ -8,7 +8,7 @@ use crate::report::{
     EmulationDomainReport, EmulationImpact, EmulationImpactPathReport, EmulationOverlayInterrupted,
     EmulationOverlayNode, EmulationOverlaySummary,
 };
-use crate::scoring::{score_restart_evidence, score_restart_risk};
+use crate::scoring::{adjustments_from, score_restart_evidence, score_restart_risk};
 
 pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainReport {
     let target_id = input.target.id.clone();
@@ -35,8 +35,12 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
     } else {
         Vec::new()
     };
-    let evidence_strength =
-        score_restart_evidence(&input.runtime_dependents, &input.unknowns, &path_evidence);
+    let evidence = score_restart_evidence(
+        &input.runtime_dependents,
+        &input.unknowns,
+        &path_evidence,
+        adjustments_from(input.permission_gaps, input.dropped_ebpf, input.recency),
+    );
 
     let transient_impacts = input
         .runtime_dependents
@@ -64,7 +68,8 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         general_safety_statement: SAFETY_STATEMENT.to_string(),
         risk_level,
         risk_reasons,
-        evidence_strength,
+        evidence_strength: evidence.strength,
+        evidence_reasons: evidence.reasons,
         overlay_summary,
         overlay,
         transient_impacts,

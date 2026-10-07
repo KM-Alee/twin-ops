@@ -1,8 +1,8 @@
 use std::str::FromStr;
 
 use twin_core::{
-    EdgeId, EdgeKind, EvidenceStrength, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId,
-    TimestampNs,
+    score_evidence, EdgeId, EdgeKind, EvidenceFactors, EvidenceRecency, EvidenceSourceKind,
+    EvidenceStrength, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId, TimestampNs,
 };
 use twin_ebpf::{
     dropped_observation, tcp_to_raw, TcpConnect, TcpEvent, TcpRateLimiter, TcpRateLimits,
@@ -87,20 +87,44 @@ pub fn connect_evidence_strength(
     config_only: bool,
     dropped: bool,
 ) -> EvidenceStrength {
-    let strength = if ebpf_connects >= 2 {
-        EvidenceStrength::very_strong()
-    } else if ebpf_connects >= 1 || socket_table {
-        EvidenceStrength::strong()
+    let source = if ebpf_connects > 0 {
+        EvidenceSourceKind::Ebpf
+    } else if socket_table {
+        EvidenceSourceKind::SocketTable
     } else if config_only {
-        EvidenceStrength::moderate()
+        EvidenceSourceKind::Config
     } else {
-        EvidenceStrength::weak()
+        EvidenceSourceKind::None
     };
-    if dropped && ebpf_connects > 0 {
-        weaken(strength)
-    } else {
-        strength
+    let mut independent_sources = 0u32;
+    if ebpf_connects > 0 {
+        independent_sources += 1;
     }
+    if socket_table {
+        independent_sources += 1;
+    }
+    if config_only {
+        independent_sources += 1;
+    }
+    let repeat_count = if ebpf_connects > 0 {
+        u32::try_from(ebpf_connects).unwrap_or(u32::MAX)
+    } else if socket_table || config_only {
+        1
+    } else {
+        0
+    };
+    score_evidence(EvidenceFactors {
+        source,
+        runtime_confirmed: socket_table && ebpf_connects > 0,
+        static_confirmed: false,
+        recency: EvidenceRecency::Unknown,
+        repeat_count,
+        independent_sources,
+        permission_gaps: 0,
+        conflicting: false,
+        dropped_ebpf: dropped,
+    })
+    .strength
 }
 
 pub(crate) fn runtime_dependencies(
@@ -374,6 +398,10 @@ fn port_parts(port: &NodeId) -> Option<(String, u16)> {
     Some((ip.to_string(), number))
 }
 
+pub(crate) fn ebpf_drops_recorded(store: &Store) -> Result<bool, twin_store::StoreError> {
+    Ok(tcp_drop_count(store)? > 0)
+}
+
 fn tcp_drop_count(store: &Store) -> Result<u64, twin_store::StoreError> {
     let rows = store.list_observations_by_kind(&ObservationKind::EbpfDroppedEvents.to_string())?;
     let mut total = 0u64;
@@ -401,15 +429,5 @@ fn connect_reason(count: u64) -> String {
         "eBPF observed 1 connect event".to_string()
     } else {
         format!("eBPF observed {count} connect events")
-    }
-}
-
-fn weaken(strength: EvidenceStrength) -> EvidenceStrength {
-    match strength.label() {
-        twin_core::EvidenceLabel::VeryStrong => EvidenceStrength::strong(),
-        twin_core::EvidenceLabel::Strong => EvidenceStrength::moderate(),
-        twin_core::EvidenceLabel::Moderate | twin_core::EvidenceLabel::Weak => {
-            EvidenceStrength::weak()
-        }
     }
 }

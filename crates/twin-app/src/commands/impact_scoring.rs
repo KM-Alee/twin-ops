@@ -1,4 +1,7 @@
-use twin_core::{cap_dependent_evidence_score, EvidenceStrength, NodeKind, RiskLevel};
+use twin_core::{
+    factors_from_lines, score_capped_evidence, EvidenceAdjustments, EvidenceExplanation,
+    EvidenceLineRef, NodeKind, RiskLevel,
+};
 
 use crate::commands::impact_paths::ImpactPathAnalysis;
 use crate::model::{ImpactDependent, ImpactEvidenceLine, ImpactUnknown, RiskAssessment};
@@ -134,10 +137,11 @@ pub(crate) fn score_service_evidence(
     direct_dependents: &[ImpactDependent],
     path_evidence: &[ImpactEvidenceLine],
     unknowns: &[ImpactUnknown],
-) -> EvidenceStrength {
-    let mut best = 0u8;
+    adjustments: EvidenceAdjustments,
+) -> EvidenceExplanation {
     let mut has_observation_links = false;
     let mut only_inferred = true;
+    let mut lines = Vec::new();
 
     for dependent in direct_dependents {
         if !dependent.observation_ids.is_empty() {
@@ -146,19 +150,26 @@ pub(crate) fn score_service_evidence(
         if dependent.edge_class != twin_core::EdgeClass::Inferred.to_string() {
             only_inferred = false;
         }
-        for line in &dependent.evidence {
-            best = best.max(line.strength_score());
-        }
+        push_impact_lines(&mut lines, &dependent.evidence);
     }
-    for line in path_evidence {
-        best = best.max(line.strength_score());
-    }
-
-    cap_dependent_evidence_score(
-        best,
+    push_impact_lines(&mut lines, path_evidence);
+    let factors = factors_from_lines(&lines, adjustments);
+    score_capped_evidence(
+        factors,
         has_observation_links,
         only_inferred,
         unknowns.iter().any(|u| u.weakens_evidence),
         !direct_dependents.is_empty() || !path_evidence.is_empty(),
     )
+}
+
+fn push_impact_lines<'a>(out: &mut Vec<EvidenceLineRef<'a>>, lines: &'a [ImpactEvidenceLine]) {
+    for line in lines {
+        out.push(EvidenceLineRef {
+            source: &line.source,
+            statement: &line.statement,
+            relationship: &line.relationship,
+            strength_score: line.strength_score(),
+        });
+    }
 }

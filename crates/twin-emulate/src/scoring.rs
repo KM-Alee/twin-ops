@@ -1,4 +1,7 @@
-use twin_core::{cap_dependent_evidence_score, EvidenceStrength, RiskLevel};
+use twin_core::{
+    factors_from_lines, score_capped_evidence, EvidenceAdjustments, EvidenceExplanation,
+    EvidenceLineRef, EvidenceRecency, RiskLevel,
+};
 
 use crate::input::{
     EmulationConfiguredService, EmulationDependent, EmulationEvidenceLine, EmulationUnknown,
@@ -92,10 +95,11 @@ pub fn score_restart_evidence(
     runtime_dependents: &[EmulationDependent],
     unknowns: &[EmulationUnknown],
     path_evidence: &[EmulationEvidenceLine],
-) -> EvidenceStrength {
-    let mut best = 0u8;
+    adjustments: EvidenceAdjustments,
+) -> EvidenceExplanation {
     let mut has_observation_links = false;
     let mut only_inferred = true;
+    let mut lines = Vec::new();
 
     for dependent in runtime_dependents {
         if !dependent.observation_ids.is_empty() {
@@ -104,16 +108,13 @@ pub fn score_restart_evidence(
         if dependent.edge_class != twin_core::EdgeClass::Inferred {
             only_inferred = false;
         }
-        for line in &dependent.evidence {
-            best = best.max(line.strength_score);
-        }
+        push_emulation_lines(&mut lines, &dependent.evidence);
     }
-    for line in path_evidence {
-        best = best.max(line.strength_score);
-    }
+    push_emulation_lines(&mut lines, path_evidence);
+    let factors = factors_from_lines(&lines, adjustments);
 
-    cap_dependent_evidence_score(
-        best,
+    score_capped_evidence(
+        factors,
         has_observation_links,
         only_inferred,
         unknowns.iter().any(|u| u.weakens_evidence),
@@ -173,22 +174,47 @@ pub fn score_delete_evidence(
     configured_services: &[EmulationConfiguredService],
     evidence: &[EmulationEvidenceLine],
     unknowns: &[EmulationUnknown],
-) -> EvidenceStrength {
-    let mut best = 0u8;
-    for line in evidence {
-        best = best.max(line.strength_score);
-    }
+    adjustments: EvidenceAdjustments,
+) -> EvidenceExplanation {
+    let mut lines = Vec::new();
+    push_emulation_lines(&mut lines, evidence);
     for service in configured_services {
-        for line in &service.evidence {
-            best = best.max(line.strength_score);
-        }
+        push_emulation_lines(&mut lines, &service.evidence);
     }
     let has_links = !configured_services.is_empty() || !evidence.is_empty();
-    cap_dependent_evidence_score(
-        best,
+    let factors = factors_from_lines(&lines, adjustments);
+    score_capped_evidence(
+        factors,
         has_links,
         false,
         unknowns.iter().any(|u| u.weakens_evidence),
         has_links,
     )
+}
+
+fn push_emulation_lines<'a>(
+    out: &mut Vec<EvidenceLineRef<'a>>,
+    lines: &'a [EmulationEvidenceLine],
+) {
+    for line in lines {
+        out.push(EvidenceLineRef {
+            source: &line.source,
+            statement: &line.statement,
+            relationship: &line.relationship,
+            strength_score: line.strength_score,
+        });
+    }
+}
+
+pub fn adjustments_from(
+    permission_gaps: u32,
+    dropped_ebpf: bool,
+    recency: EvidenceRecency,
+) -> EvidenceAdjustments {
+    EvidenceAdjustments {
+        permission_gaps,
+        dropped_ebpf,
+        recency,
+        conflicting: false,
+    }
 }

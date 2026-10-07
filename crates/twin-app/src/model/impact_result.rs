@@ -108,6 +108,10 @@ pub struct ImpactResult {
     pub paths_requested: bool,
     #[serde(default = "default_impact_max_depth")]
     pub max_depth: usize,
+    #[serde(default)]
+    pub evidence_reasons: Vec<String>,
+    #[serde(default)]
+    pub show_evidence: bool,
 }
 
 #[allow(dead_code)]

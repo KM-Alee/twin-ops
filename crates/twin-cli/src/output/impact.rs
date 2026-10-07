@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use twin_app::{ImpactDependent, ImpactEvidenceLine, ImpactPath, ImpactResult};
 use twin_core::RiskLevel;
 
-use crate::output::format::{Lines, ScanFreshness, Status};
+use crate::output::format::{evidence_label_words, Lines, ScanFreshness, Status};
 use crate::output::sections::{
     CONFIGURED_DEPENDENTS, DIRECT_DEPENDENTS_RUNTIME, EVIDENCE, EVIDENCE_STRENGTH, IMPACT_PATHS,
     OWNED_BY, RISK, SCAN_HEALTH, TARGET, UNKNOWNS,
@@ -80,6 +80,14 @@ pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> S
             out.tree_leaf(is_last, &line.source, &line.statement);
         }
     }
+    if result.show_evidence {
+        render_evidence_score(
+            &mut out,
+            result.evidence_strength.score,
+            &result.evidence_strength.label,
+            &result.evidence_reasons,
+        );
+    }
     let (health, unknowns) = split_scan_health(&result.unknowns);
     if !health.is_empty() {
         out.blank();
@@ -102,6 +110,20 @@ pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> S
         render_unknown_groups(&mut out, &grouped);
     }
     out.into_string()
+}
+
+fn render_evidence_score(out: &mut Lines, score: u8, label: &str, reasons: &[String]) {
+    out.blank();
+    out.section("evidence score");
+    let headline = format!("{score}/100, {}", evidence_label_words(label));
+    if reasons.is_empty() {
+        out.tree_leaf(true, "strength", &headline);
+        return;
+    }
+    out.tree_leaf(false, "strength", &headline);
+    for (index, reason) in reasons.iter().enumerate() {
+        out.tree_leaf(index + 1 == reasons.len(), "why", reason);
+    }
 }
 
 fn render_impact_paths(out: &mut Lines, paths: &[ImpactPath]) {

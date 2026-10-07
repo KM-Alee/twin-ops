@@ -1,3 +1,4 @@
+mod coverage;
 pub mod diff;
 pub mod doctor;
 mod duration;

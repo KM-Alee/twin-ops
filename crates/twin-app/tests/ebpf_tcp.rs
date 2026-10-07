@@ -274,6 +274,14 @@ fn evidence_labels_follow_the_existing_scale() {
         connect_evidence_strength(0, true, false, true).label(),
         EvidenceLabel::Strong
     );
+    assert_eq!(
+        connect_evidence_strength(2, false, false, false).score(),
+        86
+    );
+    assert_eq!(connect_evidence_strength(0, true, false, false).score(), 75);
+    assert_eq!(connect_evidence_strength(0, false, true, false).score(), 45);
+    assert_eq!(connect_evidence_strength(2, true, false, true).score(), 75);
+    assert_eq!(connect_evidence_strength(0, true, false, true).score(), 75);
 }
 
 fn service_graph(home: &support::IsolatedHome, show_evidence: bool) -> twin_app::GraphResult {

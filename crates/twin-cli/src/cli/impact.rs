@@ -13,6 +13,7 @@ pub fn impact_request(args: &ImpactArgs) -> Result<ImpactRequest, AppError> {
         target_query,
         show_paths: args.paths,
         max_depth,
+        show_evidence: args.evidence,
     };
     if args.target.starts_with("port:tcp:") || args.target.starts_with("unix:") {
         let id =

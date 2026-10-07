@@ -1,4 +1,4 @@
-use twin_core::{EdgeClass, EdgeId, EdgeKind, NodeId};
+use twin_core::{EdgeClass, EdgeId, EdgeKind, EvidenceRecency, NodeId};
 
 #[derive(Debug, Clone)]
 pub struct EmulationNode {
@@ -79,6 +79,9 @@ pub struct RestartServiceInput {
     pub paths_requested: bool,
     pub max_depth: usize,
     pub path_scoring: Option<RestartPathScoringInput>,
+    pub permission_gaps: u32,
+    pub dropped_ebpf: bool,
+    pub recency: EvidenceRecency,
 }
 
 impl Default for RestartServiceInput {
@@ -96,6 +99,9 @@ impl Default for RestartServiceInput {
             paths_requested: false,
             max_depth: default_max_depth(),
             path_scoring: None,
+            permission_gaps: 0,
+            dropped_ebpf: false,
+            recency: EvidenceRecency::Unknown,
         }
     }
 }
@@ -116,4 +122,6 @@ pub struct DeleteFileInput {
     pub unknowns: Vec<EmulationUnknown>,
     pub file_in_graph: bool,
     pub file_exists: bool,
+    pub permission_gaps: u32,
+    pub recency: EvidenceRecency,
 }

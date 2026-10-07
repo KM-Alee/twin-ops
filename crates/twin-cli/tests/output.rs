@@ -638,6 +638,8 @@ fn sample_impact_result() -> ImpactResult {
         impact_paths: vec![],
         paths_requested: false,
         max_depth: 4,
+        evidence_reasons: vec![],
+        show_evidence: false,
     }
 }
 
@@ -772,6 +774,8 @@ fn sample_emulation_result() -> EmulationResult {
         impact_paths: vec![],
         paths_requested: false,
         max_depth: 4,
+        evidence_reasons: vec![],
+        show_evidence: false,
     }
 }
 
@@ -830,6 +834,8 @@ fn sample_delete_emulation_result() -> EmulationResult {
         impact_paths: vec![],
         paths_requested: false,
         max_depth: 0,
+        evidence_reasons: vec![],
+        show_evidence: false,
     }
 }
 
@@ -1392,6 +1398,93 @@ fn doctor_ebpf_renders_tcp_tracing() {
     let without = sample_doctor_result();
     let plain = output::doctor::render(&without);
     assert!(!plain.contains("tcp tracing"));
+}
+
+#[test]
+fn impact_evidence_flag_explains_score_and_unknowns() {
+    let mut result = sample_impact_result();
+    result.show_evidence = true;
+    result.evidence_strength.score = 87;
+    result.evidence_strength.label = "very_strong".to_string();
+    result.evidence_reasons = vec![
+        "eBPF connect observed".to_string(),
+        "socket inode mapped to process".to_string(),
+        "process mapped to service".to_string(),
+        "relationship observed repeatedly".to_string(),
+    ];
+    result.unknowns = vec![
+        ImpactUnknown {
+            kind: "permission_gap".to_string(),
+            detail: "8 processes hidden due to permissions".to_string(),
+            source: Some("coverage".to_string()),
+            weakens_evidence: false,
+        },
+        ImpactUnknown {
+            kind: "unmapped_sockets".to_string(),
+            detail: "3 sockets could not be mapped".to_string(),
+            source: Some("coverage".to_string()),
+            weakens_evidence: false,
+        },
+    ];
+    let text = output::impact::render(&result);
+    assert!(text.contains("87/100, very strong"));
+    assert!(text.contains("eBPF connect observed"));
+    assert!(text.contains("socket inode mapped to process"));
+    assert!(text.contains("process mapped to service"));
+    assert!(text.contains("relationship observed repeatedly"));
+    assert!(text.contains("8 processes hidden due to permissions"));
+    assert!(text.contains("3 sockets could not be mapped"));
+    let hidden = output::impact::render(&sample_impact_result());
+    assert!(!hidden.contains("87/100"));
+}
+
+#[test]
+fn emulate_evidence_flag_explains_score() {
+    let mut result = sample_emulation_result();
+    result.show_evidence = true;
+    result.evidence_strength.score = 87;
+    result.evidence_strength.label = "very_strong".to_string();
+    result.evidence_reasons = vec!["eBPF connect observed".to_string()];
+    result.unknowns = vec![ImpactUnknown {
+        kind: "permission_gap".to_string(),
+        detail: "8 processes hidden due to permissions".to_string(),
+        source: Some("coverage".to_string()),
+        weakens_evidence: false,
+    }];
+    let text = output::emulate::render(&result);
+    assert!(text.contains("87/100, very strong"));
+    assert!(text.contains("eBPF connect observed"));
+    assert!(text.contains("8 processes hidden due to permissions"));
+}
+
+#[test]
+fn scan_render_includes_coverage_and_unknowns() {
+    let mut result = ScanResult {
+        started_at_ns: 1,
+        ended_at_ns: 2,
+        process_count: 10,
+        observation_count: 1,
+        ..Default::default()
+    };
+    result.coverage.readable_processes = 10;
+    result.coverage.restricted_processes = 8;
+    result.coverage.unmapped_sockets = 3;
+    result.coverage.unavailable_collectors = vec!["systemd_dbus".to_string()];
+    result.coverage.ebpf_available = false;
+    result.coverage.docker_available = false;
+    result.coverage.kubernetes_available = false;
+    let text = output::scan::render(&result);
+    assert!(text.contains("coverage"));
+    assert!(text.contains("readable processes"));
+    assert!(text.contains("restricted processes"));
+    assert!(text.contains("unmapped sockets"));
+    assert!(text.contains("unavailable collectors"));
+    assert!(text.contains("systemd_dbus"));
+    assert!(text.contains("eBPF"));
+    assert!(text.contains("Docker"));
+    assert!(text.contains("Kubernetes"));
+    assert!(text.contains("8 processes hidden due to permissions"));
+    assert!(text.contains("3 sockets could not be mapped"));
 }
 
 fn sample_service_graph() -> GraphServiceResult {

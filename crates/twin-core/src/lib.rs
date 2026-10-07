@@ -2,6 +2,7 @@ pub mod change_kind;
 pub mod config;
 pub mod edge;
 pub mod error;
+pub mod evidence;
 pub mod graph_edge;
 pub mod graph_metadata;
 pub mod graph_node;
@@ -15,6 +16,10 @@ pub mod unknown_kind;
 pub use change_kind::ChangeKind;
 pub use edge::{EdgeClass, EdgeId, EdgeKind, EdgeState};
 pub use error::{ConfigError, ParseError};
+pub use evidence::{
+    factors_from_lines, score_capped_evidence, score_evidence, EvidenceAdjustments,
+    EvidenceExplanation, EvidenceFactors, EvidenceLineRef, EvidenceRecency, EvidenceSourceKind,
+};
 pub use graph_edge::{GraphEdge, GraphEdgeParts};
 pub use graph_metadata::GraphMetadata;
 pub use graph_node::{GraphNode, GraphNodeParts};

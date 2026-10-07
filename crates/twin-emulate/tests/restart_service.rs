@@ -1,4 +1,4 @@
-use twin_core::{EdgeClass, EdgeId, EdgeKind, EvidenceStrength, NodeId};
+use twin_core::{EdgeClass, EdgeId, EdgeKind, NodeId};
 use twin_emulate::{
     emulate_restart_service, EmulationDependent, EmulationEvidenceLine, EmulationImpactPath,
     EmulationNode, EmulationPathStep, OverlayNodeState, RestartServiceInput, SAFETY_STATEMENT,

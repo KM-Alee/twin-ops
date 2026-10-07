@@ -154,6 +154,66 @@ pub fn render(result: &ScanResult) -> String {
     );
     out.tree_leaf(true, "observations", &result.observation_count.to_string());
 
+    out.blank();
+    out.section("coverage");
+    let coverage = &result.coverage;
+    out.tree_leaf(
+        false,
+        "readable processes",
+        &coverage.readable_processes.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "restricted processes",
+        &coverage.restricted_processes.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "unmapped sockets",
+        &coverage.unmapped_sockets.to_string(),
+    );
+    let unavailable = if coverage.unavailable_collectors.is_empty() {
+        "none".to_string()
+    } else {
+        coverage.unavailable_collectors.join(", ")
+    };
+    out.tree_leaf(false, "unavailable collectors", &unavailable);
+    out.tree_leaf(
+        false,
+        "eBPF",
+        if coverage.ebpf_available {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
+    out.tree_leaf(
+        false,
+        "Docker",
+        if coverage.docker_available {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
+    out.tree_leaf(
+        true,
+        "Kubernetes",
+        if coverage.kubernetes_available {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
+    let gaps = coverage.unknown_lines();
+    if !gaps.is_empty() {
+        out.blank();
+        out.section("unknowns");
+        for (i, gap) in gaps.iter().enumerate() {
+            out.tree_leaf(i + 1 == gaps.len(), "gap", &gap.detail);
+        }
+    }
+
     if result.warning_count > 0 {
         out.blank();
         let kind_count = result.warnings.len();

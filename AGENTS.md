@@ -154,6 +154,7 @@ Check `Cargo.toml` before adding new crate. Prefer std. Minimize deps. New dep =
 - **Observations, not conclusions.** Collectors emit `Observation`s. Inference engine creates edges.
 - **Fixture testing.** `twin-fixtures` provides fake data. No root/Docker/K8s/eBPF required for tests.
 - **Graceful degradation.** Collector can't run → record coverage gap, continue, never crash.
+- **One evidence score.** `twin_core::score_evidence` is the only 0-100 formula. It returns `EvidenceStrength`. Coverage gaps lower that score and show up as unknowns. They are not risk.
 - **Read-only adapters.** Only `get/list/watch` methods. K8s: no `create/update/patch/delete`. Docker: no `restart/stop/kill/remove/exec`.
 - **Overlays never persist.** Emulation patches hypothetical only.
 

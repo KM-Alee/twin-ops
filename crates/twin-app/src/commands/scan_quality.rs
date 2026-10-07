@@ -141,6 +141,7 @@ pub fn warning_metadata_from_process_warnings(
         samples_total: 1,
         tcp_connection_count: 0,
         unmapped_active_socket_count: 0,
+        readable_processes: 0,
     })
 }
 
@@ -150,30 +151,44 @@ pub(crate) struct ProcessCollectorMetadataInput<'a> {
     pub samples_total: u32,
     pub tcp_connection_count: usize,
     pub unmapped_active_socket_count: usize,
+    pub readable_processes: usize,
 }
 
 pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_>) -> String {
+    let mut permission_denied = 0usize;
     let mut fd_permission_denied = 0usize;
+    let mut cgroup_permission_denied = 0usize;
     let mut socket_unmapped = 0usize;
     let mut active_socket_unmapped = 0usize;
     let mut unix_socket_unmapped = 0usize;
     let mut unix_connection_unmapped = 0usize;
+    let mut tcp_table_missing = 0usize;
+    let mut unix_table_missing = 0usize;
     for w in input.warnings {
         match w.kind() {
+            ProcessWarningKind::PermissionDenied => permission_denied += 1,
             ProcessWarningKind::FdPermissionDenied => fd_permission_denied += 1,
+            ProcessWarningKind::CgroupPermissionDenied => cgroup_permission_denied += 1,
             ProcessWarningKind::SocketUnmapped => socket_unmapped += 1,
             ProcessWarningKind::ActiveSocketUnmapped => active_socket_unmapped += 1,
             ProcessWarningKind::UnixSocketUnmapped => unix_socket_unmapped += 1,
             ProcessWarningKind::UnixConnectionUnmapped => unix_connection_unmapped += 1,
+            ProcessWarningKind::TcpTableMissing => tcp_table_missing += 1,
+            ProcessWarningKind::UnixTableMissing => unix_table_missing += 1,
             _ => {}
         }
     }
     serde_json::json!({
+        "permission_denied": permission_denied,
         "fd_permission_denied": fd_permission_denied,
+        "cgroup_permission_denied": cgroup_permission_denied,
         "socket_unmapped": socket_unmapped,
         "active_socket_unmapped": active_socket_unmapped.max(input.unmapped_active_socket_count),
         "unix_socket_unmapped": unix_socket_unmapped,
         "unix_connection_unmapped": unix_connection_unmapped,
+        "tcp_table_missing": tcp_table_missing,
+        "unix_table_missing": unix_table_missing,
+        "readable_processes": input.readable_processes,
         "sample_index": input.sample_index,
         "samples_total": input.samples_total,
         "tcp_connection_count": input.tcp_connection_count,

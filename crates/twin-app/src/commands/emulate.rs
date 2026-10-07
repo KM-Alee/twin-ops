@@ -67,9 +67,18 @@ fn emulate_at(
                 }
                 .into());
             }
-            restart_service_emulate(&store, &resolved, node.label(), *show_paths, *max_depth)
+            restart_service_emulate(
+                &store,
+                &resolved,
+                node.label(),
+                *show_paths,
+                *max_depth,
+                request.show_evidence,
+            )
         }
-        EmulateActionRequest::DeleteFile { path } => delete_file_emulate(&store, path),
+        EmulateActionRequest::DeleteFile { path } => {
+            delete_file_emulate(&store, path, request.show_evidence)
+        }
     }
 }
 
@@ -135,7 +144,11 @@ fn resolve_delete_file_target(raw: &str) -> Result<NodeId, AppError> {
     Ok(NodeId::file(raw))
 }
 
-fn delete_file_emulate(store: &Store, raw_path: &str) -> Result<EmulationResult, AppError> {
+fn delete_file_emulate(
+    store: &Store,
+    raw_path: &str,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
     let target = resolve_delete_file_target(raw_path)?;
     let file_in_graph = store
         .get_node_typed(&target)
@@ -196,6 +209,15 @@ fn delete_file_emulate(store: &Store, raw_path: &str) -> Result<EmulationResult,
             weakens_evidence: true,
         });
     }
+    let coverage = super::coverage::load(store)?;
+    for unknown in super::coverage::unknowns(&coverage) {
+        if !unknowns
+            .iter()
+            .any(|existing| existing.kind == unknown.kind && existing.detail == unknown.detail)
+        {
+            unknowns.push(unknown);
+        }
+    }
 
     let emulation_unknowns: Vec<_> = unknowns.iter().map(impact_unknown_to_emulation).collect();
     let input = DeleteFileInput {
@@ -208,9 +230,13 @@ fn delete_file_emulate(store: &Store, raw_path: &str) -> Result<EmulationResult,
         unknowns: emulation_unknowns,
         file_in_graph,
         file_exists,
+        permission_gaps: u32::try_from(coverage.restricted_processes).unwrap_or(u32::MAX),
+        recency: twin_core::EvidenceRecency::Unknown,
     };
     let report = emulate_delete_file(input);
-    Ok(EmulationResult::from_domain(report, unknowns))
+    let mut result = EmulationResult::from_domain(report, unknowns);
+    result.show_evidence = show_evidence;
+    Ok(result)
 }
 
 fn load_configured_by_evidence(
@@ -284,6 +310,7 @@ fn restart_service_emulate(
     label: &str,
     show_paths: bool,
     max_depth: usize,
+    show_evidence: bool,
 ) -> Result<EmulationResult, AppError> {
     let analysis = load_typed_service_dependents(store, target, label)?;
     let unavailable_nodes = load_listening_sockets(store, target)?;
@@ -304,6 +331,23 @@ fn restart_service_emulate(
     } else {
         (Vec::new(), None, analysis.unknowns.clone())
     };
+    let coverage = super::coverage::load(store)?;
+    let mut unknowns = unknowns;
+    for unknown in super::coverage::unknowns(&coverage) {
+        if !unknowns
+            .iter()
+            .any(|existing| existing.kind == unknown.kind && existing.detail == unknown.detail)
+        {
+            unknowns.push(unknown);
+        }
+    }
+    let observed = analysis
+        .runtime
+        .iter()
+        .flat_map(|dependent| dependent.observation_ids.iter().cloned())
+        .collect::<Vec<_>>();
+    let reference = super::coverage::reference_ns(store)?;
+    let newest = newest_stamp(store, &observed);
     let input = RestartServiceInput {
         target: EmulationNode {
             id: target.clone(),
@@ -325,9 +369,34 @@ fn restart_service_emulate(
         paths_requested: show_paths,
         max_depth,
         path_scoring,
+        permission_gaps: u32::try_from(coverage.restricted_processes).unwrap_or(u32::MAX),
+        dropped_ebpf: super::ebpf_tcp::ebpf_drops_recorded(store)
+            .map_err(crate::error::ScanError::Store)?,
+        recency: super::coverage::recency_between(newest, reference),
     };
     let report = emulate_restart_service(input);
-    Ok(EmulationResult::from_domain(report, unknowns))
+    let mut result = EmulationResult::from_domain(report, unknowns);
+    result.show_evidence = show_evidence;
+    Ok(result)
+}
+
+fn newest_stamp(store: &Store, ids: &[String]) -> Option<i64> {
+    let mut newest = None;
+    for id in ids {
+        let Ok(id) = ObservationId::from_str(id) else {
+            continue;
+        };
+        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+            continue;
+        };
+        let stamp = obs.timestamp().as_i64();
+        newest = Some(
+            newest
+                .map(|current: i64| current.max(stamp))
+                .unwrap_or(stamp),
+        );
+    }
+    newest
 }
 
 fn graph_node_id(id: &str) -> Result<NodeId, AppError> {

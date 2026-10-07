@@ -175,6 +175,7 @@ pub(crate) fn load_typed_service_dependents(
     }
 
     append_scan_health_note(store, &mut unknowns)?;
+    append_coverage_unknowns(store, &mut unknowns)?;
 
     runtime.sort_by_key(|d| d.id.as_str().to_string());
     configured.sort_by_key(|d| d.id.as_str().to_string());
@@ -235,14 +236,18 @@ fn service_impact(
         &unknowns,
         path_scoring.as_ref(),
     );
-    let evidence_strength =
-        score_service_evidence(&analysis.direct_dependents, &path_evidence, &unknowns);
+    let evidence = score_service_evidence(
+        &analysis.direct_dependents,
+        &path_evidence,
+        &unknowns,
+        evidence_adjustments(store, &analysis.direct_dependents, &path_evidence)?,
+    );
 
     Ok(ImpactResult {
         target: target.to_string(),
         target_label: label.to_string(),
         risk,
-        evidence_strength: evidence_strength.into(),
+        evidence_strength: evidence.strength.into(),
         direct_dependents: analysis.direct_dependents,
         configured_dependents: analysis.configured_dependents,
         listener_owners: Vec::new(),
@@ -251,6 +256,8 @@ fn service_impact(
         impact_paths,
         paths_requested: request.show_paths,
         max_depth: request.max_depth,
+        evidence_reasons: evidence.reasons,
+        show_evidence: request.show_evidence,
     })
 }
 
@@ -354,6 +361,7 @@ fn port_impact(
     }
 
     append_scan_health_note(store, &mut unknowns)?;
+    append_coverage_unknowns(store, &mut unknowns)?;
 
     direct_dependents.sort_by_key(|d| d.id.clone());
     listener_owners.sort_by_key(|n| n.id.clone());
@@ -375,13 +383,18 @@ fn port_impact(
         .iter()
         .flat_map(|p| p.evidence.iter().cloned())
         .collect();
-    let evidence_strength = score_service_evidence(&direct_dependents, &path_evidence, &unknowns);
+    let scored = score_service_evidence(
+        &direct_dependents,
+        &path_evidence,
+        &unknowns,
+        evidence_adjustments(store, &direct_dependents, &path_evidence)?,
+    );
 
     Ok(ImpactResult {
         target: target.to_string(),
         target_label: label.to_string(),
         risk,
-        evidence_strength: evidence_strength.into(),
+        evidence_strength: scored.strength.into(),
         direct_dependents,
         configured_dependents: Vec::new(),
         listener_owners,
@@ -390,6 +403,8 @@ fn port_impact(
         impact_paths,
         paths_requested: request.show_paths,
         max_depth: request.max_depth,
+        evidence_reasons: scored.reasons,
+        show_evidence: request.show_evidence,
     })
 }
 
@@ -739,6 +754,67 @@ fn evidence_strength_for_observation(obs: &Observation) -> EvidenceStrength {
         }
         _ => EvidenceStrength::weak(),
     }
+}
+
+fn append_coverage_unknowns(
+    store: &Store,
+    unknowns: &mut Vec<ImpactUnknown>,
+) -> Result<(), AppError> {
+    let coverage = super::coverage::load(store)?;
+    for unknown in super::coverage::unknowns(&coverage) {
+        let duplicate = unknowns
+            .iter()
+            .any(|existing| existing.kind == unknown.kind && existing.detail == unknown.detail);
+        if !duplicate {
+            unknowns.push(unknown);
+        }
+    }
+    Ok(())
+}
+
+fn evidence_adjustments(
+    store: &Store,
+    dependents: &[crate::model::ImpactDependent],
+    path_evidence: &[ImpactEvidenceLine],
+) -> Result<twin_core::EvidenceAdjustments, AppError> {
+    let coverage = super::coverage::load(store)?;
+    let mut ids = Vec::new();
+    for dependent in dependents {
+        ids.extend(dependent.observation_ids.iter().cloned());
+    }
+    for line in path_evidence {
+        if let Some(id) = &line.observation_id {
+            ids.push(id.clone());
+        }
+    }
+    let reference = super::coverage::reference_ns(store)?;
+    let newest = newest_observation_ns(store, &ids);
+    Ok(twin_core::EvidenceAdjustments {
+        permission_gaps: u32::try_from(coverage.restricted_processes).unwrap_or(u32::MAX),
+        dropped_ebpf: super::ebpf_tcp::ebpf_drops_recorded(store)
+            .map_err(crate::error::ScanError::Store)?,
+        recency: super::coverage::recency_between(newest, reference),
+        conflicting: false,
+    })
+}
+
+fn newest_observation_ns(store: &Store, ids: &[String]) -> Option<i64> {
+    let mut newest = None;
+    for id in ids {
+        let Ok(id) = ObservationId::from_str(id) else {
+            continue;
+        };
+        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+            continue;
+        };
+        let stamp = obs.timestamp().as_i64();
+        newest = Some(
+            newest
+                .map(|current: i64| current.max(stamp))
+                .unwrap_or(stamp),
+        );
+    }
+    newest
 }
 
 fn append_scan_health_note(

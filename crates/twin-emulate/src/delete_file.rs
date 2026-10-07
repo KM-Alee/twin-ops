@@ -7,7 +7,7 @@ use crate::overlay::{GraphOverlay, NodeOverlay, OverlayNodeState};
 use crate::report::{
     EmulationDomainReport, EmulationImpact, EmulationOverlayNode, EmulationOverlaySummary,
 };
-use crate::scoring::{score_delete_evidence, score_delete_risk};
+use crate::scoring::{adjustments_from, score_delete_evidence, score_delete_risk};
 
 pub fn emulate_delete_file(input: DeleteFileInput) -> EmulationDomainReport {
     let target_id = input.target.id.clone();
@@ -22,8 +22,12 @@ pub fn emulate_delete_file(input: DeleteFileInput) -> EmulationDomainReport {
         input.file_exists,
         &input.unknowns,
     );
-    let evidence_strength =
-        score_delete_evidence(&input.configured_services, &input.evidence, &input.unknowns);
+    let evidence = score_delete_evidence(
+        &input.configured_services,
+        &input.evidence,
+        &input.unknowns,
+        adjustments_from(input.permission_gaps, false, input.recency),
+    );
 
     let runtime_impacts = input
         .configured_services
@@ -53,7 +57,8 @@ pub fn emulate_delete_file(input: DeleteFileInput) -> EmulationDomainReport {
         general_safety_statement: SAFETY_STATEMENT.to_string(),
         risk_level,
         risk_reasons,
-        evidence_strength,
+        evidence_strength: evidence.strength,
+        evidence_reasons: evidence.reasons,
         overlay_summary,
         overlay,
         transient_impacts: Vec::new(),

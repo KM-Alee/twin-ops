@@ -1,3 +1,4 @@
+mod coverage;
 mod diff_result;
 mod doctor_result;
 mod emulation_result;
@@ -10,6 +11,7 @@ mod snapshot_result;
 mod watch_result;
 mod what_changed_result;
 
+pub use coverage::{CoverageReport, CoverageUnknown};
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
     DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult,

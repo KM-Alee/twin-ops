@@ -8,8 +8,8 @@ pub use error::{
     AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, WatchError,
 };
 pub use model::{
-    DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore, DoctorDatabase,
-    DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult, EmulationImpact,
+    CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore,
+    DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult, EmulationImpact,
     EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
     EvidenceStrengthView, GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphListResult,
     GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphParentEdge, GraphPortResult,
@@ -136,6 +136,7 @@ pub struct ImpactRequest {
     pub target_query: Option<String>,
     pub show_paths: bool,
     pub max_depth: usize,
+    pub show_evidence: bool,
 }
 
 impl Default for ImpactRequest {
@@ -146,6 +147,7 @@ impl Default for ImpactRequest {
             target_query: None,
             show_paths: false,
             max_depth: DEFAULT_MAX_DEPTH,
+            show_evidence: false,
         }
     }
 }
@@ -202,6 +204,7 @@ impl Default for EmulateActionRequest {
 pub struct EmulateRequest {
     pub config_override: Option<PathBuf>,
     pub action: EmulateActionRequest,
+    pub show_evidence: bool,
 }
 
 impl EmulateRequest {

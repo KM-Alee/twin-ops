@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use twin_app::{EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationResult};
 use twin_core::RiskLevel;
 
-use crate::output::format::{Lines, ScanFreshness, Status};
+use crate::output::format::{evidence_label_words, Lines, ScanFreshness, Status};
 use crate::output::sections::{
     emulation_scoring_note, CONFIGURED_CONTEXT, EVIDENCE, EVIDENCE_STRENGTH, IMPACT_PATHS, OVERLAY,
     OVERLAY_SERVICE, OVERLAY_TCP_LISTENERS, OVERLAY_UNIX_LISTENERS, PERSISTENT_IMPACT,
@@ -55,6 +55,14 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
         out.section(IMPACT_PATHS);
         render_emulation_impact_paths(&mut out, &result.impact_paths);
     }
+    if result.show_evidence {
+        render_evidence_score(
+            &mut out,
+            result.evidence_strength.score,
+            &result.evidence_strength.label,
+            &result.evidence_reasons,
+        );
+    }
     let (health, unknowns) = split_scan_health(&result.unknowns);
     if !health.is_empty() {
         out.blank();
@@ -80,6 +88,20 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     out.section(SAFETY);
     out.tree_leaf(true, "status", &result.safety_statement);
     out.into_string()
+}
+
+fn render_evidence_score(out: &mut Lines, score: u8, label: &str, reasons: &[String]) {
+    out.blank();
+    out.section("evidence score");
+    let headline = format!("{score}/100, {}", evidence_label_words(label));
+    if reasons.is_empty() {
+        out.tree_leaf(true, "strength", &headline);
+        return;
+    }
+    out.tree_leaf(false, "strength", &headline);
+    for (index, reason) in reasons.iter().enumerate() {
+        out.tree_leaf(index + 1 == reasons.len(), "why", reason);
+    }
 }
 
 fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
@@ -111,6 +133,14 @@ fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>
             let is_last = i + 1 == result.evidence_lines.len();
             out.tree_leaf(is_last, "source", line);
         }
+    }
+    if result.show_evidence {
+        render_evidence_score(
+            &mut out,
+            result.evidence_strength.score,
+            &result.evidence_strength.label,
+            &result.evidence_reasons,
+        );
     }
     let (health, unknowns) = split_scan_health(&result.unknowns);
     if !health.is_empty() {

@@ -9,6 +9,7 @@ pub fn emulate_restart_request(args: &EmulateRestartArgs) -> Result<EmulateReque
     let max_depth = validate_max_depth(args.max_depth as usize)?;
     let restart = |target: Option<NodeId>, target_query: Option<String>| EmulateRequest {
         config_override: args.config.clone(),
+        show_evidence: args.evidence,
         action: EmulateActionRequest::Restart {
             target,
             target_query,
@@ -33,6 +34,7 @@ pub fn emulate_restart_request(args: &EmulateRestartArgs) -> Result<EmulateReque
 pub fn emulate_delete_request(args: &EmulateDeleteArgs) -> Result<EmulateRequest, AppError> {
     Ok(EmulateRequest {
         config_override: args.config.clone(),
+        show_evidence: args.evidence,
         action: EmulateActionRequest::DeleteFile {
             path: args.target.clone(),
         },

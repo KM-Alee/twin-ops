@@ -55,6 +55,7 @@ pub struct EmulationDomainReport {
     pub risk_level: RiskLevel,
     pub risk_reasons: Vec<String>,
     pub evidence_strength: EvidenceStrength,
+    pub evidence_reasons: Vec<String>,
     pub overlay: GraphOverlay,
     pub overlay_summary: EmulationOverlaySummary,
     pub transient_impacts: Vec<EmulationImpact>,

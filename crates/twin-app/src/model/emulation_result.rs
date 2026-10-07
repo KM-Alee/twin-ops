@@ -71,6 +71,10 @@ pub struct EmulationResult {
     pub paths_requested: bool,
     #[serde(default)]
     pub max_depth: usize,
+    #[serde(default)]
+    pub evidence_reasons: Vec<String>,
+    #[serde(default)]
+    pub show_evidence: bool,
 }
 
 impl EmulationResult {
@@ -195,6 +199,8 @@ impl EmulationResult {
                 .collect(),
             paths_requested: report.paths_requested,
             max_depth: report.max_depth,
+            evidence_reasons: report.evidence_reasons,
+            show_evidence: false,
         }
     }
 }

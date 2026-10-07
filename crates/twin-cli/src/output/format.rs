@@ -97,6 +97,13 @@ impl ScanFreshness {
     }
 }
 
+pub fn evidence_label_words(label: &str) -> &str {
+    match label {
+        "very_strong" => "very strong",
+        other => other,
+    }
+}
+
 pub fn format_duration_ns(started_ns: i64, ended_ns: i64) -> String {
     let delta_ms = (ended_ns.saturating_sub(started_ns)) / 1_000_000;
     if delta_ms < 1000 {

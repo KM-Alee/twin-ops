@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use super::coverage::CoverageReport;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ScanWarning {
     pub kind: String,
@@ -58,4 +60,5 @@ pub struct ScanResult {
     pub warning_count: usize,
     pub warnings: Vec<ScanWarning>,
     pub warning_details: Vec<ScanWarningDetail>,
+    pub coverage: CoverageReport,
 }

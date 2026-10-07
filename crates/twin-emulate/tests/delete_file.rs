@@ -34,6 +34,8 @@ fn delete_file_overlay_marks_only_file_hypothetically_deleted() {
         unknowns: vec![],
         file_in_graph: true,
         file_exists: true,
+        permission_gaps: 0,
+        recency: twin_core::EvidenceRecency::Unknown,
     };
     let report = emulate_delete_file(input);
     assert_eq!(report.overlay.node_overrides.len(), 1);
@@ -53,6 +55,8 @@ fn delete_file_classifies_configured_service_as_low_runtime_critical_restart() {
         unknowns: vec![],
         file_in_graph: true,
         file_exists: true,
+        permission_gaps: 0,
+        recency: twin_core::EvidenceRecency::Unknown,
     });
     assert_eq!(report.runtime_impacts.len(), 1);
     assert!(report.runtime_impacts[0]
@@ -74,6 +78,8 @@ fn delete_file_empty_configured_services_returns_unknown_impact() {
         unknowns: vec![],
         file_in_graph: true,
         file_exists: true,
+        permission_gaps: 0,
+        recency: twin_core::EvidenceRecency::Unknown,
     });
     assert_eq!(report.unknown_impacts.len(), 1);
     assert_eq!(report.risk_level, twin_core::RiskLevel::Low);
@@ -88,6 +94,8 @@ fn delete_file_scoring_keeps_risk_and_evidence_separate() {
         unknowns: vec![],
         file_in_graph: true,
         file_exists: true,
+        permission_gaps: 0,
+        recency: twin_core::EvidenceRecency::Unknown,
     });
     assert_eq!(report.safety_statement, DELETE_SAFETY_STATEMENT);
     assert_eq!(report.general_safety_statement, SAFETY_STATEMENT);

@@ -119,6 +119,9 @@ pub struct EmulateRestartArgs {
         help = "Service target (e.g. postgresql, service:postgresql.service)"
     )]
     pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
 }
 
 #[derive(Args)]
@@ -131,6 +134,9 @@ pub struct EmulateDeleteArgs {
         help = "Absolute file path or file: node id (e.g. /etc/nginx/nginx.conf)"
     )]
     pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
 }
 
 #[derive(Args)]
@@ -226,4 +232,7 @@ pub struct ImpactArgs {
         help = "Service or port target (e.g. postgresql, port:tcp:127.0.0.1:5432)"
     )]
     pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
 }
