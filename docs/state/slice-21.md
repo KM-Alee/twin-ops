@@ -5,7 +5,7 @@
 ## Implemented
 
 - Scan reads `{proc}/{pid}/maps` for each collected process. Absolute pathnames become `library:` nodes with observed `loads_library` edges from the process. `[heap]`, `[stack]`, `[vdso]`, `[vvar]`, `[vsyscall]`, other `[...]` entries, empty pathnames, and non-absolute pathnames are skipped. A bad line is skipped. A missing maps file leaves that process without library edges.
-- Package adapter v1 reads the dpkg database only: `{TWIN_HOST_ROOT}/var/lib/dpkg/status` and `{TWIN_HOST_ROOT}/var/lib/dpkg/info/*.list`. It does not execute dpkg, apt, rpm, or pacman. Installed packages that own a mapped library become `package:` nodes with observed `installed_by` edges. If the status file is absent or unreadable, scan records a warning and continues.
+- Package adapter v1 reads the dpkg database only: `{TWIN_HOST_ROOT}/var/lib/dpkg/status` and `{TWIN_HOST_ROOT}/var/lib/dpkg/info/*.list`. It does not execute dpkg, apt, rpm, or pacman. Installed packages that own a mapped library become `package:` nodes with observed `installed_by` edges. If the status file is absent or unreadable, scan records a warning and continues. The unsupported-distro warning is included in `warning_count` so the human scan report shows it.
 - When a service owns a process that loads a library installed by a package, scan infers `service DEPENDS_ON package`.
 - `twin graph libssl.so.3` resolves a library by basename, or by a `.so` / path suffix. `twin graph library:/usr/lib/libssl.so.3` addresses the node directly.
 - `twin impact package:openssl` lists the services that depend on the package (restart blast radius). Existing service and port impact is unchanged.

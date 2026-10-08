@@ -1034,11 +1034,13 @@ fn persist_scan(
     let mut warnings = aggregate_warnings(process_warnings);
     warnings.extend(aggregate_systemd_warnings(systemd_warnings));
     warnings.extend(aggregate_systemd_warnings(runtime_warnings));
+    let mut warning_count =
+        process_warnings.len() + systemd_warnings.len() + runtime_warnings.len();
     if let Some(warning) = library_notes.warning {
+        warning_count += warning.count;
         warnings.push(warning);
     }
     warnings.sort_by(|a, b| a.kind.cmp(&b.kind));
-    let warning_count = process_warnings.len() + systemd_warnings.len() + runtime_warnings.len();
     let total_observations =
         observations.len() + unit_observations.len() + runtime_observations.len();
     let coverage = super::coverage::from_scan_counts(

@@ -233,16 +233,24 @@ fn missing_dpkg_database_warns_and_keeps_libraries() {
     set_host_root(&host);
 
     let scan = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
-    let mentioned = scan.warning_details.iter().any(|warning| {
-        warning.detail.contains("unsupported") && warning.detail.contains("package manager")
-    }) || scan
-        .warnings
-        .iter()
-        .any(|warning| warning.kind.contains("package_manager"));
     assert!(
-        mentioned,
-        "warnings: {:?} {:?}",
-        scan.warnings, scan.warning_details
+        scan.warning_count >= 1,
+        "warning_count {}",
+        scan.warning_count
+    );
+    assert!(
+        scan.warnings
+            .iter()
+            .any(|warning| warning.kind == "package_manager_unsupported"),
+        "warnings: {:?}",
+        scan.warnings
+    );
+    assert!(
+        scan.warning_details.iter().any(|warning| {
+            warning.detail.contains("unsupported") && warning.detail.contains("package manager")
+        }),
+        "warning_details: {:?}",
+        scan.warning_details
     );
 
     let store = Store::open(&home.layout.db_file()).expect("open");

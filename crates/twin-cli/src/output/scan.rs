@@ -244,5 +244,11 @@ fn warning_parts(kind: &str, count: usize) -> (&'static str, String) {
     if let Some(kind) = SystemdWarningKind::from_aggregate_key(kind) {
         return kind.cli_summary(count);
     }
+    if kind == "package_manager_unsupported" {
+        return (
+            "package manager",
+            format!("{count} package manager unsupported"),
+        );
+    }
     ("other", format!("{count} {}", kind.replace('_', " ")))
 }

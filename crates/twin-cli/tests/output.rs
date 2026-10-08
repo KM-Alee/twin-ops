@@ -167,6 +167,24 @@ fn scan_render_warning_aggregation() {
 }
 
 #[test]
+fn scan_render_shows_unsupported_package_manager() {
+    let result = ScanResult {
+        started_at_ns: 1,
+        ended_at_ns: 2,
+        warning_count: 1,
+        warnings: vec![ScanWarning {
+            kind: "package_manager_unsupported".to_string(),
+            count: 1,
+        }],
+        ..Default::default()
+    };
+    let text = output::scan::render(&result);
+    assert!(text.contains("warnings"));
+    assert!(text.contains("package manager"));
+    assert!(text.contains("1 package manager unsupported"));
+}
+
+#[test]
 fn impact_render_groups_unknown_kinds() {
     let mut result = sample_impact_result();
     result.unknowns = vec![
