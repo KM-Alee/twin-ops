@@ -5,13 +5,14 @@ mod fill_mount;
 mod input;
 mod overlay;
 mod report;
+mod restart_container;
 mod restart_service;
 mod scoring;
 mod upgrade_package;
 
 pub use action::{
-    EmulationAction, DELETE_ACTION, DELETE_SAFETY_STATEMENT, FILL_DISK_ACTION,
-    FILL_DISK_SAFETY_STATEMENT, RESTART_ACTION, SAFETY_STATEMENT, UPGRADE_ACTION,
+    EmulationAction, CONTAINER_RESTART_SAFETY_STATEMENT, DELETE_ACTION, DELETE_SAFETY_STATEMENT,
+    FILL_DISK_ACTION, FILL_DISK_SAFETY_STATEMENT, RESTART_ACTION, SAFETY_STATEMENT, UPGRADE_ACTION,
     UPGRADE_SAFETY_STATEMENT,
 };
 pub use delete_file::emulate_delete_file;
@@ -26,6 +27,10 @@ pub use input::{
 pub use overlay::{GraphOverlay, InterruptedRelationship, NodeOverlay, OverlayNodeState};
 pub use report::{
     EmulationDomainReport, EmulationImpact, EmulationImpactPathReport, EmulationOverlaySummary,
+};
+pub use restart_container::{
+    emulate_restart_container, ContainerAffectedService, RestartContainerInput,
+    RestartContainerOverlayBuilder,
 };
 pub use restart_service::emulate_restart_service;
 pub use upgrade_package::{

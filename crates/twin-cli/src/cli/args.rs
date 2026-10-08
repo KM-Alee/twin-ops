@@ -49,6 +49,9 @@ pub struct DoctorArgs {
 
     #[arg(long, help = "Check kernel, BTF, capabilities, and exec tracing")]
     pub ebpf: bool,
+
+    #[arg(long, help = "Check the read-only Docker socket and container list")]
+    pub containers: bool,
 }
 
 #[derive(Args)]
@@ -93,7 +96,7 @@ pub struct EmulateArgs {
 
 #[derive(Subcommand)]
 pub enum EmulateActionArgs {
-    #[command(about = "Hypothetically restart a service (no action performed)")]
+    #[command(about = "Hypothetically restart a service or container (no action performed)")]
     Restart(EmulateRestartArgs),
     #[command(about = "Hypothetically delete a config file (no action performed)")]
     Delete(EmulateDeleteArgs),
@@ -124,7 +127,7 @@ pub struct EmulateRestartArgs {
 
     #[arg(
         value_name = "TARGET",
-        help = "Service target (e.g. postgresql, service:postgresql.service)"
+        help = "Service or container target (e.g. postgresql, service:postgresql.service, container:redis)"
     )]
     pub target: String,
 

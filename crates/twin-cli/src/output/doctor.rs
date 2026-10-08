@@ -163,6 +163,36 @@ pub fn render(result: &DoctorResult) -> String {
         out.tree_leaf(true, "scan quality", &format!("unavailable ({err})"));
     }
 
+    if let Some(containers) = &result.containers {
+        out.blank();
+        out.section("containers");
+        let socket_status = if containers.socket_present {
+            Status::Ok
+        } else {
+            Status::Warn
+        };
+        let api_status = if containers.listed {
+            Status::Ok
+        } else {
+            Status::Warn
+        };
+        let count = match containers.container_count {
+            Some(count) => format!("{count} listed"),
+            None => "not listed".to_string(),
+        };
+        out.tree_leaf(
+            false,
+            "socket",
+            &format!("{}  {}", status_tag(socket_status), containers.socket_path),
+        );
+        out.tree_leaf(
+            false,
+            "api",
+            &format!("{}  {count}", status_tag(api_status)),
+        );
+        out.tree_leaf(true, "mode", &containers.detail);
+    }
+
     if let Some(ebpf) = &result.ebpf {
         out.blank();
         out.section("eBPF");

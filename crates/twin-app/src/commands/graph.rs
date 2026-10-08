@@ -12,8 +12,8 @@ use crate::commands::evidence::{
 use crate::commands::resolve_service::{resolve_service_target, ServiceNotFoundContext};
 use crate::error::{AppError, GraphError};
 use crate::model::{
-    edge_summary, node_summary, GraphEvidenceLine, GraphNodeSummary, GraphOwnedNode, GraphResult,
-    GraphServiceResult,
+    edge_summary, node_summary, GraphContainerPort, GraphEvidenceLine, GraphNodeSummary,
+    GraphOwnedNode, GraphResult, GraphServiceResult,
 };
 use crate::model::{GraphEdgeSummary, GraphParentEdge};
 use crate::paths::{resolve_command_paths, TwinLayout};
@@ -78,6 +78,7 @@ fn graph_at(
             Some(NodeKind::Directory) => directory_neighborhood(&store, target),
             Some(NodeKind::Library) => library_neighborhood(&store, target),
             Some(NodeKind::Package) => package_neighborhood(&store, target),
+            Some(NodeKind::Container) => container_neighborhood(&store, target),
             Some(kind) => Err(AppError::UnsupportedGraphKind {
                 kind: kind.to_string(),
             }),
@@ -115,6 +116,8 @@ fn list_by_kind(store: &Store, kind: NodeKind) -> Result<GraphResult, AppError> 
         || kind == NodeKind::Directory
         || kind == NodeKind::Library
         || kind == NodeKind::Package
+        || kind == NodeKind::Container
+        || kind == NodeKind::Image
     {
         let mut nodes = summaries;
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -591,6 +594,65 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
     Ok(GraphResult::file(summary, configures, references, evidence))
+}
+
+fn container_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Container {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+    let mut image = None;
+    let mut ports = Vec::new();
+    let mut mounts = Vec::new();
+    let mut processes = Vec::new();
+    for row in store
+        .list_active_edges_from(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        let Some(peer) = store.get_node_typed(edge.to()).map_err(GraphError::Store)? else {
+            continue;
+        };
+        match edge.kind() {
+            EdgeKind::RunsImage => image = Some(owned_peer(&peer, &edge)),
+            EdgeKind::MapsPort => {
+                if let Some(port) = published_port(&edge) {
+                    ports.push(port);
+                }
+            }
+            EdgeKind::MountsVolume => mounts.push(owned_peer(&peer, &edge)),
+            EdgeKind::Owns => processes.push(owned_peer(&peer, &edge)),
+            _ => {}
+        }
+    }
+    ports.sort_by_key(|port| (port.host_port, port.port_id.clone()));
+    mounts.sort_by(|left, right| left.id.cmp(&right.id));
+    processes.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(GraphResult::container(
+        node_summary(node.id(), node.label()),
+        image,
+        ports,
+        mounts,
+        processes,
+    ))
+}
+
+fn published_port(edge: &GraphEdge) -> Option<GraphContainerPort> {
+    let value: serde_json::Value = serde_json::from_str(edge.metadata().as_str()).ok()?;
+    let container_port = u16::try_from(value.get("container_port")?.as_u64()?).ok()?;
+    let host_port = u16::try_from(value.get("host_port")?.as_u64()?).ok()?;
+    let host_ip = value.get("host_ip")?.as_str()?.to_string();
+    Some(GraphContainerPort {
+        container_port,
+        host_ip,
+        host_port,
+        port_id: edge.to().to_string(),
+    })
 }
 
 fn library_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {

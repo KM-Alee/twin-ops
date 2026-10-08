@@ -224,6 +224,11 @@ fn persist_scan(
         warning: None,
         detail: None,
     };
+    let mut container_notes = super::scan_containers::ContainerScanNotes {
+        warning: None,
+        detail: None,
+        unavailable: false,
+    };
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
     let mut cgroup_correction_count = 0usize;
@@ -963,6 +968,12 @@ fn persist_scan(
                 sample.proc_root,
                 scan_time,
             )?;
+            container_notes = super::scan_containers::persist_containers_in_scan(
+                store,
+                &mut history,
+                &mut edge_cache,
+                scan_time,
+            )?;
 
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
@@ -1040,16 +1051,27 @@ fn persist_scan(
         warning_count += warning.count;
         warnings.push(warning);
     }
+    if let Some(warning) = container_notes.warning {
+        warning_count += warning.count;
+        warnings.push(warning);
+    }
     warnings.sort_by(|a, b| a.kind.cmp(&b.kind));
     let total_observations =
         observations.len() + unit_observations.len() + runtime_observations.len();
-    let coverage = super::coverage::from_scan_counts(
+    let mut coverage = super::coverage::from_scan_counts(
         process_count,
         process_warnings,
         runtime_batch.dbus_available(),
         unmapped_active_socket_count,
         &super::coverage::AvailabilityProbe::host(),
     );
+    if container_notes.unavailable {
+        coverage.unavailable_collectors.push("docker".to_string());
+        coverage.unavailable_collectors.sort();
+        coverage.unavailable_collectors.dedup();
+    } else {
+        coverage.docker_available = true;
+    }
     Ok((
         ScanResult {
             samples_requested: 1,
@@ -1104,6 +1126,9 @@ fn persist_scan(
                     });
                 }
                 if let Some(detail) = library_notes.detail {
+                    details.push(detail);
+                }
+                if let Some(detail) = container_notes.detail {
                     details.push(detail);
                 }
                 details

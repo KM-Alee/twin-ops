@@ -108,6 +108,23 @@ pub struct GraphLibraryResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GraphContainerPort {
+    pub container_port: u16,
+    pub host_ip: String,
+    pub host_port: u16,
+    pub port_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphContainerResult {
+    pub container: GraphNodeSummary,
+    pub image: Option<GraphOwnedNode>,
+    pub ports: Vec<GraphContainerPort>,
+    pub mounts: Vec<GraphOwnedNode>,
+    pub processes: Vec<GraphOwnedNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphPackageResult {
     pub package: GraphNodeSummary,
     pub libraries: Vec<GraphOwnedNode>,
@@ -156,6 +173,7 @@ pub enum GraphResult {
     Directory(GraphDirectoryResult),
     Library(GraphLibraryResult),
     Package(GraphPackageResult),
+    Container(GraphContainerResult),
 }
 
 impl GraphResult {
@@ -242,6 +260,22 @@ impl GraphResult {
             library,
             loaded_by,
             installed_by,
+        })
+    }
+
+    pub fn container(
+        container: GraphNodeSummary,
+        image: Option<GraphOwnedNode>,
+        ports: Vec<GraphContainerPort>,
+        mounts: Vec<GraphOwnedNode>,
+        processes: Vec<GraphOwnedNode>,
+    ) -> Self {
+        Self::Container(GraphContainerResult {
+            container,
+            image,
+            ports,
+            mounts,
+            processes,
         })
     }
 

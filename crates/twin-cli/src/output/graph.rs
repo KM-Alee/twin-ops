@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphDirectoryResult, GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult,
-    GraphNodeResult, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult, GraphUnixSocketResult,
+    GraphContainerResult, GraphDirectoryResult, GraphFileResult, GraphLibraryResult,
+    GraphListResult, GraphMountResult, GraphNodeResult, GraphOwnedNode, GraphPackageResult,
+    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
 use twin_app::{GraphEvidenceLine, RuntimeDependency};
@@ -26,6 +26,7 @@ pub fn render_with_scan(result: &GraphResult, scan: Option<ScanFreshness>) -> St
         GraphResult::Directory(directory) => render_directory(directory, scan),
         GraphResult::Library(library) => render_library(library, scan),
         GraphResult::Package(package) => render_package(package, scan),
+        GraphResult::Container(container) => render_container(container, scan),
     }
 }
 
@@ -51,6 +52,8 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
         twin_core::NodeKind::Port => "Port list",
         twin_core::NodeKind::Library => "Library list",
         twin_core::NodeKind::Package => "Package list",
+        twin_core::NodeKind::Container => "Container list",
+        twin_core::NodeKind::Image => "Image list",
         other => return format!("Unsupported list kind: {other}"),
     };
     let out = graph_header(&format!("{title}, {} nodes", list.nodes.len()), scan);
@@ -79,6 +82,8 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
         || list.kind == twin_core::NodeKind::Port
         || list.kind == twin_core::NodeKind::Library
         || list.kind == twin_core::NodeKind::Package
+        || list.kind == twin_core::NodeKind::Container
+        || list.kind == twin_core::NodeKind::Image
     {
         let mut nodes = list.nodes.clone();
         nodes.sort_by_key(|n| n.id.clone());
@@ -250,6 +255,60 @@ fn render_file(file: &GraphFileResult, scan: Option<ScanFreshness>) -> String {
     render_dependency_section(&mut lines, "configures", file.configures.iter());
     render_dependency_section(&mut lines, "references", file.references.iter());
     append_evidence_lines(&mut lines, &file.evidence);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_container(container: &GraphContainerResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("container neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(container.container.id.clone());
+    lines.push(String::new());
+    lines.push("Runs image".to_string());
+    match &container.image {
+        Some(image) => lines.push(format!("└── {}", image.id)),
+        None => lines.push("└── (no image recorded)".to_string()),
+    }
+    lines.push(String::new());
+    lines.push("Maps ports".to_string());
+    if container.ports.is_empty() {
+        lines.push("└── (no published ports)".to_string());
+    } else {
+        for (index, port) in container.ports.iter().enumerate() {
+            let branch = if index + 1 == container.ports.len() {
+                "└──"
+            } else {
+                "├──"
+            };
+            lines.push(format!(
+                "{branch} container {} -> host {}:{}",
+                port.container_port, port.host_ip, port.host_port
+            ));
+        }
+    }
+    if !container.mounts.is_empty() {
+        lines.push(String::new());
+        lines.push("Mounts".to_string());
+        for (index, mount) in container.mounts.iter().enumerate() {
+            let branch = if index + 1 == container.mounts.len() {
+                "└──"
+            } else {
+                "├──"
+            };
+            lines.push(format!("{branch} {}", mount.id));
+        }
+    }
+    if !container.processes.is_empty() {
+        lines.push(String::new());
+        lines.push("Owns".to_string());
+        for (index, process) in container.processes.iter().enumerate() {
+            let branch = if index + 1 == container.processes.len() {
+                "└──"
+            } else {
+                "├──"
+            };
+            lines.push(format!("{branch} {}", process.id));
+        }
+    }
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 

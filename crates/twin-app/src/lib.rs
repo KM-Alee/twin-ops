@@ -9,10 +9,11 @@ pub use error::{
     WatchError,
 };
 pub use model::{
-    CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult, DoctorCore,
-    DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult, EmulationImpact,
-    EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
-    EvidenceStrengthView, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
+    CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult,
+    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions,
+    DoctorResult, EmulationImpact, EmulationImpactPathView, EmulationOverlayNode,
+    EmulationOverlaySummary, EmulationResult, EvidenceStrengthView, GraphContainerPort,
+    GraphContainerResult, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
     GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult, GraphNodeResult,
     GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
     GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
@@ -60,6 +61,30 @@ pub fn doctor_in(
 
 pub fn doctor_ebpf(config_override: Option<&std::path::Path>) -> Result<DoctorResult, AppError> {
     commands::doctor::run_ebpf_home(config_override)
+}
+
+pub fn doctor_flags(
+    config_override: Option<&std::path::Path>,
+    include_ebpf: bool,
+    include_containers: bool,
+) -> Result<DoctorResult, AppError> {
+    let layout = TwinLayout::from_xdg().map_err(AppError::Paths)?;
+    doctor_flags_in(&layout, config_override, include_ebpf, include_containers)
+}
+
+pub fn doctor_flags_in(
+    layout: &TwinLayout,
+    config_override: Option<&std::path::Path>,
+    include_ebpf: bool,
+    include_containers: bool,
+) -> Result<DoctorResult, AppError> {
+    commands::doctor::run_flags(
+        layout,
+        config_override,
+        include_ebpf,
+        include_containers,
+        None,
+    )
 }
 
 pub fn doctor_ebpf_in(

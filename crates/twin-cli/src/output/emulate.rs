@@ -26,6 +26,9 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     if result.action == "upgrade" {
         return render_upgrade_with_scan(result, scan);
     }
+    if result.target.starts_with("container:") {
+        return render_container_restart(result, scan);
+    }
     let mut out = Lines::new();
     out.title(&format!("twin emulate restart {}", result.target_label));
     let status = emulate_status(result);
@@ -93,6 +96,62 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(true, "status", &result.safety_statement);
+    out.into_string()
+}
+
+fn render_container_restart(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title(&format!("Emulation restart {}", result.target));
+    let status = emulate_status(result);
+    let summary = if result.transient_impacts.is_empty() {
+        format!(
+            "{} risk, nothing connects to a published port",
+            result.risk.level
+        )
+    } else {
+        format!(
+            "{} risk, {} affected",
+            result.risk.level,
+            result.transient_impacts.len()
+        )
+    };
+    out.status_row(status, "summary", &summary);
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.blank();
+    out.section(&format!(
+        "Risk: {}",
+        result.risk.level.to_string().to_uppercase()
+    ));
+    if result.risk.reasons.is_empty() {
+        out.tree_leaf(true, "reason", "no scoring reasons recorded");
+    } else {
+        for (index, reason) in result.risk.reasons.iter().enumerate() {
+            out.tree_leaf(index + 1 == result.risk.reasons.len(), "reason", reason);
+        }
+    }
+    out.blank();
+    out.section("Affected");
+    if result.transient_impacts.is_empty() {
+        out.tree_leaf(true, "status", "nothing connects to a published port");
+    } else {
+        for (index, impact) in result.transient_impacts.iter().enumerate() {
+            out.tree_leaf(
+                index + 1 == result.transient_impacts.len(),
+                &impact.id,
+                &impact.statement,
+            );
+        }
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", "Nothing was restarted.");
     out.into_string()
 }
 

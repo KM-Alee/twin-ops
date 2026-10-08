@@ -61,6 +61,23 @@ fn kind_roundtrip() {
     assert!(NodeId::from_str("library:libssl.so.3").is_err());
     assert!(NodeId::from_str("package:").is_err());
     assert!(NodeId::from_str("package:openssl/libssl").is_err());
+    assert_eq!(NodeId::container("redis").as_str(), "container:redis");
+    assert_eq!(NodeId::container("redis").kind(), Some(NodeKind::Container));
+    assert_eq!(
+        NodeId::from_str("container:redis")
+            .expect("container")
+            .as_str(),
+        "container:redis"
+    );
+    assert!(NodeId::from_str("container:").is_err());
+    assert!(NodeId::from_str("container:docker:redis").is_err());
+    assert_eq!(NodeId::image("redis:7").as_str(), "image:redis:7");
+    assert_eq!(NodeId::image("redis:7").kind(), Some(NodeKind::Image));
+    assert_eq!(
+        NodeId::from_str("image:redis:7").expect("image").as_str(),
+        "image:redis:7"
+    );
+    assert!(NodeId::from_str("image:").is_err());
     assert_eq!(
         NodeId::from_str("mount:/var").expect("mount").as_str(),
         "mount:/var"

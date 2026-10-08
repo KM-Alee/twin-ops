@@ -171,6 +171,34 @@ mod tests {
     }
 
     #[test]
+    fn container_id_is_a_node() {
+        let req = request(GraphArgs {
+            config: None,
+            evidence: false,
+            kind: None,
+            target: Some("container:redis".to_string()),
+        });
+        assert_eq!(
+            req.target.as_ref().map(|id| id.as_str().to_string()),
+            Some("container:redis".to_string())
+        );
+    }
+
+    #[test]
+    fn image_id_is_a_node() {
+        let req = request(GraphArgs {
+            config: None,
+            evidence: false,
+            kind: None,
+            target: Some("image:redis:7".to_string()),
+        });
+        assert_eq!(
+            req.target.as_ref().map(|id| id.as_str().to_string()),
+            Some("image:redis:7".to_string())
+        );
+    }
+
+    #[test]
     fn service_shorthand_passes_through_as_search() {
         let req = request(GraphArgs {
             config: None,

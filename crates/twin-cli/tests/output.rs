@@ -66,6 +66,7 @@ fn doctor_render_sections() {
         scan_quality: None,
         scan_quality_error: None,
         ebpf: None,
+        containers: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("twin doctor"));
@@ -310,6 +311,7 @@ fn doctor_render_scan_quality_degraded() {
         }),
         scan_quality_error: None,
         ebpf: None,
+        containers: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("scan quality"));
@@ -345,6 +347,7 @@ fn doctor_render_ephemeral_capture_recommendation() {
         }),
         scan_quality_error: None,
         ebpf: None,
+        containers: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("ephemeral capture"));
@@ -516,6 +519,86 @@ fn emulate_fill_disk_render_names_risk_and_affected_services() {
     assert!(text.contains("postgresql.service uses /var/lib/postgresql"));
     assert!(text.contains("No disk was written."));
     assert!(text.contains("No action was performed."));
+}
+
+#[test]
+fn graph_container_render_shows_image_port_and_mount() {
+    let result = GraphResult::container(
+        GraphNodeSummary {
+            id: "container:redis".to_string(),
+            label: "redis".to_string(),
+        },
+        Some(GraphOwnedNode {
+            id: "image:redis:7".to_string(),
+            label: "redis:7".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }),
+        vec![twin_app::GraphContainerPort {
+            container_port: 6379,
+            host_ip: "0.0.0.0".to_string(),
+            host_port: 6379,
+            port_id: "port:tcp:0.0.0.0:6379".to_string(),
+        }],
+        vec![GraphOwnedNode {
+            id: "directory:/data".to_string(),
+            label: "/data".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+        vec![],
+    );
+    let text = output::graph::render(&result);
+    assert!(text.contains("container neighborhood"));
+    assert!(text.contains("container:redis"));
+    assert!(text.contains("Runs image"));
+    assert!(text.contains("image:redis:7"));
+    assert!(text.contains("Maps ports"));
+    assert!(text.contains("container 6379 -> host 0.0.0.0:6379"));
+    assert!(text.contains("directory:/data"));
+}
+
+#[test]
+fn emulate_container_restart_render_states_nothing_was_restarted() {
+    let mut result = sample_emulation_result();
+    result.target = "container:redis".to_string();
+    result.target_label = "redis".to_string();
+    result.action_performed = false;
+    result.safety_statement = "No container was restarted.".to_string();
+    result.risk.level = twin_core::RiskLevel::High;
+    result.transient_impacts = vec![EmulationImpact {
+        id: "service:api.service".to_string(),
+        label: "api.service".to_string(),
+        statement: "service:api.service connects to redis port".to_string(),
+        path: String::new(),
+        evidence: vec![],
+    }];
+    let text = output::emulate::render(&result);
+    assert!(text.contains("Emulation restart container:redis"));
+    assert!(text.contains("Risk: HIGH"));
+    assert!(text.contains("Affected"));
+    assert!(text.contains("service:api.service connects to redis port"));
+    assert!(text.contains("No container was restarted."));
+    assert!(text.contains("Nothing was restarted."));
+}
+
+#[test]
+fn doctor_containers_render_when_docker_is_absent() {
+    let mut result = sample_doctor_result();
+    result.containers = Some(twin_app::DoctorContainers {
+        socket_present: false,
+        socket_path: "/var/run/docker.sock".to_string(),
+        listed: false,
+        container_count: None,
+        detail: "socket not found; docker inspect was not attempted".to_string(),
+    });
+    let text = output::doctor::render(&result);
+    assert!(text.contains("containers"));
+    assert!(text.contains("/var/run/docker.sock"));
+    assert!(text.contains("socket not found"));
+    assert!(text.contains("warn"));
 }
 
 #[test]
@@ -1760,5 +1843,6 @@ fn sample_doctor_result() -> DoctorResult {
         scan_quality: None,
         scan_quality_error: None,
         ebpf: None,
+        containers: None,
     }
 }

@@ -233,6 +233,89 @@ impl GraphEdge {
         )
     }
 
+    pub fn observed_runs_image(
+        container: &NodeId,
+        image: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            container,
+            EdgeKind::RunsImage,
+            image,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            r#"{"source":"docker"}"#,
+        )
+    }
+
+    pub fn observed_maps_port(
+        container: &NodeId,
+        port: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        publish: &PortPublish<'_>,
+    ) -> Self {
+        let metadata = serde_json::json!({
+            "source": "docker",
+            "container_port": publish.container_port,
+            "host_ip": publish.host_ip,
+            "host_port": publish.host_port,
+            "protocol": publish.protocol,
+        })
+        .to_string();
+        counted_edge(
+            container,
+            EdgeKind::MapsPort,
+            port,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            &metadata,
+        )
+    }
+
+    pub fn observed_mounts_volume(
+        container: &NodeId,
+        directory: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        destination: &str,
+    ) -> Self {
+        let metadata = serde_json::json!({
+            "source": "docker",
+            "destination": destination,
+        })
+        .to_string();
+        counted_edge(
+            container,
+            EdgeKind::MountsVolume,
+            directory,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            &metadata,
+        )
+    }
+
+    pub fn observed_container_owns_process(
+        container: &NodeId,
+        process: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            container,
+            EdgeKind::Owns,
+            process,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            r#"{"source":"docker"}"#,
+        )
+    }
+
     pub fn observed_installed_by(
         library: &NodeId,
         package: &NodeId,
@@ -685,6 +768,13 @@ impl GraphEdge {
     pub fn metadata(&self) -> &GraphMetadata {
         &self.metadata
     }
+}
+
+pub struct PortPublish<'a> {
+    pub container_port: u16,
+    pub host_ip: &'a str,
+    pub host_port: u16,
+    pub protocol: &'a str,
 }
 
 fn service_path_edge(

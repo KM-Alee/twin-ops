@@ -5,9 +5,10 @@ use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind,
 };
 use twin_emulate::{
-    emulate_delete_file, emulate_fill_mount, emulate_restart_service, emulate_upgrade_package,
-    DeleteFileInput, EmulationConfiguredService, EmulationEvidenceLine, EmulationImpactPath,
-    EmulationNode, EmulationPathStep, FillAffectedService, FillMountInput, RestartPathScoringInput,
+    emulate_delete_file, emulate_fill_mount, emulate_restart_container, emulate_restart_service,
+    emulate_upgrade_package, ContainerAffectedService, DeleteFileInput, EmulationConfiguredService,
+    EmulationEvidenceLine, EmulationImpactPath, EmulationNode, EmulationPathStep,
+    FillAffectedService, FillMountInput, RestartContainerInput, RestartPathScoringInput,
     RestartServiceInput, UpgradeAffectedService, UpgradePackageInput,
 };
 use twin_store::Store;
@@ -62,6 +63,14 @@ fn emulate_at(
                 .ok_or_else(|| EmulateError::NodeNotFound {
                     id: resolved.clone(),
                 })?;
+            if node.kind() == NodeKind::Container {
+                return restart_container_emulate(
+                    &store,
+                    &resolved,
+                    node.label(),
+                    request.show_evidence,
+                );
+            }
             if node.kind() != NodeKind::Service {
                 return Err(EmulateError::UnsupportedTarget {
                     kind: node.kind().to_string(),
@@ -498,6 +507,38 @@ fn load_configured_by_evidence(
         });
     }
     Ok(lines)
+}
+
+fn restart_container_emulate(
+    store: &Store,
+    target: &NodeId,
+    label: &str,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
+    let facts = super::scan_containers::container_impact_facts(store, target)
+        .map_err(EmulateError::Store)?;
+    let affected = facts
+        .affected
+        .into_iter()
+        .map(|service| ContainerAffectedService {
+            id: service.service,
+            label: service.label,
+            edge_id: service.edge_id,
+            kind: service.kind,
+            port: service.port,
+        })
+        .collect();
+    let report = emulate_restart_container(RestartContainerInput {
+        container: EmulationNode {
+            id: target.clone(),
+            label: label.to_string(),
+        },
+        container_in_graph: facts.in_graph,
+        affected,
+    });
+    let mut result = EmulationResult::from_domain(report, Vec::new());
+    result.show_evidence = show_evidence;
+    Ok(result)
 }
 
 fn restart_service_emulate(

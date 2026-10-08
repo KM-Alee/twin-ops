@@ -19,6 +19,8 @@ pub enum NodeKind {
     Directory,
     Library,
     Package,
+    Container,
+    Image,
 }
 
 impl fmt::Display for NodeKind {
@@ -35,6 +37,8 @@ impl fmt::Display for NodeKind {
             Self::Directory => "directory",
             Self::Library => "library",
             Self::Package => "package",
+            Self::Container => "container",
+            Self::Image => "image",
         })
     }
 }
@@ -55,6 +59,8 @@ impl FromStr for NodeKind {
             "directory" => Ok(Self::Directory),
             "library" => Ok(Self::Library),
             "package" => Ok(Self::Package),
+            "container" => Ok(Self::Container),
+            "image" => Ok(Self::Image),
             other => Err(ParseError::Enum {
                 kind: "NodeKind",
                 value: other.to_string(),
@@ -157,6 +163,14 @@ impl NodeId {
         Self(format!("package:{name}"))
     }
 
+    pub fn container(name: &str) -> Self {
+        Self(format!("container:{name}"))
+    }
+
+    pub fn image(reference: &str) -> Self {
+        Self(format!("image:{reference}"))
+    }
+
     pub fn cgroup(path: &str) -> Self {
         Self(format!("cgroup:{}", lexical_canonical(path)))
     }
@@ -192,6 +206,12 @@ impl NodeId {
         }
         if s.starts_with("package:") && s.len() > "package:".len() {
             return Some(NodeKind::Package);
+        }
+        if s.starts_with("container:") && s.len() > "container:".len() {
+            return Some(NodeKind::Container);
+        }
+        if s.starts_with("image:") && s.len() > "image:".len() {
+            return Some(NodeKind::Image);
         }
         if s.starts_with("cgroup:") && s.len() > "cgroup:".len() {
             return Some(NodeKind::Cgroup);
@@ -307,6 +327,20 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
         return Ok(());
     }
 
+    if let Some(name) = s.strip_prefix("container:") {
+        if !is_container_name(name) {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(reference) = s.strip_prefix("image:") {
+        if !is_image_reference(reference) {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
     if s.starts_with("port:tcp:") {
         let rest = s.strip_prefix("port:tcp:").ok_or_else(invalid)?;
         let (ip, port) = split_port_host_port(rest).map_err(|_| invalid())?;
@@ -348,6 +382,21 @@ fn split_port_host_port(rest: &str) -> Result<(String, u16), ParseError> {
     }
     let port = port_str.parse::<u16>().map_err(|_| invalid())?;
     Ok((ip.to_string(), port))
+}
+
+fn is_container_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn is_image_reference(reference: &str) -> bool {
+    !reference.is_empty()
+        && reference.len() <= 256
+        && !reference.chars().any(|c| c.is_whitespace() || c == '|')
 }
 
 fn is_package_name(name: &str) -> bool {

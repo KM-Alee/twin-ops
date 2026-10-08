@@ -250,5 +250,8 @@ fn warning_parts(kind: &str, count: usize) -> (&'static str, String) {
             format!("{count} package manager unsupported"),
         );
     }
+    if kind == "docker_unavailable" {
+        return ("docker", format!("{count} docker inspect unavailable"));
+    }
     ("other", format!("{count} {}", kind.replace('_', " ")))
 }

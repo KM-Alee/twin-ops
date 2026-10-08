@@ -13,6 +13,17 @@ pub struct DoctorResult {
     pub scan_quality_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ebpf: Option<DoctorEbpf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub containers: Option<DoctorContainers>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorContainers {
+    pub socket_present: bool,
+    pub socket_path: String,
+    pub listed: bool,
+    pub container_count: Option<usize>,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

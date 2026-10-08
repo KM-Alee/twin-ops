@@ -35,6 +35,7 @@ pub fn clear_scan_env() {
         std::env::remove_var("TWIN_SYSTEMD_UNIT_ROOT");
         std::env::remove_var("TWIN_HOST_ROOT");
         std::env::remove_var("TWIN_SYSTEMD_CGROUP_MAP");
+        std::env::remove_var("TWIN_DOCKER_FIXTURE");
     }
 }
 use twin_app::paths::TwinLayout;

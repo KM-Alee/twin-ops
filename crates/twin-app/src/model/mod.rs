@@ -14,18 +14,19 @@ mod what_changed_result;
 pub use coverage::{CoverageReport, CoverageUnknown};
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
-    DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult,
-    PermissionMode,
+    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions,
+    DoctorResult, PermissionMode,
 };
 pub use emulation_result::{
     EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary,
     EmulationResult,
 };
 pub use graph_result::{
-    edge_summary, node_summary, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
-    GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult, GraphNodeResult,
-    GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult, GraphUnixSocketResult, RuntimeDependency,
+    edge_summary, node_summary, GraphContainerPort, GraphContainerResult, GraphDirectoryResult,
+    GraphEdgeSummary, GraphEvidenceLine, GraphFileResult, GraphLibraryResult, GraphListResult,
+    GraphMountResult, GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphPackageResult,
+    GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult,
+    RuntimeDependency,
 };
 pub use impact_result::{
     EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,

@@ -76,11 +76,7 @@ fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
 }
 
 fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
-    let result = if args.ebpf {
-        twin_app::doctor_ebpf(args.config.as_deref())
-    } else {
-        twin_app::doctor(args.config.as_deref())
-    };
+    let result = twin_app::doctor_flags(args.config.as_deref(), args.ebpf, args.containers);
     match result {
         Ok(result) => {
             emit(global.json, &result, output::doctor::render);

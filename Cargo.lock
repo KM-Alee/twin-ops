@@ -1234,6 +1234,7 @@ dependencies = [
  "toml",
  "twin-collectors",
  "twin-config",
+ "twin-container",
  "twin-core",
  "twin-ebpf",
  "twin-emulate",
@@ -1274,6 +1275,16 @@ dependencies = [
 [[package]]
 name = "twin-config"
 version = "0.1.0"
+
+[[package]]
+name = "twin-container"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "twin-core",
+]
 
 [[package]]
 name = "twin-core"

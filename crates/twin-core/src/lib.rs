@@ -20,7 +20,7 @@ pub use evidence::{
     factors_from_lines, score_capped_evidence, score_evidence, EvidenceAdjustments,
     EvidenceExplanation, EvidenceFactors, EvidenceLineRef, EvidenceRecency, EvidenceSourceKind,
 };
-pub use graph_edge::{GraphEdge, GraphEdgeParts};
+pub use graph_edge::{GraphEdge, GraphEdgeParts, PortPublish};
 pub use graph_metadata::GraphMetadata;
 pub use graph_node::{GraphNode, GraphNodeParts};
 pub use id::{CollectorName, ObservationId, TimestampNs};

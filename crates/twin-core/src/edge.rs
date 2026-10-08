@@ -22,6 +22,9 @@ pub enum EdgeKind {
     Uses,
     LoadsLibrary,
     InstalledBy,
+    RunsImage,
+    MapsPort,
+    MountsVolume,
 }
 
 impl fmt::Display for EdgeKind {
@@ -41,6 +44,9 @@ impl fmt::Display for EdgeKind {
             Self::Uses => "uses",
             Self::LoadsLibrary => "loads_library",
             Self::InstalledBy => "installed_by",
+            Self::RunsImage => "runs_image",
+            Self::MapsPort => "maps_port",
+            Self::MountsVolume => "mounts_volume",
         })
     }
 }
@@ -64,6 +70,9 @@ impl FromStr for EdgeKind {
             "uses" => Ok(Self::Uses),
             "loads_library" => Ok(Self::LoadsLibrary),
             "installed_by" => Ok(Self::InstalledBy),
+            "runs_image" => Ok(Self::RunsImage),
+            "maps_port" => Ok(Self::MapsPort),
+            "mounts_volume" => Ok(Self::MountsVolume),
             other => Err(ParseError::Enum {
                 kind: "EdgeKind",
                 value: other.to_string(),

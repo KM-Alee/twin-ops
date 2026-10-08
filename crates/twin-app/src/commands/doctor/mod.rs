@@ -1,3 +1,4 @@
+mod containers;
 mod core;
 mod database;
 mod permissions;
@@ -7,11 +8,33 @@ use std::path::Path;
 use twin_ebpf::EbpfFacts;
 
 use crate::error::AppError;
-use crate::model::{DoctorEbpf, DoctorEbpfCheck, DoctorResult};
+use crate::model::{DoctorContainers, DoctorEbpf, DoctorEbpfCheck, DoctorResult};
 use crate::paths::TwinLayout;
 
 pub fn run(layout: &TwinLayout, config_override: Option<&Path>) -> Result<DoctorResult, AppError> {
-    assemble(layout, config_override, None)
+    run_flags(layout, config_override, false, false, None)
+}
+
+pub fn run_flags(
+    layout: &TwinLayout,
+    config_override: Option<&Path>,
+    include_ebpf: bool,
+    include_containers: bool,
+    ebpf_facts: Option<EbpfFacts>,
+) -> Result<DoctorResult, AppError> {
+    let ebpf = if include_ebpf {
+        let facts = ebpf_facts.unwrap_or_else(twin_ebpf::host_facts);
+        let report = twin_ebpf::assess(&facts);
+        Some(map_report(&report))
+    } else {
+        None
+    };
+    let containers = if include_containers {
+        Some(containers::host())
+    } else {
+        None
+    };
+    assemble(layout, config_override, ebpf, containers)
 }
 
 pub fn run_ebpf(
@@ -19,9 +42,7 @@ pub fn run_ebpf(
     config_override: Option<&Path>,
     facts: Option<EbpfFacts>,
 ) -> Result<DoctorResult, AppError> {
-    let facts = facts.unwrap_or_else(twin_ebpf::host_facts);
-    let report = twin_ebpf::assess(&facts);
-    assemble(layout, config_override, Some(map_report(&report)))
+    run_flags(layout, config_override, true, false, facts)
 }
 
 pub fn run_home(config_override: Option<&Path>) -> Result<DoctorResult, AppError> {
@@ -38,6 +59,7 @@ fn assemble(
     layout: &TwinLayout,
     config_override: Option<&Path>,
     ebpf: Option<DoctorEbpf>,
+    containers: Option<DoctorContainers>,
 ) -> Result<DoctorResult, AppError> {
     let config_path = layout.config_file(config_override);
     let db_path = layout.db_file();
@@ -63,6 +85,7 @@ fn assemble(
         scan_quality,
         scan_quality_error,
         ebpf,
+        containers,
     })
 }
 

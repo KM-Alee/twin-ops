@@ -26,6 +26,8 @@ fn all_variants_roundtrip() {
         NodeKind::Directory,
         NodeKind::Library,
         NodeKind::Package,
+        NodeKind::Container,
+        NodeKind::Image,
     ]);
     roundtrip(&[NodeState::Active, NodeState::Stale, NodeState::Gone]);
     roundtrip(&[
@@ -43,6 +45,9 @@ fn all_variants_roundtrip() {
         EdgeKind::Uses,
         EdgeKind::LoadsLibrary,
         EdgeKind::InstalledBy,
+        EdgeKind::RunsImage,
+        EdgeKind::MapsPort,
+        EdgeKind::MountsVolume,
     ]);
     roundtrip(&[
         EdgeClass::Observed,

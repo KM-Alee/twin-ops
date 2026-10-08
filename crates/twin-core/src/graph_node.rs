@@ -179,6 +179,44 @@ impl GraphNode {
         }
     }
 
+    pub fn container(name: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::container(name);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind: NodeKind::Container,
+            label: name.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"docker"}"#),
+        }
+    }
+
+    pub fn image(reference: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::image(reference);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind: NodeKind::Image,
+            label: reference.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"docker"}"#),
+        }
+    }
+
     pub fn package(name: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::package(name);
         let (first_seen, valid_from) = match existing {
