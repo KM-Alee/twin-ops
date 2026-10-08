@@ -67,6 +67,7 @@ fn doctor_render_sections() {
         scan_quality_error: None,
         ebpf: None,
         containers: None,
+        k8s: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("twin doctor"));
@@ -312,6 +313,7 @@ fn doctor_render_scan_quality_degraded() {
         scan_quality_error: None,
         ebpf: None,
         containers: None,
+        k8s: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("scan quality"));
@@ -348,6 +350,7 @@ fn doctor_render_ephemeral_capture_recommendation() {
         scan_quality_error: None,
         ebpf: None,
         containers: None,
+        k8s: None,
     };
     let text = output::doctor::render(&result);
     assert!(text.contains("ephemeral capture"));
@@ -1844,5 +1847,6 @@ fn sample_doctor_result() -> DoctorResult {
         scan_quality_error: None,
         ebpf: None,
         containers: None,
+        k8s: None,
     }
 }

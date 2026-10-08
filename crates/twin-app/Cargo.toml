@@ -17,6 +17,7 @@ twin-store = { workspace = true }
 twin-emulate = { workspace = true }
 twin-ebpf = { workspace = true }
 twin-container = { workspace = true }
+twin-k8s = { workspace = true }
 twin-test = { workspace = true }
 twin-config = { workspace = true }
 uuid = { workspace = true }

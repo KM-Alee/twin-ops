@@ -199,11 +199,21 @@ impl GraphNode {
     }
 
     pub fn image(reference: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        Self::image_sourced(reference, seen_at, existing, "docker")
+    }
+
+    pub fn image_sourced(
+        reference: &str,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        source: &str,
+    ) -> Self {
         let id = NodeId::image(reference);
         let (first_seen, valid_from) = match existing {
             Some(node) => (node.first_seen, node.valid_from),
             None => (seen_at, seen_at),
         };
+        let metadata = serde_json::json!({ "source": source }).to_string();
         Self {
             id,
             kind: NodeKind::Image,
@@ -213,7 +223,32 @@ impl GraphNode {
             last_seen: seen_at,
             valid_from,
             valid_to: None,
-            metadata: GraphMetadata::from_json(r#"{"source":"docker"}"#),
+            metadata: GraphMetadata::from_json(metadata),
+        }
+    }
+
+    pub fn k8s(
+        id: NodeId,
+        kind: NodeKind,
+        label: &str,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        metadata: &str,
+    ) -> Self {
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind,
+            label: label.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(metadata),
         }
     }
 

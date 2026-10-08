@@ -1238,6 +1238,7 @@ dependencies = [
  "twin-core",
  "twin-ebpf",
  "twin-emulate",
+ "twin-k8s",
  "twin-observation",
  "twin-store",
  "twin-test",
@@ -1316,6 +1317,17 @@ dependencies = [
  "serde",
  "thiserror",
  "twin-core",
+]
+
+[[package]]
+name = "twin-k8s"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

@@ -5,23 +5,24 @@ mod model;
 pub mod paths;
 
 pub use error::{
-    AppError, EmulateError, GraphError, ImpactError, ScanError, TemporalError, TestCmdError,
-    WatchError,
+    AppError, EmulateError, GraphError, ImpactError, K8sCmdError, ScanError, TemporalError,
+    TestCmdError, WatchError,
 };
 pub use model::{
     CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult,
-    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions,
-    DoctorResult, EmulationImpact, EmulationImpactPathView, EmulationOverlayNode,
-    EmulationOverlaySummary, EmulationResult, EvidenceStrengthView, GraphContainerPort,
-    GraphContainerResult, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
-    GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult, GraphNodeResult,
-    GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
-    GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
-    ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
-    PermissionMode, RiskAssessment, RuntimeDependency, ScanQuality, ScanQualityAssessment,
-    ScanResult, ScanWarning, ScanWarningDetail, SnapshotCreateResult, SnapshotEntry,
-    SnapshotListResult, WatchExecEvent, WatchResult, WatchTcpEvent, WatchTick, WhatChangedEdge,
-    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
+    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorK8s,
+    DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
+    EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
+    GraphContainerPort, GraphContainerResult, GraphDirectoryResult, GraphEdgeSummary,
+    GraphEvidenceLine, GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult,
+    GraphNodeResult, GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge,
+    GraphPortResult, GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent,
+    ImpactEvidenceLine, ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown,
+    InitResult, K8sGraphResult, K8sImpactResult, K8sScanResult, PermissionMode, RiskAssessment,
+    RuntimeDependency, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
+    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WatchExecEvent,
+    WatchResult, WatchTcpEvent, WatchTick, WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode,
+    WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -67,9 +68,16 @@ pub fn doctor_flags(
     config_override: Option<&std::path::Path>,
     include_ebpf: bool,
     include_containers: bool,
+    include_k8s: bool,
 ) -> Result<DoctorResult, AppError> {
     let layout = TwinLayout::from_xdg().map_err(AppError::Paths)?;
-    doctor_flags_in(&layout, config_override, include_ebpf, include_containers)
+    doctor_flags_in(
+        &layout,
+        config_override,
+        include_ebpf,
+        include_containers,
+        include_k8s,
+    )
 }
 
 pub fn doctor_flags_in(
@@ -77,12 +85,14 @@ pub fn doctor_flags_in(
     config_override: Option<&std::path::Path>,
     include_ebpf: bool,
     include_containers: bool,
+    include_k8s: bool,
 ) -> Result<DoctorResult, AppError> {
     commands::doctor::run_flags(
         layout,
         config_override,
         include_ebpf,
         include_containers,
+        include_k8s,
         None,
     )
 }
@@ -221,6 +231,12 @@ pub enum EmulateActionRequest {
     UpgradePackage {
         package: String,
     },
+    DeleteK8sPod {
+        target: NodeId,
+    },
+    RolloutK8sDeployment {
+        target: NodeId,
+    },
 }
 
 impl Default for EmulateActionRequest {
@@ -264,6 +280,75 @@ pub fn emulate_in(
     request: EmulateRequest,
 ) -> Result<EmulationResult, AppError> {
     commands::emulate::run(layout, &request)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct K8sScanRequest {
+    pub config_override: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct K8sTargetRequest {
+    pub config_override: Option<PathBuf>,
+    pub target: NodeId,
+}
+
+pub fn k8s_scan(request: K8sScanRequest) -> Result<K8sScanResult, AppError> {
+    commands::k8s::scan_home(commands::k8s::K8sScanRequest {
+        config_override: request.config_override,
+    })
+}
+
+pub fn k8s_scan_in(
+    layout: &TwinLayout,
+    request: K8sScanRequest,
+) -> Result<K8sScanResult, AppError> {
+    commands::k8s::scan(
+        layout,
+        &commands::k8s::K8sScanRequest {
+            config_override: request.config_override,
+        },
+    )
+}
+
+pub fn k8s_graph(request: K8sTargetRequest) -> Result<K8sGraphResult, AppError> {
+    commands::k8s::graph_home(commands::k8s::K8sTargetRequest {
+        config_override: request.config_override,
+        target: request.target,
+    })
+}
+
+pub fn k8s_graph_in(
+    layout: &TwinLayout,
+    request: K8sTargetRequest,
+) -> Result<K8sGraphResult, AppError> {
+    commands::k8s::graph(
+        layout,
+        &commands::k8s::K8sTargetRequest {
+            config_override: request.config_override,
+            target: request.target,
+        },
+    )
+}
+
+pub fn k8s_impact(request: K8sTargetRequest) -> Result<K8sImpactResult, AppError> {
+    commands::k8s::impact_home(commands::k8s::K8sTargetRequest {
+        config_override: request.config_override,
+        target: request.target,
+    })
+}
+
+pub fn k8s_impact_in(
+    layout: &TwinLayout,
+    request: K8sTargetRequest,
+) -> Result<K8sImpactResult, AppError> {
+    commands::k8s::impact(
+        layout,
+        &commands::k8s::K8sTargetRequest {
+            config_override: request.config_override,
+            target: request.target,
+        },
+    )
 }
 
 #[derive(Debug, Clone)]

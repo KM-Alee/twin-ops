@@ -10,8 +10,8 @@ use twin_app::{
 };
 use twin_cli::cli::args::{
     Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
-    ImpactArgs, InitArgs, ScanArgs, SnapshotActionArgs, SnapshotArgs, TestAction, TestArgs,
-    WatchArgs, WhatChangedArgs,
+    ImpactArgs, InitArgs, K8sAction, ScanArgs, SnapshotActionArgs, SnapshotArgs, TestAction,
+    TestArgs, WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
@@ -40,6 +40,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Diff(args) => run_diff(&cli.global, &args),
         Command::Watch(args) => run_watch(&cli.global, &args),
         Command::Test(args) => run_test(&cli.global, &args),
+        Command::K8s(args) => run_k8s(&cli.global, &args.action),
     }
 }
 
@@ -76,7 +77,8 @@ fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
 }
 
 fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
-    let result = twin_app::doctor_flags(args.config.as_deref(), args.ebpf, args.containers);
+    let result =
+        twin_app::doctor_flags(args.config.as_deref(), args.ebpf, args.containers, args.k8s);
     match result {
         Ok(result) => {
             emit(global.json, &result, output::doctor::render);
@@ -224,6 +226,79 @@ fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
     }
 }
 
+fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
+    match action {
+        K8sAction::Scan(args) => {
+            let request = twin_app::K8sScanRequest {
+                config_override: args.config.clone(),
+            };
+            match twin_app::k8s_scan(request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::k8s::render_scan);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+        K8sAction::Graph(args) => {
+            let target = match k8s_target(&args.target) {
+                Ok(target) => target,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            };
+            let request = twin_app::K8sTargetRequest {
+                config_override: args.config.clone(),
+                target,
+            };
+            match twin_app::k8s_graph(request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::k8s::render_graph);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+        K8sAction::Impact(args) => {
+            let target = match k8s_target(&args.target) {
+                Ok(target) => target,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            };
+            let request = twin_app::K8sTargetRequest {
+                config_override: args.config.clone(),
+                target,
+            };
+            match twin_app::k8s_impact(request) {
+                Ok(result) => {
+                    emit(global.json, &result, output::k8s::render_impact);
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+    }
+}
+
+fn k8s_target(raw: &str) -> Result<twin_core::NodeId, twin_app::AppError> {
+    twin_core::NodeId::parse_k8s_ref(raw).map_err(|source| twin_app::AppError::InvalidGraphTarget {
+        value: raw.to_string(),
+        source,
+    })
+}
+
 fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     let request = ScanRequest {
         config_override: args.config.clone(),
@@ -290,6 +365,16 @@ fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
         EmulateActionArgs::Delete(delete_args) => (
             delete_args.config.clone(),
             match emulate::emulate_delete_request(delete_args) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            },
+        ),
+        EmulateActionArgs::Rollout(rollout_args) => (
+            rollout_args.config.clone(),
+            match emulate::emulate_rollout_request(rollout_args) {
                 Ok(request) => request,
                 Err(error) => {
                     eprintln!("Error: {error}");

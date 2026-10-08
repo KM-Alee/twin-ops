@@ -25,6 +25,11 @@ pub enum EdgeKind {
     RunsImage,
     MapsPort,
     MountsVolume,
+    Selects,
+    RoutesTo,
+    UsesConfigMap,
+    UsesSecretRef,
+    UsesPvc,
 }
 
 impl fmt::Display for EdgeKind {
@@ -47,6 +52,11 @@ impl fmt::Display for EdgeKind {
             Self::RunsImage => "runs_image",
             Self::MapsPort => "maps_port",
             Self::MountsVolume => "mounts_volume",
+            Self::Selects => "selects",
+            Self::RoutesTo => "routes_to",
+            Self::UsesConfigMap => "uses_configmap",
+            Self::UsesSecretRef => "uses_secret_ref",
+            Self::UsesPvc => "uses_pvc",
         })
     }
 }
@@ -73,6 +83,11 @@ impl FromStr for EdgeKind {
             "runs_image" => Ok(Self::RunsImage),
             "maps_port" => Ok(Self::MapsPort),
             "mounts_volume" => Ok(Self::MountsVolume),
+            "selects" => Ok(Self::Selects),
+            "routes_to" => Ok(Self::RoutesTo),
+            "uses_configmap" => Ok(Self::UsesConfigMap),
+            "uses_secret_ref" => Ok(Self::UsesSecretRef),
+            "uses_pvc" => Ok(Self::UsesPvc),
             other => Err(ParseError::Enum {
                 kind: "EdgeKind",
                 value: other.to_string(),

@@ -5,6 +5,7 @@ mod emulation_result;
 mod graph_result;
 mod impact_result;
 mod init_result;
+mod k8s_result;
 mod scan_quality;
 mod scan_result;
 mod snapshot_result;
@@ -14,8 +15,8 @@ mod what_changed_result;
 pub use coverage::{CoverageReport, CoverageUnknown};
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
-    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions,
-    DoctorResult, PermissionMode,
+    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorK8s,
+    DoctorPermissions, DoctorResult, PermissionMode,
 };
 pub use emulation_result::{
     EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary,
@@ -33,6 +34,7 @@ pub use impact_result::{
     ImpactPathStep, ImpactResult, ImpactUnknown, RiskAssessment,
 };
 pub use init_result::InitResult;
+pub use k8s_result::{K8sGraphResult, K8sImpactResult, K8sScanResult};
 pub use scan_quality::{ScanQuality, ScanQualityAssessment};
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};
 pub use snapshot_result::{SnapshotCreateResult, SnapshotEntry, SnapshotListResult};

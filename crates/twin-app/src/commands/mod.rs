@@ -11,6 +11,7 @@ pub mod impact;
 mod impact_paths;
 mod impact_scoring;
 pub mod init;
+pub(crate) mod k8s;
 mod resolve_service;
 pub mod scan;
 mod scan_cgroup_validate;

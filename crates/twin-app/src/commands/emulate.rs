@@ -5,11 +5,12 @@ use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind,
 };
 use twin_emulate::{
-    emulate_delete_file, emulate_fill_mount, emulate_restart_container, emulate_restart_service,
-    emulate_upgrade_package, ContainerAffectedService, DeleteFileInput, EmulationConfiguredService,
-    EmulationEvidenceLine, EmulationImpactPath, EmulationNode, EmulationPathStep,
-    FillAffectedService, FillMountInput, RestartContainerInput, RestartPathScoringInput,
-    RestartServiceInput, UpgradeAffectedService, UpgradePackageInput,
+    emulate_delete_file, emulate_delete_k8s_pod, emulate_fill_mount, emulate_restart_container,
+    emulate_restart_service, emulate_rollout_k8s_deployment, emulate_upgrade_package,
+    ContainerAffectedService, DeleteFileInput, EmulationConfiguredService, EmulationEvidenceLine,
+    EmulationImpactPath, EmulationNode, EmulationPathStep, FillAffectedService, FillMountInput,
+    RestartContainerInput, RestartPathScoringInput, RestartServiceInput, UpgradeAffectedService,
+    UpgradePackageInput,
 };
 use twin_store::Store;
 
@@ -95,7 +96,36 @@ fn emulate_at(
         EmulateActionRequest::UpgradePackage { package } => {
             upgrade_package_emulate(&store, package, request.show_evidence)
         }
+        EmulateActionRequest::DeleteK8sPod { target } => {
+            delete_k8s_pod_emulate(&store, target, request.show_evidence)
+        }
+        EmulateActionRequest::RolloutK8sDeployment { target } => {
+            rollout_k8s_emulate(&store, target, request.show_evidence)
+        }
     }
+}
+
+fn delete_k8s_pod_emulate(
+    store: &Store,
+    target: &NodeId,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
+    let input = super::k8s::delete_pod_input(store, target)?;
+    let mut result = EmulationResult::from_domain(emulate_delete_k8s_pod(input), Vec::new());
+    result.show_evidence = show_evidence;
+    Ok(result)
+}
+
+fn rollout_k8s_emulate(
+    store: &Store,
+    target: &NodeId,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
+    let input = super::k8s::rollout_input(store, target)?;
+    let mut result =
+        EmulationResult::from_domain(emulate_rollout_k8s_deployment(input), Vec::new());
+    result.show_evidence = show_evidence;
+    Ok(result)
 }
 
 fn resolve_restart_target(

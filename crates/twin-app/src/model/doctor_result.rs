@@ -15,6 +15,15 @@ pub struct DoctorResult {
     pub ebpf: Option<DoctorEbpf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub containers: Option<DoctorContainers>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k8s: Option<DoctorK8s>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorK8s {
+    pub kubeconfig_present: bool,
+    pub kubeconfig_path: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

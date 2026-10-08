@@ -17,6 +17,12 @@ pub fn render(result: &EmulationResult) -> String {
 }
 
 pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    if result.action == "rollout" {
+        return render_k8s_rollout(result, scan);
+    }
+    if result.action == "delete" && result.target.starts_with("k8s:pod:") {
+        return render_k8s_pod_delete(result, scan);
+    }
     if result.action == "delete" {
         return render_delete_with_scan(result, scan);
     }
@@ -96,6 +102,86 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(true, "status", &result.safety_statement);
+    out.into_string()
+}
+
+fn render_k8s_pod_delete(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title(&format!("Emulation: delete {}", result.target_label));
+    let status = emulate_status(result);
+    out.status_row(status, "summary", &format!("{} risk", result.risk.level));
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.blank();
+    out.section(&format!(
+        "Risk: {}",
+        result.risk.level.to_string().to_uppercase()
+    ));
+    if result.risk.reasons.is_empty() {
+        out.tree_leaf(true, "reason", "no scoring reasons recorded");
+    } else {
+        for (index, reason) in result.risk.reasons.iter().enumerate() {
+            out.tree_leaf(index + 1 == result.risk.reasons.len(), "reason", reason);
+        }
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", "Nothing was removed.");
+    out.into_string()
+}
+
+fn render_k8s_rollout(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title(&format!("Emulation: rollout {}", result.target_label));
+    let status = emulate_status(result);
+    out.status_row(
+        status,
+        "summary",
+        &format!(
+            "{} risk, {} restart-affected",
+            result.risk.level,
+            result.restart_impacts.len()
+        ),
+    );
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.blank();
+    out.section(&format!(
+        "Risk: {}",
+        result.risk.level.to_string().to_uppercase()
+    ));
+    if result.risk.reasons.is_empty() {
+        out.tree_leaf(true, "reason", "no scoring reasons recorded");
+    } else {
+        for (index, reason) in result.risk.reasons.iter().enumerate() {
+            out.tree_leaf(index + 1 == result.risk.reasons.len(), "reason", reason);
+        }
+    }
+    out.blank();
+    out.section("Restart-affected");
+    if result.restart_impacts.is_empty() {
+        out.tree_leaf(true, "status", "deployment owns no pods");
+    } else {
+        for (index, impact) in result.restart_impacts.iter().enumerate() {
+            let label = impact.id.strip_prefix("k8s:").unwrap_or(impact.id.as_str());
+            out.tree_leaf(index + 1 == result.restart_impacts.len(), "pod", label);
+        }
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", "Nothing was rolled out.");
     out.into_string()
 }
 

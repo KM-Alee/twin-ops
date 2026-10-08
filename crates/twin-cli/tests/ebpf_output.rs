@@ -41,6 +41,7 @@ fn doctor_with(ebpf: DoctorEbpf) -> DoctorResult {
         scan_quality_error: None,
         ebpf: Some(ebpf),
         containers: None,
+        k8s: None,
     }
 }
 

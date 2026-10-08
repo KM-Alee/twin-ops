@@ -22,7 +22,7 @@ This file living. Add crate/dependency/convention/discover better pattern → up
 
 `cli` `app` `core` `observation` `collectors` `store` `graph` `rules` `emulate` `test` `ebpf` `container` `k8s` `package` `config` `output` `fixtures` `safety` — all prefixed `twin-`. `twin-test` parses `twin.yaml` and evaluates graph checks. It does not run a shell. `twin-app` loads the stored graph and persists the report. `twin-config` parses config text (nginx `proxy_pass`) and fingerprints file bytes. It does not read the host; scan passes the bytes in.
 
-**Dependency direction:** inward. `core` depends on almost nothing. `cli→app→{core,store,graph,collectors,emulate,test,output,ebpf}`. Collectors → `core+observation`. `ebpf` → `core+observation`. Reasoning → `core+graph+rules`. **Forbidden:** `core→ebpf`, `core→k8s`, `core→container`, `graph→cli`, `emulate→collectors`. `twin-container` is a read-only Docker adapter (list and inspect only).
+**Dependency direction:** inward. `core` depends on almost nothing. `cli→app→{core,store,graph,collectors,emulate,test,output,ebpf}`. Collectors → `core+observation`. `ebpf` → `core+observation`. Reasoning → `core+graph+rules`. **Forbidden:** `core→ebpf`, `core→k8s`, `core→container`, `graph→cli`, `emulate→collectors`. `twin-container` is a read-only Docker adapter (list and inspect only). `twin-k8s` is read-only (get/list only; secret values are never stored).
 
 ## Code — Minimal Viable Code Only
 

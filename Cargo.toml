@@ -9,6 +9,7 @@ members = [
     "crates/twin-emulate",
     "crates/twin-ebpf",
     "crates/twin-container",
+    "crates/twin-k8s",
     "crates/twin-test",
     "crates/twin-config",
 ]
@@ -28,6 +29,7 @@ twin-collectors = { path = "crates/twin-collectors" }
 twin-emulate = { path = "crates/twin-emulate" }
 twin-ebpf = { path = "crates/twin-ebpf" }
 twin-container = { path = "crates/twin-container" }
+twin-k8s = { path = "crates/twin-k8s" }
 twin-test = { path = "crates/twin-test" }
 twin-config = { path = "crates/twin-config" }
 serde_yaml = "0.9"

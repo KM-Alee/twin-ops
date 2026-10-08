@@ -21,6 +21,17 @@ pub enum NodeKind {
     Package,
     Container,
     Image,
+    K8sNamespace,
+    K8sPod,
+    K8sDeployment,
+    K8sReplicaSet,
+    K8sService,
+    K8sEndpoint,
+    K8sConfigMap,
+    K8sSecretRef,
+    K8sPvc,
+    K8sIngress,
+    K8sEvent,
 }
 
 impl fmt::Display for NodeKind {
@@ -39,6 +50,17 @@ impl fmt::Display for NodeKind {
             Self::Package => "package",
             Self::Container => "container",
             Self::Image => "image",
+            Self::K8sNamespace => "k8s_namespace",
+            Self::K8sPod => "k8s_pod",
+            Self::K8sDeployment => "k8s_deployment",
+            Self::K8sReplicaSet => "k8s_replicaset",
+            Self::K8sService => "k8s_service",
+            Self::K8sEndpoint => "k8s_endpoint",
+            Self::K8sConfigMap => "k8s_configmap",
+            Self::K8sSecretRef => "k8s_secret_ref",
+            Self::K8sPvc => "k8s_pvc",
+            Self::K8sIngress => "k8s_ingress",
+            Self::K8sEvent => "k8s_event",
         })
     }
 }
@@ -61,6 +83,17 @@ impl FromStr for NodeKind {
             "package" => Ok(Self::Package),
             "container" => Ok(Self::Container),
             "image" => Ok(Self::Image),
+            "k8s_namespace" => Ok(Self::K8sNamespace),
+            "k8s_pod" => Ok(Self::K8sPod),
+            "k8s_deployment" => Ok(Self::K8sDeployment),
+            "k8s_replicaset" => Ok(Self::K8sReplicaSet),
+            "k8s_service" => Ok(Self::K8sService),
+            "k8s_endpoint" => Ok(Self::K8sEndpoint),
+            "k8s_configmap" => Ok(Self::K8sConfigMap),
+            "k8s_secret_ref" => Ok(Self::K8sSecretRef),
+            "k8s_pvc" => Ok(Self::K8sPvc),
+            "k8s_ingress" => Ok(Self::K8sIngress),
+            "k8s_event" => Ok(Self::K8sEvent),
             other => Err(ParseError::Enum {
                 kind: "NodeKind",
                 value: other.to_string(),
@@ -171,12 +204,84 @@ impl NodeId {
         Self(format!("image:{reference}"))
     }
 
+    pub fn k8s_namespace(name: &str) -> Self {
+        Self(format!("k8s:namespace:{name}"))
+    }
+
+    pub fn k8s_deployment(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("deployment", namespace, name)
+    }
+
+    pub fn k8s_replicaset(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("replicaset", namespace, name)
+    }
+
+    pub fn k8s_pod(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("pod", namespace, name)
+    }
+
+    pub fn k8s_service(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("service", namespace, name)
+    }
+
+    pub fn k8s_ingress(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("ingress", namespace, name)
+    }
+
+    pub fn k8s_configmap(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("configmap", namespace, name)
+    }
+
+    pub fn k8s_secret_ref(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("secretref", namespace, name)
+    }
+
+    pub fn k8s_pvc(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("pvc", namespace, name)
+    }
+
+    pub fn k8s_endpoints(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("endpoints", namespace, name)
+    }
+
+    pub fn k8s_event(namespace: &str, name: &str) -> Self {
+        Self::k8s_namespaced("event", namespace, name)
+    }
+
+    pub fn k8s_namespaced(kind: &str, namespace: &str, name: &str) -> Self {
+        Self(format!("k8s:{kind}:{namespace}/{name}"))
+    }
+
+    pub fn parse_k8s_ref(raw: &str) -> Result<Self, ParseError> {
+        let raw = raw.trim();
+        let invalid = || ParseError::InvalidNodeId {
+            value: raw.to_string(),
+        };
+        if let Ok(id) = Self::from_str(raw) {
+            if id.as_str().starts_with("k8s:") {
+                return Ok(id);
+            }
+            return Err(invalid());
+        }
+        let Some((kind, rest)) = split_k8s_short(raw) else {
+            return Err(invalid());
+        };
+        let id = Self::from_str(&format!("k8s:{kind}:{rest}")).map_err(|_| invalid())?;
+        if !id.as_str().starts_with("k8s:") {
+            return Err(invalid());
+        }
+        Ok(id)
+    }
+
     pub fn cgroup(path: &str) -> Self {
         Self(format!("cgroup:{}", lexical_canonical(path)))
     }
 
     pub fn kind(&self) -> Option<NodeKind> {
         let s = self.0.as_str();
+        if let Some(kind) = k8s_kind(s) {
+            return Some(kind);
+        }
         if s.starts_with("host:") && s.len() > "host:".len() {
             return Some(NodeKind::Host);
         }
@@ -226,6 +331,15 @@ impl NodeId {
     pub fn process_pid(&self) -> Option<u32> {
         self.0.strip_prefix("process:pid:")?.parse().ok()
     }
+
+    pub fn k8s_short(&self) -> Option<&str> {
+        self.0.strip_prefix("k8s:")
+    }
+
+    pub fn k8s_namespace_and_name(&self) -> Option<(&str, &str)> {
+        let body = self.0.strip_prefix("k8s:")?.split_once(':')?.1;
+        body.split_once('/')
+    }
 }
 
 impl fmt::Display for NodeId {
@@ -250,6 +364,10 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
 
     if s.is_empty() {
         return Err(invalid());
+    }
+
+    if s.starts_with("k8s:") {
+        return validate_k8s_id(s);
     }
 
     if let Some(hostname) = s.strip_prefix("host:") {
@@ -382,6 +500,99 @@ fn split_port_host_port(rest: &str) -> Result<(String, u16), ParseError> {
     }
     let port = port_str.parse::<u16>().map_err(|_| invalid())?;
     Ok((ip.to_string(), port))
+}
+
+fn k8s_kind(id: &str) -> Option<NodeKind> {
+    let rest = id.strip_prefix("k8s:")?;
+    let (kind, body) = rest.split_once(':')?;
+    if body.is_empty() {
+        return None;
+    }
+    match kind {
+        "namespace" if !body.contains('/') => Some(NodeKind::K8sNamespace),
+        "deployment" => Some(NodeKind::K8sDeployment),
+        "replicaset" => Some(NodeKind::K8sReplicaSet),
+        "pod" => Some(NodeKind::K8sPod),
+        "service" => Some(NodeKind::K8sService),
+        "ingress" => Some(NodeKind::K8sIngress),
+        "configmap" => Some(NodeKind::K8sConfigMap),
+        "secretref" => Some(NodeKind::K8sSecretRef),
+        "pvc" => Some(NodeKind::K8sPvc),
+        "endpoints" => Some(NodeKind::K8sEndpoint),
+        "event" => Some(NodeKind::K8sEvent),
+        _ => None,
+    }
+}
+
+fn validate_k8s_id(id: &str) -> Result<(), ParseError> {
+    let invalid = || ParseError::InvalidNodeId {
+        value: id.to_string(),
+    };
+    let rest = id.strip_prefix("k8s:").ok_or_else(invalid)?;
+    let (kind, body) = rest.split_once(':').ok_or_else(invalid)?;
+    match kind {
+        "namespace" => {
+            if !is_k8s_name(body) {
+                return Err(invalid());
+            }
+            Ok(())
+        }
+        "deployment" | "replicaset" | "pod" | "service" | "ingress" | "configmap" | "secretref"
+        | "pvc" | "endpoints" | "event" => {
+            let (namespace, name) = body.split_once('/').ok_or_else(invalid)?;
+            if body.matches('/').count() != 1 || !is_k8s_name(namespace) || !is_k8s_name(name) {
+                return Err(invalid());
+            }
+            Ok(())
+        }
+        _ => Err(invalid()),
+    }
+}
+
+fn split_k8s_short(raw: &str) -> Option<(&str, &str)> {
+    if raw.is_empty() || raw.starts_with('/') {
+        return None;
+    }
+    if let Some((kind, rest)) = raw.split_once(':') {
+        if kind.is_empty() || rest.is_empty() || kind.contains('/') {
+            return None;
+        }
+        return Some((kind, rest));
+    }
+    let (kind, rest) = raw.split_once('/')?;
+    if kind.is_empty() || rest.is_empty() || kind.contains(':') {
+        return None;
+    }
+    Some((kind, rest))
+}
+
+fn is_k8s_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if (!first.is_ascii_lowercase() && !first.is_ascii_digit()) || name.len() > 253 {
+        return false;
+    }
+    let mut previous_mark = false;
+    let mut last_alnum = true;
+    for ch in chars {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            previous_mark = false;
+            last_alnum = true;
+            continue;
+        }
+        if matches!(ch, '-' | '.') {
+            if previous_mark {
+                return false;
+            }
+            previous_mark = true;
+            last_alnum = false;
+            continue;
+        }
+        return false;
+    }
+    last_alnum
 }
 
 fn is_container_name(name: &str) -> bool {

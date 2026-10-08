@@ -6,6 +6,7 @@ pub mod graph;
 pub mod impact;
 pub mod init;
 pub mod json;
+pub mod k8s;
 pub mod scan;
 pub mod sections;
 pub mod snapshot;

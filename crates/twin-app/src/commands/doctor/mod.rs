@@ -1,6 +1,7 @@
 mod containers;
 mod core;
 mod database;
+mod k8s;
 mod permissions;
 
 use std::path::Path;
@@ -8,11 +9,11 @@ use std::path::Path;
 use twin_ebpf::EbpfFacts;
 
 use crate::error::AppError;
-use crate::model::{DoctorContainers, DoctorEbpf, DoctorEbpfCheck, DoctorResult};
+use crate::model::{DoctorContainers, DoctorEbpf, DoctorEbpfCheck, DoctorK8s, DoctorResult};
 use crate::paths::TwinLayout;
 
 pub fn run(layout: &TwinLayout, config_override: Option<&Path>) -> Result<DoctorResult, AppError> {
-    run_flags(layout, config_override, false, false, None)
+    run_flags(layout, config_override, false, false, false, None)
 }
 
 pub fn run_flags(
@@ -20,6 +21,7 @@ pub fn run_flags(
     config_override: Option<&Path>,
     include_ebpf: bool,
     include_containers: bool,
+    include_k8s: bool,
     ebpf_facts: Option<EbpfFacts>,
 ) -> Result<DoctorResult, AppError> {
     let ebpf = if include_ebpf {
@@ -34,7 +36,8 @@ pub fn run_flags(
     } else {
         None
     };
-    assemble(layout, config_override, ebpf, containers)
+    let k8s = if include_k8s { Some(k8s::host()) } else { None };
+    assemble(layout, config_override, ebpf, containers, k8s)
 }
 
 pub fn run_ebpf(
@@ -42,7 +45,7 @@ pub fn run_ebpf(
     config_override: Option<&Path>,
     facts: Option<EbpfFacts>,
 ) -> Result<DoctorResult, AppError> {
-    run_flags(layout, config_override, true, false, facts)
+    run_flags(layout, config_override, true, false, false, facts)
 }
 
 pub fn run_home(config_override: Option<&Path>) -> Result<DoctorResult, AppError> {
@@ -60,6 +63,7 @@ fn assemble(
     config_override: Option<&Path>,
     ebpf: Option<DoctorEbpf>,
     containers: Option<DoctorContainers>,
+    k8s: Option<DoctorK8s>,
 ) -> Result<DoctorResult, AppError> {
     let config_path = layout.config_file(config_override);
     let db_path = layout.db_file();
@@ -86,6 +90,7 @@ fn assemble(
         scan_quality_error,
         ebpf,
         containers,
+        k8s,
     })
 }
 

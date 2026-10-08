@@ -24,6 +24,8 @@ pub enum AppError {
     Watch(#[from] WatchError),
     #[error("test failed: {0}")]
     Test(#[from] TestCmdError),
+    #[error("k8s command failed: {0}")]
+    K8s(#[from] K8sCmdError),
     #[error("collector error: {0}")]
     Collector(#[from] CollectorError),
     #[error("invalid graph target `{value}`: {source}")]
@@ -160,6 +162,8 @@ pub enum EmulateError {
     RelativeFillPath { value: String },
     #[error("upgrade emulation requires a package; got `{value}` ({reason})")]
     InvalidUpgradeTarget { value: String, reason: String },
+    #[error("rollout emulation requires a deployment; got `{value}` ({reason})")]
+    InvalidRolloutTarget { value: String, reason: String },
     #[error("invalid graph {kind} id `{id}`: {reason}")]
     InvalidGraphId {
         kind: &'static str,
@@ -206,6 +210,20 @@ pub enum TestCmdError {
     Test(#[from] twin_test::TestError),
     #[error("cannot encode test report: {reason}")]
     Encode { reason: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum K8sCmdError {
+    #[error("database is not initialized; run `twin init` first")]
+    DatabaseNotInitialized,
+    #[error("cannot open database: {0}")]
+    StoreOpen(#[from] StoreOpenError),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("node not found: {id}")]
+    NodeNotFound { id: NodeId },
+    #[error("unsupported kubernetes target kind: {kind}")]
+    UnsupportedTarget { kind: String },
 }
 
 #[derive(Debug, thiserror::Error)]

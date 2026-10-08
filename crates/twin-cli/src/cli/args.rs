@@ -31,6 +31,8 @@ pub enum Command {
     Diff(DiffArgs),
     Watch(WatchArgs),
     Test(TestArgs),
+    #[command(about = "Read-only Kubernetes graph")]
+    K8s(K8sArgs),
 }
 
 #[derive(Args)]
@@ -52,6 +54,12 @@ pub struct DoctorArgs {
 
     #[arg(long, help = "Check the read-only Docker socket and container list")]
     pub containers: bool,
+
+    #[arg(
+        long,
+        help = "Check kubeconfig presence for read-only Kubernetes inspection"
+    )]
+    pub k8s: bool,
 }
 
 #[derive(Args)]
@@ -107,6 +115,57 @@ pub enum EmulateActionArgs {
     FillDisk(EmulateFillDiskArgs),
     #[command(about = "Hypothetically upgrade a package (no package manager is run)")]
     Upgrade(EmulateUpgradeArgs),
+    #[command(about = "Hypothetically roll out a deployment (no rollout is performed)")]
+    Rollout(EmulateRolloutArgs),
+}
+
+#[derive(Args)]
+pub struct K8sArgs {
+    #[command(subcommand)]
+    pub action: K8sAction,
+}
+
+#[derive(Subcommand)]
+pub enum K8sAction {
+    #[command(about = "Read Kubernetes list documents into the graph")]
+    Scan(K8sScanArgs),
+    #[command(about = "Show a Kubernetes ownership neighborhood")]
+    Graph(K8sTargetArgs),
+    #[command(about = "Show what a Kubernetes object fronts or owns")]
+    Impact(K8sTargetArgs),
+}
+
+#[derive(Args)]
+pub struct K8sScanArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct K8sTargetArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "TARGET",
+        help = "Kubernetes object (deployment/default/api, service/default/api, pod:default/api-123)"
+    )]
+    pub target: String,
+}
+
+#[derive(Args)]
+pub struct EmulateRolloutArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "DEPLOYMENT",
+        help = "Deployment target (deployment:default/api or k8s:deployment:default/api)"
+    )]
+    pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
 }
 
 #[derive(Args)]

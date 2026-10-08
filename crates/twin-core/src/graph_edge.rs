@@ -299,6 +299,24 @@ impl GraphEdge {
         )
     }
 
+    pub fn observed_k8s(
+        from: &NodeId,
+        kind: EdgeKind,
+        to: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            from,
+            kind,
+            to,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            r#"{"source":"k8s"}"#,
+        )
+    }
+
     pub fn observed_container_owns_process(
         container: &NodeId,
         process: &NodeId,

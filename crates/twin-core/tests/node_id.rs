@@ -112,6 +112,70 @@ fn unix_socket_abstract() {
 }
 
 #[test]
+fn k8s_ids_and_short_forms() {
+    let deployment = NodeId::k8s_deployment("default", "api");
+    assert_eq!(deployment.as_str(), "k8s:deployment:default/api");
+    assert_eq!(deployment.kind(), Some(NodeKind::K8sDeployment));
+    assert_eq!(deployment.k8s_short(), Some("deployment:default/api"));
+    assert_eq!(
+        deployment.k8s_namespace_and_name(),
+        Some(("default", "api"))
+    );
+    assert_eq!(
+        NodeId::parse_k8s_ref("deployment/default/api").expect("slash"),
+        deployment
+    );
+    assert_eq!(
+        NodeId::parse_k8s_ref("deployment:default/api").expect("colon"),
+        deployment
+    );
+    assert_eq!(
+        NodeId::parse_k8s_ref("k8s:deployment:default/api").expect("full"),
+        deployment
+    );
+    assert_eq!(
+        NodeId::parse_k8s_ref("service/default/api")
+            .expect("service")
+            .as_str(),
+        "k8s:service:default/api"
+    );
+    assert_eq!(
+        NodeId::parse_k8s_ref("pod:default/api-123")
+            .expect("pod")
+            .as_str(),
+        "k8s:pod:default/api-123"
+    );
+    assert_eq!(
+        NodeId::k8s_replicaset("default", "api-abc").kind(),
+        Some(NodeKind::K8sReplicaSet)
+    );
+    assert_eq!(
+        NodeId::k8s_secret_ref("default", "api-tls").as_str(),
+        "k8s:secretref:default/api-tls"
+    );
+    assert_eq!(
+        NodeId::k8s_configmap("default", "api-config").kind(),
+        Some(NodeKind::K8sConfigMap)
+    );
+    assert_eq!(
+        NodeId::k8s_pvc("default", "api-data").kind(),
+        Some(NodeKind::K8sPvc)
+    );
+    assert_eq!(
+        NodeId::k8s_ingress("default", "api").kind(),
+        Some(NodeKind::K8sIngress)
+    );
+    assert_eq!(
+        NodeId::k8s_namespace("default").kind(),
+        Some(NodeKind::K8sNamespace)
+    );
+    assert!(NodeId::from_str("k8s:pod:default").is_err());
+    assert!(NodeId::from_str("k8s:pod:Default/api").is_err());
+    assert!(NodeId::parse_k8s_ref("container:redis").is_err());
+    assert!(NodeId::parse_k8s_ref("/etc/nginx/nginx.conf").is_err());
+}
+
+#[test]
 fn from_str_rejects_non_canonical() {
     let err = NodeId::from_str("not-a-node").expect_err("bad");
     assert!(matches!(err, ParseError::InvalidNodeId { .. }));

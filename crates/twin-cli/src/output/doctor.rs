@@ -193,6 +193,22 @@ pub fn render(result: &DoctorResult) -> String {
         out.tree_leaf(true, "mode", &containers.detail);
     }
 
+    if let Some(k8s) = &result.k8s {
+        out.blank();
+        out.section("kubernetes");
+        let kube_status = if k8s.kubeconfig_present {
+            Status::Ok
+        } else {
+            Status::Warn
+        };
+        out.tree_leaf(
+            false,
+            "kubeconfig",
+            &format!("{}  {}", status_tag(kube_status), k8s.kubeconfig_path),
+        );
+        out.tree_leaf(true, "mode", &k8s.detail);
+    }
+
     if let Some(ebpf) = &result.ebpf {
         out.blank();
         out.section("eBPF");

@@ -253,7 +253,7 @@ fn missing_fixture_and_missing_socket_do_not_panic() {
 fn doctor_containers_does_not_crash_without_docker() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
-    let result = twin_app::doctor_flags_in(&home.layout, None, false, true).expect("doctor");
+    let result = twin_app::doctor_flags_in(&home.layout, None, false, true, false).expect("doctor");
     let containers = result.containers.expect("containers section");
     if !Path::new("/var/run/docker.sock").exists() {
         assert!(!containers.socket_present);

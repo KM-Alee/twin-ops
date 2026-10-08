@@ -28,6 +28,17 @@ fn all_variants_roundtrip() {
         NodeKind::Package,
         NodeKind::Container,
         NodeKind::Image,
+        NodeKind::K8sNamespace,
+        NodeKind::K8sPod,
+        NodeKind::K8sDeployment,
+        NodeKind::K8sReplicaSet,
+        NodeKind::K8sService,
+        NodeKind::K8sEndpoint,
+        NodeKind::K8sConfigMap,
+        NodeKind::K8sSecretRef,
+        NodeKind::K8sPvc,
+        NodeKind::K8sIngress,
+        NodeKind::K8sEvent,
     ]);
     roundtrip(&[NodeState::Active, NodeState::Stale, NodeState::Gone]);
     roundtrip(&[
@@ -48,6 +59,11 @@ fn all_variants_roundtrip() {
         EdgeKind::RunsImage,
         EdgeKind::MapsPort,
         EdgeKind::MountsVolume,
+        EdgeKind::Selects,
+        EdgeKind::RoutesTo,
+        EdgeKind::UsesConfigMap,
+        EdgeKind::UsesSecretRef,
+        EdgeKind::UsesPvc,
     ]);
     roundtrip(&[
         EdgeClass::Observed,

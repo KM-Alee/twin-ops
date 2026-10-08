@@ -1,9 +1,12 @@
 use std::str::FromStr;
 
 use twin_app::{validate_max_depth, AppError, EmulateActionRequest, EmulateError, EmulateRequest};
-use twin_core::NodeId;
+use twin_core::{NodeId, NodeKind};
 
-use super::args::{EmulateDeleteArgs, EmulateFillDiskArgs, EmulateRestartArgs, EmulateUpgradeArgs};
+use super::args::{
+    EmulateDeleteArgs, EmulateFillDiskArgs, EmulateRestartArgs, EmulateRolloutArgs,
+    EmulateUpgradeArgs,
+};
 
 pub fn emulate_restart_request(args: &EmulateRestartArgs) -> Result<EmulateRequest, AppError> {
     let max_depth = validate_max_depth(args.max_depth as usize)?;
@@ -69,11 +72,43 @@ pub fn emulate_upgrade_request(args: &EmulateUpgradeArgs) -> Result<EmulateReque
 }
 
 pub fn emulate_delete_request(args: &EmulateDeleteArgs) -> Result<EmulateRequest, AppError> {
+    if let Ok(id) = NodeId::parse_k8s_ref(&args.target) {
+        if id.kind() == Some(NodeKind::K8sPod) {
+            return Ok(EmulateRequest {
+                config_override: args.config.clone(),
+                show_evidence: args.evidence,
+                action: EmulateActionRequest::DeleteK8sPod { target: id },
+            });
+        }
+        return Err(AppError::Emulate(EmulateError::InvalidDeleteTarget {
+            value: args.target.clone(),
+            reason: "pod removal expects a pod id such as pod:default/api-123".to_string(),
+        }));
+    }
     Ok(EmulateRequest {
         config_override: args.config.clone(),
         show_evidence: args.evidence,
         action: EmulateActionRequest::DeleteFile {
             path: args.target.clone(),
         },
+    })
+}
+
+pub fn emulate_rollout_request(args: &EmulateRolloutArgs) -> Result<EmulateRequest, AppError> {
+    let id =
+        NodeId::parse_k8s_ref(&args.target).map_err(|source| AppError::InvalidEmulateTarget {
+            value: args.target.clone(),
+            source,
+        })?;
+    if id.kind() != Some(NodeKind::K8sDeployment) {
+        return Err(AppError::Emulate(EmulateError::InvalidRolloutTarget {
+            value: args.target.clone(),
+            reason: "expected deployment:namespace/name".to_string(),
+        }));
+    }
+    Ok(EmulateRequest {
+        config_override: args.config.clone(),
+        show_evidence: args.evidence,
+        action: EmulateActionRequest::RolloutK8sDeployment { target: id },
     })
 }
