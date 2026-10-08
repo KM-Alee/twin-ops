@@ -169,3 +169,9 @@ cargo build && cargo test --workspace && cargo clippy --workspace && cargo fmt -
 ```
 
 Add crate → update root `Cargo.toml` `[workspace]`.
+
+## Cursor Cloud specific instructions
+
+- Install Rust 1.99.0 with `rustfmt` and `clippy`, then `cargo fetch --locked`. Rust 1.83, which ships on the base image, cannot parse the edition-2024 crates in `Cargo.lock` (`wit-bindgen`).
+- `twin` is a local CLI. There is no dev server to start. Tests use in-repo fixtures and do not need root, Docker, or Kubernetes.
+- On Rust 1.99.0, `cargo test --workspace --locked` passes. `cargo clippy --workspace --locked -- -D warnings` reports `clippy::question_mark` in `crates/twin-store/src/store/batch.rs`. `cargo fmt --check` reports formatting diffs under `crates/twin-cli` (`src/output/what_changed.rs`, `src/main.rs`, `tests/output.rs`).
