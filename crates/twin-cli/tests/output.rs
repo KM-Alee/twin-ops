@@ -501,6 +501,82 @@ fn emulate_fill_disk_render_names_risk_and_affected_services() {
 }
 
 #[test]
+fn graph_library_render_shows_loader_and_package() {
+    let result = GraphResult::library(
+        GraphNodeSummary {
+            id: "library:/usr/lib/libssl.so.3".to_string(),
+            label: "/usr/lib/libssl.so.3".to_string(),
+        },
+        vec![GraphOwnedNode {
+            id: "process:pid:80".to_string(),
+            label: "nginx".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+        vec![GraphOwnedNode {
+            id: "package:openssl".to_string(),
+            label: "openssl".to_string(),
+            edge_class: "observed".to_string(),
+            tag: None,
+            observation_ids: vec![],
+        }],
+    );
+    let text = output::graph::render(&result);
+    assert!(text.contains("library neighborhood"));
+    assert!(text.contains("library:/usr/lib/libssl.so.3"));
+    assert!(text.contains("loaded by"));
+    assert!(text.contains("process:pid:80"));
+    assert!(text.contains("installed by"));
+    assert!(text.contains("package:openssl"));
+}
+
+#[test]
+fn emulate_upgrade_render_splits_runtime_and_restart() {
+    let mut result = sample_emulation_result();
+    result.action = "upgrade".to_string();
+    result.target = "package:openssl".to_string();
+    result.target_label = "openssl".to_string();
+    result.action_performed = false;
+    result.safety_statement = "No package manager ran. Nothing was upgraded.".to_string();
+    result.general_safety_statement = "No action was performed.".to_string();
+    result.risk.level = twin_core::RiskLevel::High;
+    result.runtime_impacts = vec![EmulationImpact {
+        id: "package:openssl".to_string(),
+        label: "LOW".to_string(),
+        statement: "running processes already have current libssl mapped.".to_string(),
+        path: String::new(),
+        evidence: vec![],
+    }];
+    result.restart_impacts = vec![
+        EmulationImpact {
+            id: "service:nginx.service".to_string(),
+            label: "nginx.service".to_string(),
+            statement: "nginx.service loads a library from this package".to_string(),
+            path: String::new(),
+            evidence: vec![],
+        },
+        EmulationImpact {
+            id: "service:ssh.service".to_string(),
+            label: "ssh.service".to_string(),
+            statement: "ssh.service loads a library from this package".to_string(),
+            path: String::new(),
+            evidence: vec![],
+        },
+    ];
+    let text = output::emulate::render(&result);
+    assert!(text.contains("Emulation: upgrade package:openssl"));
+    assert!(text.contains("Runtime impact: LOW"));
+    assert!(text.contains("running processes already have current libssl mapped."));
+    assert!(text.contains("Restart impact: HIGH"));
+    assert!(text.contains("Affected on restart:"));
+    assert!(text.contains("nginx.service"));
+    assert!(text.contains("ssh.service"));
+    assert!(text.contains("No package manager ran. Nothing was upgraded."));
+    assert!(text.contains("No action was performed."));
+}
+
+#[test]
 fn graph_service_render_inferred_ownership() {
     let result = GraphResult::service(GraphServiceResult {
         service: GraphNodeSummary {

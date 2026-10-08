@@ -16,6 +16,7 @@ pub mod scan;
 mod scan_cgroup_validate;
 mod scan_config_files;
 mod scan_history;
+mod scan_libraries;
 mod scan_mounts;
 pub(crate) mod scan_quality;
 mod scan_systemd;

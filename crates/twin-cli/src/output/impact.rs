@@ -15,6 +15,9 @@ pub fn render(result: &ImpactResult) -> String {
 }
 
 pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> String {
+    if result.target.starts_with("package:") {
+        return render_package_impact(result, scan);
+    }
     let mut out = Lines::new();
     out.title("twin impact");
     let status = impact_status(result);
@@ -168,6 +171,47 @@ fn path_chain_label(path: &ImpactPath) -> String {
         nodes.push(step.to.id.clone());
     }
     nodes.join(" -> ")
+}
+
+fn render_package_impact(result: &ImpactResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title("twin impact");
+    let status = impact_status(result);
+    out.status_row(
+        status,
+        "summary",
+        &format!(
+            "{} risk · {} service(s) affected on restart",
+            result.risk.level,
+            result.configured_dependents.len()
+        ),
+    );
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.status_row(status, "view", "package restart blast radius");
+    out.blank();
+    out.section(TARGET);
+    out.tree_leaf(true, &result.target_label, &result.target);
+    out.blank();
+    out.section(RISK);
+    out.tree_leaf(false, "level", &result.risk.level.to_string());
+    out.tree_leaf(true, EVIDENCE_STRENGTH, &result.evidence_strength.label);
+    out.blank();
+    out.section("restart blast radius");
+    if result.configured_dependents.is_empty() {
+        out.tree_leaf(true, "(none)", "no services depend on this package");
+    } else {
+        for (index, dependent) in result.configured_dependents.iter().enumerate() {
+            let is_last = index + 1 == result.configured_dependents.len();
+            out.tree_leaf(is_last, &dependent.label, &dependent.reason);
+        }
+    }
+    out.into_string()
 }
 
 fn impact_summary(result: &ImpactResult) -> String {

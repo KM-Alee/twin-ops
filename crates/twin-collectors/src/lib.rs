@@ -1,9 +1,13 @@
+pub mod dpkg;
 pub mod error;
+pub mod maps;
 pub mod mounts;
 pub mod process;
 pub mod systemd;
 
+pub use dpkg::{parse_dpkg_list, parse_dpkg_status, InstalledPackage};
 pub use error::CollectorError;
+pub use maps::parse_mapped_libraries;
 pub use mounts::{parse_mounts, MountRecord};
 pub use process::{
     parse_socket_fd_target, parse_tcp_table, parse_unix_table, ProcessBatch, ProcessCollector,

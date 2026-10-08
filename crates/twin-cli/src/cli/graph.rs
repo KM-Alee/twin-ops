@@ -145,6 +145,32 @@ mod tests {
     }
 
     #[test]
+    fn library_id_is_a_node() {
+        let req = request(GraphArgs {
+            config: None,
+            evidence: false,
+            kind: None,
+            target: Some("library:/usr/lib/libssl.so.3".to_string()),
+        });
+        assert_eq!(
+            req.target.as_ref().map(|id| id.as_str().to_string()),
+            Some("library:/usr/lib/libssl.so.3".to_string())
+        );
+    }
+
+    #[test]
+    fn library_basename_is_a_search() {
+        let req = request(GraphArgs {
+            config: None,
+            evidence: false,
+            kind: None,
+            target: Some("libssl.so.3".to_string()),
+        });
+        assert_eq!(req.target_query.as_deref(), Some("libssl.so.3"));
+        assert!(req.target.is_none());
+    }
+
+    #[test]
     fn service_shorthand_passes_through_as_search() {
         let req = request(GraphArgs {
             config: None,

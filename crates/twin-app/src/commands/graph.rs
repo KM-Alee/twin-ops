@@ -43,6 +43,17 @@ fn graph_at(
     }
 
     if let Some(query) = &request.target_query {
+        if super::scan_libraries::library_query(query) {
+            let Some(library) =
+                super::scan_libraries::find_library_id(&store, query).map_err(GraphError::Store)?
+            else {
+                return Err(GraphError::LibraryNotFound {
+                    query: query.clone(),
+                }
+                .into());
+            };
+            return library_neighborhood(&store, &library);
+        }
         let known = store
             .count_nodes_by_kind_typed(NodeKind::Service)
             .map_err(GraphError::Store)?;
@@ -65,6 +76,8 @@ fn graph_at(
             Some(NodeKind::File) => file_neighborhood(&store, target),
             Some(NodeKind::Mount) => mount_neighborhood(&store, target),
             Some(NodeKind::Directory) => directory_neighborhood(&store, target),
+            Some(NodeKind::Library) => library_neighborhood(&store, target),
+            Some(NodeKind::Package) => package_neighborhood(&store, target),
             Some(kind) => Err(AppError::UnsupportedGraphKind {
                 kind: kind.to_string(),
             }),
@@ -100,6 +113,8 @@ fn list_by_kind(store: &Store, kind: NodeKind) -> Result<GraphResult, AppError> 
         || kind == NodeKind::Port
         || kind == NodeKind::Mount
         || kind == NodeKind::Directory
+        || kind == NodeKind::Library
+        || kind == NodeKind::Package
     {
         let mut nodes = summaries;
         nodes.sort_by(|a, b| a.id.cmp(&b.id));
@@ -576,6 +591,107 @@ fn file_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppE
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
 
     Ok(GraphResult::file(summary, configures, references, evidence))
+}
+
+fn library_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Library {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+    let mut loaded_by = Vec::new();
+    let mut installed_by = Vec::new();
+    for row in store
+        .list_active_edges_to(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::LoadsLibrary {
+            continue;
+        }
+        let Some(peer) = store
+            .get_node_typed(edge.from())
+            .map_err(GraphError::Store)?
+        else {
+            continue;
+        };
+        loaded_by.push(owned_peer(&peer, &edge));
+    }
+    for row in store
+        .list_active_edges_from(target.as_str())
+        .map_err(GraphError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(GraphError::Store)?;
+        if edge.kind() != EdgeKind::InstalledBy {
+            continue;
+        }
+        let Some(peer) = store.get_node_typed(edge.to()).map_err(GraphError::Store)? else {
+            continue;
+        };
+        installed_by.push(owned_peer(&peer, &edge));
+    }
+    loaded_by.sort_by(|a, b| a.id.cmp(&b.id));
+    installed_by.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(GraphResult::library(
+        node_summary(node.id(), node.label()),
+        loaded_by,
+        installed_by,
+    ))
+}
+
+fn package_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {
+    let node = store
+        .get_node_typed(target)
+        .map_err(GraphError::Store)?
+        .ok_or_else(|| GraphError::NodeNotFound { id: target.clone() })?;
+    if node.kind() != NodeKind::Package {
+        return Err(AppError::UnsupportedGraphKind {
+            kind: node.kind().to_string(),
+        });
+    }
+    let facts =
+        super::scan_libraries::package_upgrade_facts(store, target).map_err(GraphError::Store)?;
+    let libraries = facts
+        .libraries
+        .into_iter()
+        .map(|(id, label)| GraphOwnedNode {
+            id: id.to_string(),
+            label,
+            edge_class: EdgeClass::Observed.to_string(),
+            tag: None,
+            observation_ids: Vec::new(),
+        })
+        .collect();
+    let services = facts
+        .services
+        .into_iter()
+        .map(|service| GraphOwnedNode {
+            id: service.service.to_string(),
+            label: service.label,
+            edge_class: service.edge_class.to_string(),
+            tag: Some("depends on package".to_string()),
+            observation_ids: Vec::new(),
+        })
+        .collect();
+    Ok(GraphResult::package(
+        node_summary(node.id(), node.label()),
+        libraries,
+        services,
+    ))
+}
+
+fn owned_peer(peer: &twin_core::GraphNode, edge: &GraphEdge) -> GraphOwnedNode {
+    GraphOwnedNode {
+        id: peer.id().as_str().to_string(),
+        label: peer.label().to_string(),
+        edge_class: edge.class().to_string(),
+        tag: None,
+        observation_ids: Vec::new(),
+    }
 }
 
 fn mount_neighborhood(store: &Store, target: &NodeId) -> Result<GraphResult, AppError> {

@@ -17,6 +17,8 @@ pub enum NodeKind {
     Cgroup,
     Mount,
     Directory,
+    Library,
+    Package,
 }
 
 impl fmt::Display for NodeKind {
@@ -31,6 +33,8 @@ impl fmt::Display for NodeKind {
             Self::Cgroup => "cgroup",
             Self::Mount => "mount",
             Self::Directory => "directory",
+            Self::Library => "library",
+            Self::Package => "package",
         })
     }
 }
@@ -49,6 +53,8 @@ impl FromStr for NodeKind {
             "cgroup" => Ok(Self::Cgroup),
             "mount" => Ok(Self::Mount),
             "directory" => Ok(Self::Directory),
+            "library" => Ok(Self::Library),
+            "package" => Ok(Self::Package),
             other => Err(ParseError::Enum {
                 kind: "NodeKind",
                 value: other.to_string(),
@@ -143,6 +149,14 @@ impl NodeId {
         Self(format!("directory:{}", lexical_canonical(path)))
     }
 
+    pub fn library(path: &str) -> Self {
+        Self(format!("library:{}", lexical_canonical(path)))
+    }
+
+    pub fn package(name: &str) -> Self {
+        Self(format!("package:{name}"))
+    }
+
     pub fn cgroup(path: &str) -> Self {
         Self(format!("cgroup:{}", lexical_canonical(path)))
     }
@@ -172,6 +186,12 @@ impl NodeId {
         }
         if s.starts_with("directory:") && s.len() > "directory:".len() {
             return Some(NodeKind::Directory);
+        }
+        if s.starts_with("library:") && s.len() > "library:".len() {
+            return Some(NodeKind::Library);
+        }
+        if s.starts_with("package:") && s.len() > "package:".len() {
+            return Some(NodeKind::Package);
         }
         if s.starts_with("cgroup:") && s.len() > "cgroup:".len() {
             return Some(NodeKind::Cgroup);
@@ -269,6 +289,24 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
         return Ok(());
     }
 
+    if let Some(path) = s.strip_prefix("library:") {
+        if path.is_empty() || !path.starts_with('/') {
+            return Err(invalid());
+        }
+        let canonical = NodeId::library(path);
+        if canonical.as_str() != s {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(name) = s.strip_prefix("package:") {
+        if !is_package_name(name) {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
     if s.starts_with("port:tcp:") {
         let rest = s.strip_prefix("port:tcp:").ok_or_else(invalid)?;
         let (ip, port) = split_port_host_port(rest).map_err(|_| invalid())?;
@@ -310,6 +348,13 @@ fn split_port_host_port(rest: &str) -> Result<(String, u16), ParseError> {
     }
     let port = port_str.parse::<u16>().map_err(|_| invalid())?;
     Ok((ip.to_string(), port))
+}
+
+fn is_package_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '|' | ':' | '/'))
 }
 
 fn normalize_unit(unit: &str) -> String {

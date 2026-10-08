@@ -20,6 +20,8 @@ pub enum EdgeKind {
     MountedOn,
     LogsTo,
     Uses,
+    LoadsLibrary,
+    InstalledBy,
 }
 
 impl fmt::Display for EdgeKind {
@@ -37,6 +39,8 @@ impl fmt::Display for EdgeKind {
             Self::MountedOn => "mounted_on",
             Self::LogsTo => "logs_to",
             Self::Uses => "uses",
+            Self::LoadsLibrary => "loads_library",
+            Self::InstalledBy => "installed_by",
         })
     }
 }
@@ -58,6 +62,8 @@ impl FromStr for EdgeKind {
             "mounted_on" => Ok(Self::MountedOn),
             "logs_to" => Ok(Self::LogsTo),
             "uses" => Ok(Self::Uses),
+            "loads_library" => Ok(Self::LoadsLibrary),
+            "installed_by" => Ok(Self::InstalledBy),
             other => Err(ParseError::Enum {
                 kind: "EdgeKind",
                 value: other.to_string(),

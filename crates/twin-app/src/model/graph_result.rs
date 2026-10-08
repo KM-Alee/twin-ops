@@ -101,6 +101,20 @@ pub struct GraphDirectoryResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GraphLibraryResult {
+    pub library: GraphNodeSummary,
+    pub loaded_by: Vec<GraphOwnedNode>,
+    pub installed_by: Vec<GraphOwnedNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphPackageResult {
+    pub package: GraphNodeSummary,
+    pub libraries: Vec<GraphOwnedNode>,
+    pub services: Vec<GraphOwnedNode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GraphFileResult {
     pub file: GraphNodeSummary,
     pub configures: Vec<GraphOwnedNode>,
@@ -140,6 +154,8 @@ pub enum GraphResult {
     File(GraphFileResult),
     Mount(GraphMountResult),
     Directory(GraphDirectoryResult),
+    Library(GraphLibraryResult),
+    Package(GraphPackageResult),
 }
 
 impl GraphResult {
@@ -213,6 +229,30 @@ impl GraphResult {
         Self::Directory(GraphDirectoryResult {
             directory,
             mount,
+            services,
+        })
+    }
+
+    pub fn library(
+        library: GraphNodeSummary,
+        loaded_by: Vec<GraphOwnedNode>,
+        installed_by: Vec<GraphOwnedNode>,
+    ) -> Self {
+        Self::Library(GraphLibraryResult {
+            library,
+            loaded_by,
+            installed_by,
+        })
+    }
+
+    pub fn package(
+        package: GraphNodeSummary,
+        libraries: Vec<GraphOwnedNode>,
+        services: Vec<GraphOwnedNode>,
+    ) -> Self {
+        Self::Package(GraphPackageResult {
+            package,
+            libraries,
             services,
         })
     }

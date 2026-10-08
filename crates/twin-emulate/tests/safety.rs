@@ -25,6 +25,7 @@ const SCAN_ROOTS: &[&str] = &[
     "../twin-app/src/commands/emulate.rs",
     "../twin-app/src/commands/scan_config_files.rs",
     "../twin-app/src/commands/scan_mounts.rs",
+    "../twin-app/src/commands/scan_libraries.rs",
     "../twin-app/src/commands/disk_usage.rs",
     "../twin-cli/src/cli/emulate.rs",
     "../twin-cli/src/main.rs",

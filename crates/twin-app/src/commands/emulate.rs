@@ -5,10 +5,10 @@ use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, NodeId, NodeKind, ObservationId, UnknownKind,
 };
 use twin_emulate::{
-    emulate_delete_file, emulate_fill_mount, emulate_restart_service, DeleteFileInput,
-    EmulationConfiguredService, EmulationEvidenceLine, EmulationImpactPath, EmulationNode,
-    EmulationPathStep, FillAffectedService, FillMountInput, RestartPathScoringInput,
-    RestartServiceInput,
+    emulate_delete_file, emulate_fill_mount, emulate_restart_service, emulate_upgrade_package,
+    DeleteFileInput, EmulationConfiguredService, EmulationEvidenceLine, EmulationImpactPath,
+    EmulationNode, EmulationPathStep, FillAffectedService, FillMountInput, RestartPathScoringInput,
+    RestartServiceInput, UpgradeAffectedService, UpgradePackageInput,
 };
 use twin_store::Store;
 
@@ -82,6 +82,9 @@ fn emulate_at(
         }
         EmulateActionRequest::FillDisk { mount, to_percent } => {
             fill_disk_emulate(&store, mount, *to_percent, request.show_evidence)
+        }
+        EmulateActionRequest::UpgradePackage { package } => {
+            upgrade_package_emulate(&store, package, request.show_evidence)
         }
     }
 }
@@ -222,6 +225,78 @@ fn fill_disk_emulate(
     let mut result = EmulationResult::from_domain(report, result_unknowns);
     result.show_evidence = show_evidence;
     Ok(result)
+}
+
+fn upgrade_package_emulate(
+    store: &Store,
+    raw_package: &str,
+    show_evidence: bool,
+) -> Result<EmulationResult, AppError> {
+    let target = resolve_upgrade_package(raw_package)?;
+    let facts = super::scan_libraries::package_upgrade_facts(store, &target)
+        .map_err(EmulateError::Store)?;
+    let mut unknowns = Vec::new();
+    if !facts.in_graph {
+        unknowns.push(ImpactUnknown {
+            kind: UnknownKind::MissingEvidence.as_str().to_string(),
+            detail: "target package is not in the graph; run `twin scan` first".to_string(),
+            source: None,
+            weakens_evidence: true,
+        });
+    }
+    let input = UpgradePackageInput {
+        package: EmulationNode {
+            id: target,
+            label: facts.label,
+        },
+        package_in_graph: facts.in_graph,
+        mapped_stems: facts.mapped_stems,
+        affected: facts
+            .services
+            .into_iter()
+            .map(|service| UpgradeAffectedService {
+                id: service.service,
+                label: service.label,
+            })
+            .collect(),
+        unknowns: unknowns.iter().map(impact_unknown_to_emulation).collect(),
+    };
+    let report = emulate_upgrade_package(input);
+    let mut result = EmulationResult::from_domain(report, unknowns);
+    result.show_evidence = show_evidence;
+    Ok(result)
+}
+
+fn resolve_upgrade_package(raw: &str) -> Result<NodeId, AppError> {
+    let raw = raw.trim();
+    if raw.starts_with("package:") {
+        return NodeId::from_str(raw).map_err(|source| {
+            EmulateError::InvalidUpgradeTarget {
+                value: raw.to_string(),
+                reason: source.to_string(),
+            }
+            .into()
+        });
+    }
+    if raw.is_empty()
+        || raw.contains('/')
+        || raw.contains(':')
+        || raw.chars().any(char::is_whitespace)
+    {
+        return Err(EmulateError::InvalidUpgradeTarget {
+            value: raw.to_string(),
+            reason: "expected a package name or package: node id".to_string(),
+        }
+        .into());
+    }
+    let id = NodeId::package(raw);
+    NodeId::from_str(id.as_str()).map_err(|source| {
+        EmulateError::InvalidUpgradeTarget {
+            value: raw.to_string(),
+            reason: source.to_string(),
+        }
+        .into()
+    })
 }
 
 fn resolve_fill_mount(raw: &str) -> Result<NodeId, AppError> {

@@ -61,6 +61,7 @@ fn impact_at(
         NodeKind::Port | NodeKind::UnixSocket => {
             port_impact(&store, &target, node.label(), node.kind(), request)
         }
+        NodeKind::Package => package_impact(&store, &target, node.label(), request),
         kind => Err(ImpactError::UnsupportedTarget {
             kind: kind.to_string(),
         }
@@ -206,6 +207,92 @@ pub(crate) fn load_service_dependent_analysis(
             .map(TypedServiceDependent::to_impact_dependent)
             .collect(),
         unknowns: typed.unknowns,
+    })
+}
+
+fn package_impact(
+    store: &Store,
+    target: &NodeId,
+    label: &str,
+    request: &ImpactRequest,
+) -> Result<ImpactResult, AppError> {
+    let facts =
+        super::scan_libraries::package_upgrade_facts(store, target).map_err(ImpactError::Store)?;
+    let configured_dependents = facts
+        .services
+        .iter()
+        .map(|service| ImpactDependent {
+            id: service.service.to_string(),
+            label: service.label.clone(),
+            relationship: EdgeKind::DependsOn.to_string(),
+            edge_class: service.edge_class.to_string(),
+            impact_kind: DependentImpactKind::Configured.to_string(),
+            reason: format!("{} loads a library installed by {label}", service.label),
+            path: vec![ImpactPathStep {
+                from: ImpactNodeSummary {
+                    id: service.service.to_string(),
+                    label: service.label.clone(),
+                },
+                edge_kind: EdgeKind::DependsOn.to_string(),
+                edge_class: service.edge_class.to_string(),
+                to: ImpactNodeSummary {
+                    id: target.to_string(),
+                    label: label.to_string(),
+                },
+                edge_id: service.edge_id.to_string(),
+            }],
+            evidence: vec![ImpactEvidenceLine {
+                source: "proc maps".to_string(),
+                statement: format!(
+                    "{} depends on {label} because a process it owns maps a packaged library",
+                    service.label
+                ),
+                relationship: "inferred service depends_on package".to_string(),
+                strength: "moderate".to_string(),
+                observation_id: None,
+            }],
+            observation_ids: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let service_count = configured_dependents.len();
+    let (level, reason, score) = if service_count == 0 {
+        (
+            twin_core::RiskLevel::Low,
+            "no service loads a library from this package".to_string(),
+            15,
+        )
+    } else {
+        (
+            twin_core::RiskLevel::High,
+            format!(
+                "restart blast radius is {service_count} service(s) that load libraries from this package"
+            ),
+            45,
+        )
+    };
+    let strength = twin_core::EvidenceStrength::new(score);
+    Ok(ImpactResult {
+        target: target.to_string(),
+        target_label: label.to_string(),
+        risk: crate::model::RiskAssessment {
+            level,
+            reasons: vec![reason],
+        },
+        evidence_strength: strength.into(),
+        direct_dependents: Vec::new(),
+        configured_dependents,
+        listener_owners: Vec::new(),
+        evidence: Vec::new(),
+        unknowns: Vec::new(),
+        impact_paths: Vec::new(),
+        paths_requested: request.show_paths,
+        max_depth: request.max_depth,
+        evidence_reasons: vec![if service_count == 0 {
+            "no service depends on this package".to_string()
+        } else {
+            "service dependency inferred from mapped libraries".to_string()
+        }],
+        show_evidence: request.show_evidence,
     })
 }
 

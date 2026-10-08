@@ -102,6 +102,8 @@ pub enum EmulateActionArgs {
         about = "Hypothetically fill a mount (no write performed)"
     )]
     FillDisk(EmulateFillDiskArgs),
+    #[command(about = "Hypothetically upgrade a package (no package manager is run)")]
+    Upgrade(EmulateUpgradeArgs),
 }
 
 #[derive(Args)]
@@ -138,6 +140,21 @@ pub struct EmulateDeleteArgs {
     #[arg(
         value_name = "PATH_OR_FILE_ID",
         help = "Absolute file path or file: node id (e.g. /etc/nginx/nginx.conf)"
+    )]
+    pub target: String,
+
+    #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
+    pub evidence: bool,
+}
+
+#[derive(Args)]
+pub struct EmulateUpgradeArgs {
+    #[arg(long, help = "Config file path")]
+    pub config: Option<PathBuf>,
+
+    #[arg(
+        value_name = "PACKAGE",
+        help = "Package name or package: node id (e.g. package:openssl)"
     )]
     pub target: String,
 

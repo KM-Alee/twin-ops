@@ -43,6 +43,25 @@ fn kind_roundtrip() {
         Some(NodeKind::Directory)
     );
     assert_eq!(
+        NodeId::library("/usr/lib/../lib/libssl.so.3").as_str(),
+        "library:/usr/lib/libssl.so.3"
+    );
+    assert_eq!(
+        NodeId::library("/usr/lib/libssl.so.3").kind(),
+        Some(NodeKind::Library)
+    );
+    assert_eq!(
+        NodeId::from_str("library:/usr/lib/libssl.so.3")
+            .expect("library")
+            .as_str(),
+        "library:/usr/lib/libssl.so.3"
+    );
+    assert_eq!(NodeId::package("openssl").as_str(), "package:openssl");
+    assert_eq!(NodeId::package("openssl").kind(), Some(NodeKind::Package));
+    assert!(NodeId::from_str("library:libssl.so.3").is_err());
+    assert!(NodeId::from_str("package:").is_err());
+    assert!(NodeId::from_str("package:openssl/libssl").is_err());
+    assert_eq!(
         NodeId::from_str("mount:/var").expect("mount").as_str(),
         "mount:/var"
     );

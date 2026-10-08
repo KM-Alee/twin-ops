@@ -13,14 +13,14 @@ pub use model::{
     DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorPermissions, DoctorResult, EmulationImpact,
     EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary, EmulationResult,
     EvidenceStrengthView, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
-    GraphFileResult, GraphListResult, GraphMountResult, GraphNodeResult, GraphNodeSummary,
-    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
-    GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,
-    ImpactPathStep, ImpactResult, ImpactUnknown, InitResult, PermissionMode, RiskAssessment,
-    RuntimeDependency, ScanQuality, ScanQualityAssessment, ScanResult, ScanWarning,
-    ScanWarningDetail, SnapshotCreateResult, SnapshotEntry, SnapshotListResult, WatchExecEvent,
-    WatchResult, WatchTcpEvent, WatchTick, WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode,
-    WhatChangedNodeDelta, WhatChangedResult,
+    GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult, GraphNodeResult,
+    GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult, ImpactDependent, ImpactEvidenceLine,
+    ImpactNodeSummary, ImpactPath, ImpactPathStep, ImpactResult, ImpactUnknown, InitResult,
+    PermissionMode, RiskAssessment, RuntimeDependency, ScanQuality, ScanQualityAssessment,
+    ScanResult, ScanWarning, ScanWarningDetail, SnapshotCreateResult, SnapshotEntry,
+    SnapshotListResult, WatchExecEvent, WatchResult, WatchTcpEvent, WatchTick, WhatChangedEdge,
+    WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };
 pub use paths::TwinLayout;
 
@@ -192,6 +192,9 @@ pub enum EmulateActionRequest {
     FillDisk {
         mount: String,
         to_percent: u8,
+    },
+    UpgradePackage {
+        package: String,
     },
 }
 

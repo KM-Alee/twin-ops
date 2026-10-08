@@ -23,9 +23,9 @@ pub use emulation_result::{
 };
 pub use graph_result::{
     edge_summary, node_summary, GraphDirectoryResult, GraphEdgeSummary, GraphEvidenceLine,
-    GraphFileResult, GraphListResult, GraphMountResult, GraphNodeResult, GraphNodeSummary,
-    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
-    GraphUnixSocketResult, RuntimeDependency,
+    GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult, GraphNodeResult,
+    GraphNodeSummary, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult, RuntimeDependency,
 };
 pub use impact_result::{
     EvidenceStrengthView, ImpactDependent, ImpactEvidenceLine, ImpactNodeSummary, ImpactPath,

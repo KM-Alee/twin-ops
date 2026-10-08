@@ -220,6 +220,10 @@ fn persist_scan(
     let mut service_connects_to_unix_edge_count = 0usize;
     let mut service_depends_on_unix_edge_count = 0usize;
     let mut config_parse_warnings = Vec::new();
+    let mut library_notes = super::scan_libraries::LibraryScanNotes {
+        warning: None,
+        detail: None,
+    };
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
     let mut cgroup_correction_count = 0usize;
@@ -952,6 +956,13 @@ fn persist_scan(
                 sample.proc_root,
                 scan_time,
             )?;
+            library_notes = super::scan_libraries::persist_libraries_in_scan(
+                store,
+                &mut history,
+                &mut edge_cache,
+                sample.proc_root,
+                scan_time,
+            )?;
 
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
@@ -1023,6 +1034,9 @@ fn persist_scan(
     let mut warnings = aggregate_warnings(process_warnings);
     warnings.extend(aggregate_systemd_warnings(systemd_warnings));
     warnings.extend(aggregate_systemd_warnings(runtime_warnings));
+    if let Some(warning) = library_notes.warning {
+        warnings.push(warning);
+    }
     warnings.sort_by(|a, b| a.kind.cmp(&b.kind));
     let warning_count = process_warnings.len() + systemd_warnings.len() + runtime_warnings.len();
     let total_observations =
@@ -1086,6 +1100,9 @@ fn persist_scan(
                         path: warning.path.clone(),
                         detail: warning.detail.clone(),
                     });
+                }
+                if let Some(detail) = library_notes.detail {
+                    details.push(detail);
                 }
                 details
             },

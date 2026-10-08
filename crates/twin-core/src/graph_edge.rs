@@ -216,6 +216,57 @@ impl GraphEdge {
         }
     }
 
+    pub fn observed_loads_library(
+        process: &NodeId,
+        library: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            process,
+            EdgeKind::LoadsLibrary,
+            library,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            r#"{"source":"proc_maps"}"#,
+        )
+    }
+
+    pub fn observed_installed_by(
+        library: &NodeId,
+        package: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            library,
+            EdgeKind::InstalledBy,
+            package,
+            EdgeClass::Observed,
+            seen_at,
+            existing,
+            r#"{"source":"dpkg_list"}"#,
+        )
+    }
+
+    pub fn inferred_service_depends_on_package(
+        service: &NodeId,
+        package: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        counted_edge(
+            service,
+            EdgeKind::DependsOn,
+            package,
+            EdgeClass::Inferred,
+            seen_at,
+            existing,
+            r#"{"inference":"process_loads_packaged_library"}"#,
+        )
+    }
+
     pub fn observed_mounted_on(
         path_node: &NodeId,
         mount: &NodeId,
@@ -661,5 +712,33 @@ fn service_path_edge(
         first_seen,
         last_seen: seen_at,
         metadata: GraphMetadata::from_json(&metadata),
+    }
+}
+
+fn counted_edge(
+    from: &NodeId,
+    kind: EdgeKind,
+    to: &NodeId,
+    class: EdgeClass,
+    seen_at: TimestampNs,
+    existing: Option<&GraphEdge>,
+    metadata: &str,
+) -> GraphEdge {
+    let id = EdgeId::new(from, kind, to);
+    let (first_seen, evidence_count) = match existing {
+        Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
+        None => (seen_at, 1),
+    };
+    GraphEdge {
+        id,
+        from: from.clone(),
+        to: to.clone(),
+        kind,
+        class,
+        state: EdgeState::Active,
+        evidence_count,
+        first_seen,
+        last_seen: seen_at,
+        metadata: GraphMetadata::from_json(metadata),
     }
 }

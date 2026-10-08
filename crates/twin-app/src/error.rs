@@ -104,6 +104,8 @@ pub enum GraphError {
     ServiceNotFound { query: String, detail: String },
     #[error("ambiguous service match for `{query}`: {candidates}")]
     AmbiguousService { query: String, candidates: String },
+    #[error("library not found for query `{query}`")]
+    LibraryNotFound { query: String },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -156,6 +158,8 @@ pub enum EmulateError {
     InvalidFillPercent { value: String },
     #[error("fill-disk requires a mount path; got relative path `{value}`")]
     RelativeFillPath { value: String },
+    #[error("upgrade emulation requires a package; got `{value}` ({reason})")]
+    InvalidUpgradeTarget { value: String, reason: String },
     #[error("invalid graph {kind} id `{id}`: {reason}")]
     InvalidGraphId {
         kind: &'static str,

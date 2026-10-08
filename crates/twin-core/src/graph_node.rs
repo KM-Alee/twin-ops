@@ -155,6 +155,49 @@ impl GraphNode {
         }
     }
 
+    pub fn library(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::library(path);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        let label = id
+            .as_str()
+            .strip_prefix("library:")
+            .unwrap_or(path)
+            .to_string();
+        Self {
+            id,
+            kind: NodeKind::Library,
+            label,
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"proc_maps"}"#),
+        }
+    }
+
+    pub fn package(name: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
+        let id = NodeId::package(name);
+        let (first_seen, valid_from) = match existing {
+            Some(node) => (node.first_seen, node.valid_from),
+            None => (seen_at, seen_at),
+        };
+        Self {
+            id,
+            kind: NodeKind::Package,
+            label: name.to_string(),
+            state: NodeState::Active,
+            first_seen,
+            last_seen: seen_at,
+            valid_from,
+            valid_to: None,
+            metadata: GraphMetadata::from_json(r#"{"source":"dpkg"}"#),
+        }
+    }
+
     pub fn cgroup(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::cgroup(path);
         let (first_seen, valid_from) = match existing {

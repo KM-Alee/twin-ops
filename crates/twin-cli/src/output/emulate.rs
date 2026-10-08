@@ -23,6 +23,9 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     if result.action == "fill-disk" {
         return render_fill_with_scan(result, scan);
     }
+    if result.action == "upgrade" {
+        return render_upgrade_with_scan(result, scan);
+    }
     let mut out = Lines::new();
     out.title(&format!("twin emulate restart {}", result.target_label));
     let status = emulate_status(result);
@@ -135,6 +138,94 @@ fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>
         for (i, line) in result.evidence_lines.iter().enumerate() {
             let is_last = i + 1 == result.evidence_lines.len();
             out.tree_leaf(is_last, "source", line);
+        }
+    }
+    if result.show_evidence {
+        render_evidence_score(
+            &mut out,
+            result.evidence_strength.score,
+            &result.evidence_strength.label,
+            &result.evidence_reasons,
+        );
+    }
+    let (health, unknowns) = split_scan_health(&result.unknowns);
+    if !health.is_empty() {
+        out.blank();
+        out.section(SCAN_HEALTH);
+        for (i, note) in health.iter().enumerate() {
+            let is_last = i + 1 == health.len();
+            out.tree_leaf(is_last, "note", &note.detail);
+        }
+    }
+    if !unknowns.is_empty() {
+        out.blank();
+        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
+        let title = if weakens {
+            format!("{UNKNOWNS} (weakens evidence)")
+        } else {
+            UNKNOWNS.to_string()
+        };
+        out.section(&title);
+        let grouped = group_unknown_refs(unknowns.iter().copied());
+        render_unknown_groups(&mut out, &grouped);
+    }
+    out.blank();
+    out.section(SAFETY);
+    out.tree_leaf(false, "status", &result.safety_statement);
+    out.tree_leaf(true, "status", &result.general_safety_statement);
+    out.into_string()
+}
+
+fn render_upgrade_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -> String {
+    let mut out = Lines::new();
+    out.title(&format!("Emulation: upgrade {}", result.target));
+    let status = emulate_status(result);
+    let restart_level = if !result.restart_impacts.is_empty() {
+        "HIGH"
+    } else if result.risk.level == RiskLevel::Unknown {
+        "UNKNOWN"
+    } else {
+        "LOW"
+    };
+    let runtime_level = result
+        .runtime_impacts
+        .first()
+        .map(|impact| impact.label.as_str())
+        .unwrap_or("UNKNOWN");
+    let runtime_reason = result
+        .runtime_impacts
+        .first()
+        .map(|impact| impact.statement.as_str())
+        .unwrap_or("package impact is unknown");
+    out.status_row(
+        status,
+        "summary",
+        &format!(
+            "runtime {runtime_level} · restart {restart_level} · {} service(s) affected on restart",
+            result.restart_impacts.len()
+        ),
+    );
+    if let Some(scan) = scan {
+        out.status_row(
+            Status::Neutral,
+            "scan",
+            &format!("{} (fresh)", scan.duration_label()),
+        );
+    }
+    out.status_row(status, "view", "emulation report");
+    out.blank();
+    out.section(&format!("Runtime impact: {runtime_level}"));
+    out.tree_leaf(true, "reason", runtime_reason);
+    out.blank();
+    out.section(&format!("Restart impact: {restart_level}"));
+    out.blank();
+    out.section("Affected on restart:");
+    if result.restart_impacts.is_empty() {
+        out.tree_leaf(true, "(none)", "no services depend on this package");
+    } else {
+        for (index, impact) in result.restart_impacts.iter().enumerate() {
+            let is_last = index + 1 == result.restart_impacts.len();
+            out.tree_leaf(is_last, &impact.label, &impact.id);
         }
     }
     if result.show_evidence {

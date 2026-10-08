@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use twin_app::{
-    GraphDirectoryResult, GraphFileResult, GraphListResult, GraphMountResult, GraphNodeResult,
-    GraphOwnedNode, GraphParentEdge, GraphPortResult, GraphResult, GraphServiceResult,
-    GraphUnixSocketResult,
+    GraphDirectoryResult, GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult,
+    GraphNodeResult, GraphOwnedNode, GraphPackageResult, GraphParentEdge, GraphPortResult,
+    GraphResult, GraphServiceResult, GraphUnixSocketResult,
 };
 
 use twin_app::{GraphEvidenceLine, RuntimeDependency};
@@ -24,6 +24,8 @@ pub fn render_with_scan(result: &GraphResult, scan: Option<ScanFreshness>) -> St
         GraphResult::File(file) => render_file(file, scan),
         GraphResult::Mount(mount) => render_mount(mount, scan),
         GraphResult::Directory(directory) => render_directory(directory, scan),
+        GraphResult::Library(library) => render_library(library, scan),
+        GraphResult::Package(package) => render_package(package, scan),
     }
 }
 
@@ -47,6 +49,8 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
         twin_core::NodeKind::Process => "Process tree",
         twin_core::NodeKind::Service => "Service list",
         twin_core::NodeKind::Port => "Port list",
+        twin_core::NodeKind::Library => "Library list",
+        twin_core::NodeKind::Package => "Package list",
         other => return format!("Unsupported list kind: {other}"),
     };
     let out = graph_header(&format!("{title}, {} nodes", list.nodes.len()), scan);
@@ -71,7 +75,11 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
         .collect();
     roots.sort_by_key(|id| peer_pid(id).unwrap_or(u32::MAX));
 
-    if list.kind == twin_core::NodeKind::Service || list.kind == twin_core::NodeKind::Port {
+    if list.kind == twin_core::NodeKind::Service
+        || list.kind == twin_core::NodeKind::Port
+        || list.kind == twin_core::NodeKind::Library
+        || list.kind == twin_core::NodeKind::Package
+    {
         let mut nodes = list.nodes.clone();
         nodes.sort_by_key(|n| n.id.clone());
         for (i, node) in nodes.iter().enumerate() {
@@ -242,6 +250,24 @@ fn render_file(file: &GraphFileResult, scan: Option<ScanFreshness>) -> String {
     render_dependency_section(&mut lines, "configures", file.configures.iter());
     render_dependency_section(&mut lines, "references", file.references.iter());
     append_evidence_lines(&mut lines, &file.evidence);
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_library(library: &GraphLibraryResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("library neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", library.library.id, library.library.label));
+    render_dependency_section(&mut lines, "loaded by", library.loaded_by.iter());
+    render_dependency_section(&mut lines, "installed by", library.installed_by.iter());
+    format!("{}\n{}", out.into_string(), lines.join("\n"))
+}
+
+fn render_package(package: &GraphPackageResult, scan: Option<ScanFreshness>) -> String {
+    let out = graph_header("package neighborhood", scan);
+    let mut lines = Vec::new();
+    lines.push(format!("{}  {}", package.package.id, package.package.label));
+    render_dependency_section(&mut lines, "installs", package.libraries.iter());
+    render_affected(&mut lines, &package.services);
     format!("{}\n{}", out.into_string(), lines.join("\n"))
 }
 

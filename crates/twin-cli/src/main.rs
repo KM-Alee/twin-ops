@@ -281,6 +281,16 @@ fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
                 }
             },
         ),
+        EmulateActionArgs::Upgrade(upgrade_args) => (
+            upgrade_args.config.clone(),
+            match emulate::emulate_upgrade_request(upgrade_args) {
+                Ok(request) => request,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    return 1;
+                }
+            },
+        ),
         EmulateActionArgs::Delete(delete_args) => (
             delete_args.config.clone(),
             match emulate::emulate_delete_request(delete_args) {

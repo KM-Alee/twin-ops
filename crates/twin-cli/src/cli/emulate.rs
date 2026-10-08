@@ -3,7 +3,7 @@ use std::str::FromStr;
 use twin_app::{validate_max_depth, AppError, EmulateActionRequest, EmulateError, EmulateRequest};
 use twin_core::NodeId;
 
-use super::args::{EmulateDeleteArgs, EmulateFillDiskArgs, EmulateRestartArgs};
+use super::args::{EmulateDeleteArgs, EmulateFillDiskArgs, EmulateRestartArgs, EmulateUpgradeArgs};
 
 pub fn emulate_restart_request(args: &EmulateRestartArgs) -> Result<EmulateRequest, AppError> {
     let max_depth = validate_max_depth(args.max_depth as usize)?;
@@ -56,6 +56,16 @@ fn parse_fill_percent(raw: &str) -> Result<u8, AppError> {
         }));
     }
     Ok(percent)
+}
+
+pub fn emulate_upgrade_request(args: &EmulateUpgradeArgs) -> Result<EmulateRequest, AppError> {
+    Ok(EmulateRequest {
+        config_override: args.config.clone(),
+        show_evidence: args.evidence,
+        action: EmulateActionRequest::UpgradePackage {
+            package: args.target.clone(),
+        },
+    })
 }
 
 pub fn emulate_delete_request(args: &EmulateDeleteArgs) -> Result<EmulateRequest, AppError> {

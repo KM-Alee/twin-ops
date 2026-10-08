@@ -7,6 +7,7 @@ pub enum OverlayNodeState {
     TemporarilyUnavailable,
     HypotheticallyDeleted,
     HypotheticallyFilled,
+    HypotheticallyUpgraded,
 }
 
 #[derive(Debug, Clone)]
