@@ -8,5 +8,6 @@ mod model;
 pub use adapter::{DockerBackend, DockerReadOnly, DOCKER_SOCKET};
 pub use error::ContainerError;
 pub use model::{
-    ContainerHealth, ContainerInspect, ContainerSummary, ImageInspect, PortMapping, VolumeMount,
+    ComposeIdentity, ContainerHealth, ContainerInspect, ContainerSummary, ImageInspect,
+    PortMapping, VolumeMount,
 };

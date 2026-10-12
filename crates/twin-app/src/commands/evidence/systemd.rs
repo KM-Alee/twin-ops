@@ -79,11 +79,14 @@ pub fn is_runtime_active_state(state: Option<&str>) -> bool {
     )
 }
 
-use twin_core::{DependentImpactKind, EdgeClass, GraphEdge};
+use twin_core::{DependentImpactKind, EdgeClass, GraphEdge, GraphNode};
 
+/// `is_dependent_running` is true when the dependent service is observed running: D-Bus
+/// reports it active, or it owns live processes. The process signal keeps declared
+/// dependencies of visibly running services runtime on hosts where D-Bus is unreadable.
 pub fn classify_dependent_impact_kind(
     edge: &GraphEdge,
-    dependent_metadata: &str,
+    is_dependent_running: bool,
 ) -> DependentImpactKind {
     if edge.class() == EdgeClass::Inferred {
         return DependentImpactKind::Runtime;
@@ -102,11 +105,35 @@ pub fn classify_dependent_impact_kind(
     {
         return DependentImpactKind::Configured;
     }
-    if is_runtime_active_metadata(dependent_metadata) {
+    if is_dependent_running {
         DependentImpactKind::Runtime
     } else {
         DependentImpactKind::Configured
     }
+}
+
+/// Whether a service is observed running: active per D-Bus, or owning a live process.
+pub fn is_service_running(
+    store: &twin_store::Store,
+    service: &GraphNode,
+) -> Result<bool, twin_store::StoreError> {
+    if is_runtime_active_metadata(service.metadata().as_str()) {
+        return Ok(true);
+    }
+    for row in store.list_active_edges_from(service.id().as_str())? {
+        let Ok(edge) = GraphEdge::try_from(&row) else {
+            continue;
+        };
+        if edge.kind() == twin_core::EdgeKind::Owns
+            && edge.to().kind() == Some(twin_core::NodeKind::Process)
+            && store
+                .get_node_typed(edge.to())?
+                .is_some_and(|process| process.state() == twin_core::NodeState::Active)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn is_runtime_active_metadata(metadata: &str) -> bool {

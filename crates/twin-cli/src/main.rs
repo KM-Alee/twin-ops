@@ -9,9 +9,9 @@ use twin_app::{
     WatchTcpEvent, WatchTick,
 };
 use twin_cli::cli::args::{
-    Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs,
-    ImpactArgs, InitArgs, K8sAction, ScanArgs, SnapshotActionArgs, SnapshotArgs, TestAction,
-    TestArgs, WatchArgs, WhatChangedArgs,
+    AgentConfigArgs, BriefArgs, Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs,
+    GlobalArgs, GraphArgs, ImpactArgs, InitArgs, K8sAction, McpArgs, PreflightArgs, ScanArgs,
+    SetupArgs, SnapshotActionArgs, SnapshotArgs, TestAction, TestArgs, WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
@@ -21,6 +21,7 @@ use twin_cli::cli::snapshot;
 use twin_cli::cli::what_changed;
 use twin_cli::output;
 use twin_cli::output::format::ScanFreshness;
+use twin_cli::output::json::JsonMode;
 
 fn main() {
     let cli = Cli::parse();
@@ -54,6 +55,11 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Watch(args) => run_watch(&cli.global, &args),
         Command::Test(args) => run_test(&cli.global, &args),
         Command::K8s(args) => run_k8s(&cli.global, &args.action),
+        Command::Preflight(args) => run_preflight(&cli.global, &args),
+        Command::Brief(args) => run_brief(&cli.global, &args),
+        Command::Mcp(args) => run_mcp(&args),
+        Command::AgentConfig(args) => run_agent_config(&cli.global, &args),
+        Command::Setup(args) => run_setup(&cli.global, &args),
     }
 }
 
@@ -72,6 +78,183 @@ fn refresh_scan(config_override: Option<std::path::PathBuf>) -> Result<ScanFresh
     })
 }
 
+fn proc_root() -> std::path::PathBuf {
+    std::env::var_os("TWIN_PROC_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/proc"))
+}
+
+fn run_preflight(global: &GlobalArgs, args: &PreflightArgs) -> i32 {
+    use std::io::Read;
+    use twin_cli::hook;
+
+    let mut command = args.command.join(" ");
+    let mut cwd = args.cwd.clone();
+    let mut file_changes = args
+        .file
+        .iter()
+        .map(|path| twin_app::FileChange {
+            path: path.clone(),
+            operation: args.op.into(),
+        })
+        .collect::<Vec<_>>();
+    if let Some(agent) = args.hook {
+        let mut stdin = String::new();
+        if std::io::stdin().read_to_string(&mut stdin).is_err() {
+            return emit_hook(hook::fail_open(agent), 0);
+        }
+        let Some(input) = hook::parse_input(&stdin) else {
+            return emit_hook(hook::fail_open(agent), 0);
+        };
+        command = input.command;
+        file_changes.extend(input.file_changes);
+        cwd = cwd.or(input.cwd);
+    }
+    if command.trim().is_empty() && file_changes.is_empty() {
+        eprintln!(
+            "Error: pass the shell command to evaluate, e.g. twin preflight \"<command>\", or --file PATH"
+        );
+        return 1;
+    }
+    let request = twin_app::PreflightRequest {
+        command,
+        file_changes,
+        cwd: cwd.or_else(|| std::env::current_dir().ok()),
+        config_override: args.config.clone(),
+        max_graph_age_secs: args.max_age,
+    };
+    let result = match twin_app::paths::resolve_command_paths(args.config.as_deref())
+        .map_err(twin_app::AppError::from)
+        .and_then(|paths| {
+            twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
+            twin_app::preflight_in(&paths.layout, &request, &proc_root())
+        }) {
+        Ok(result) => result,
+        Err(error) => {
+            if let Some(agent) = args.hook {
+                eprintln!("twin preflight unavailable: {error}");
+                return emit_hook(hook::fail_open(agent), 0);
+            }
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
+    if let Some(agent) = args.hook {
+        return emit_hook(hook::response(agent, args.on_stop, &result), 0);
+    }
+    emit(global.json_mode(), &result, output::preflight::render);
+    match result.verdict {
+        twin_app::PreflightVerdict::Go => 0,
+        twin_app::PreflightVerdict::Caution => 3,
+        twin_app::PreflightVerdict::Stop => 4,
+    }
+}
+
+fn run_brief(global: &GlobalArgs, args: &BriefArgs) -> i32 {
+    let request = twin_app::BriefRequest {
+        target: args.target.clone(),
+        config_override: args.config.clone(),
+        max_graph_age_secs: args.max_age,
+        changes_since: args.since.clone(),
+    };
+    match twin_app::paths::resolve_command_paths(args.config.as_deref())
+        .map_err(twin_app::AppError::from)
+        .and_then(|paths| {
+            twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
+            twin_app::brief_in(&paths.layout, &request, &proc_root())
+        }) {
+        Ok(result) => {
+            emit(global.json_mode(), &result, output::brief::render);
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_setup(global: &GlobalArgs, args: &SetupArgs) -> i32 {
+    let twin = args
+        .twin_path
+        .clone()
+        .or_else(|| std::env::current_exe().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "twin".to_string());
+    let outcome = twin_app::paths::resolve_command_paths(args.config.as_deref())
+        .map_err(twin_app::AppError::from)
+        .and_then(|paths| {
+            let store_created = !paths.layout.db_file().exists();
+            twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
+            let scan = twin_app::scan_in(
+                &paths.layout,
+                ScanRequest::default_with_config(args.config.clone()),
+                &proc_root(),
+            )?;
+            Ok((store_created, scan))
+        });
+    match outcome {
+        Ok((store_created, scan)) => {
+            let config = twin_cli::agent_config::render(args.agent, &twin);
+            let summary =
+                twin_cli::agent_config::SetupSummary::new(store_created, &scan, config, &twin);
+            emit(
+                global.json_mode(),
+                &summary,
+                twin_cli::agent_config::render_setup,
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn run_agent_config(global: &GlobalArgs, args: &AgentConfigArgs) -> i32 {
+    let twin = args
+        .twin_path
+        .clone()
+        .or_else(|| std::env::current_exe().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "twin".to_string());
+    let config = twin_cli::agent_config::render(args.agent, &twin);
+    emit(
+        global.json_mode(),
+        &config,
+        twin_cli::agent_config::render_text,
+    );
+    0
+}
+
+fn run_mcp(args: &McpArgs) -> i32 {
+    let paths = match twin_app::paths::resolve_command_paths(args.config.as_deref()) {
+        Ok(paths) => paths,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            return 1;
+        }
+    };
+    let server =
+        twin_cli::mcp::McpServer::new(paths.layout, args.config.clone(), proc_root(), args.max_age);
+    let stdin = std::io::stdin();
+    match server.serve(stdin.lock(), std::io::stdout()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            1
+        }
+    }
+}
+
+fn emit_hook(response: Option<String>, code: i32) -> i32 {
+    if let Some(response) = response {
+        println!("{response}");
+    }
+    code
+}
+
 fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
     let request = InitRequest {
         force: args.force,
@@ -79,7 +262,7 @@ fn run_init(global: &GlobalArgs, args: &InitArgs) -> i32 {
     };
     match twin_app::init(request) {
         Ok(result) => {
-            emit(global.json, &result, output::init::render);
+            emit(global.json_mode(), &result, output::init::render);
             0
         }
         Err(error) => {
@@ -94,7 +277,7 @@ fn run_doctor(global: &GlobalArgs, args: &DoctorArgs) -> i32 {
         twin_app::doctor_flags(args.config.as_deref(), args.ebpf, args.containers, args.k8s);
     match result {
         Ok(result) => {
-            emit(global.json, &result, output::doctor::render);
+            emit(global.json_mode(), &result, output::doctor::render);
             0
         }
         Err(error) => {
@@ -202,7 +385,11 @@ fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
             };
             match twin_app::init_file(&request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::test_report::render_init);
+                    emit(
+                        global.json_mode(),
+                        &result,
+                        output::test_report::render_init,
+                    );
                     0
                 }
                 Err(error) => {
@@ -213,7 +400,11 @@ fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
         }
         TestAction::Lint(file_args) => match twin_app::lint_file(&file_args.path) {
             Ok(document) => {
-                emit(global.json, &document, output::test_report::render_lint);
+                emit(
+                    global.json_mode(),
+                    &document,
+                    output::test_report::render_lint,
+                );
                 0
             }
             Err(error) => {
@@ -250,7 +441,7 @@ fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
             match twin_app::run_file_with_options(&paths.layout, &file_args.path, &options) {
                 Ok(report) => {
                     let failed = report.failed > 0;
-                    emit(global.json, &report, output::test_report::render_run);
+                    emit(global.json_mode(), &report, output::test_report::render_run);
                     if failed {
                         1
                     } else {
@@ -274,7 +465,7 @@ fn run_test(global: &GlobalArgs, args: &TestArgs) -> i32 {
             match twin_app::list_test_runs_in(&paths.layout) {
                 Ok(runs) => {
                     emit(
-                        global.json,
+                        global.json_mode(),
                         runs.as_slice(),
                         output::test_report::render_list,
                     );
@@ -298,7 +489,7 @@ fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
                 config_override: args.config.clone(),
             }) {
                 Ok(result) => {
-                    emit(global.json, &result, output::k8s::render_watch);
+                    emit(global.json_mode(), &result, output::k8s::render_watch);
                     0
                 }
                 Err(error) => {
@@ -321,7 +512,7 @@ fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
                 config_override: args.config.clone(),
             }) {
                 Ok(result) => {
-                    emit(global.json, &result, output::k8s::render_logs);
+                    emit(global.json_mode(), &result, output::k8s::render_logs);
                     0
                 }
                 Err(error) => {
@@ -338,7 +529,7 @@ fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
             };
             match twin_app::k8s_scan(request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::k8s::render_scan);
+                    emit(global.json_mode(), &result, output::k8s::render_scan);
                     0
                 }
                 Err(error) => {
@@ -361,7 +552,7 @@ fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
             };
             match twin_app::k8s_graph(request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::k8s::render_graph);
+                    emit(global.json_mode(), &result, output::k8s::render_graph);
                     0
                 }
                 Err(error) => {
@@ -384,7 +575,7 @@ fn run_k8s(global: &GlobalArgs, action: &K8sAction) -> i32 {
             };
             match twin_app::k8s_impact(request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::k8s::render_impact);
+                    emit(global.json_mode(), &result, output::k8s::render_impact);
                     0
                 }
                 Err(error) => {
@@ -426,7 +617,7 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     };
     match result {
         Ok(result) => {
-            emit(global.json, &result, output::scan::render);
+            emit(global.json_mode(), &result, output::scan::render);
             0
         }
         Err(error) => {
@@ -503,7 +694,7 @@ fn run_emulate(global: &GlobalArgs, args: &EmulateArgs) -> i32 {
     match twin_app::emulate(request) {
         Ok(result) => {
             emit_after_scan(
-                global.json,
+                global.json_mode(),
                 &result,
                 output::emulate::render_with_scan,
                 scan,
@@ -534,7 +725,12 @@ fn run_impact(global: &GlobalArgs, args: &ImpactArgs) -> i32 {
     };
     match twin_app::impact(request) {
         Ok(result) => {
-            emit_after_scan(global.json, &result, output::impact::render_with_scan, scan);
+            emit_after_scan(
+                global.json_mode(),
+                &result,
+                output::impact::render_with_scan,
+                scan,
+            );
             0
         }
         Err(error) => {
@@ -550,7 +746,8 @@ fn run_what_changed(global: &GlobalArgs, args: &WhatChangedArgs) -> i32 {
     match twin_app::what_changed(request) {
         Ok(result) => {
             let rendered = if global.json {
-                output::json::render(&result).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+                output::what_changed::render_json(&result, verbose, global.json_mode())
+                    .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
             } else {
                 output::what_changed::render(
                     &result,
@@ -573,7 +770,7 @@ fn run_snapshot(global: &GlobalArgs, args: &SnapshotArgs) -> i32 {
             let request = snapshot::snapshot_create_request(args, name);
             match twin_app::snapshot_create(request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::snapshot::render_create);
+                    emit(global.json_mode(), &result, output::snapshot::render_create);
                     0
                 }
                 Err(error) => {
@@ -586,7 +783,7 @@ fn run_snapshot(global: &GlobalArgs, args: &SnapshotArgs) -> i32 {
             let request = snapshot::snapshot_list_request(args);
             match twin_app::snapshot_list(request) {
                 Ok(result) => {
-                    emit(global.json, &result, output::snapshot::render_list);
+                    emit(global.json_mode(), &result, output::snapshot::render_list);
                     0
                 }
                 Err(error) => {
@@ -602,7 +799,7 @@ fn run_diff(global: &GlobalArgs, args: &DiffArgs) -> i32 {
     let request = diff::diff_request(args);
     match twin_app::diff(request) {
         Ok(result) => {
-            emit(global.json, &result, output::diff::render);
+            emit(global.json_mode(), &result, output::diff::render);
             0
         }
         Err(error) => {
@@ -635,10 +832,15 @@ fn run_graph(global: &GlobalArgs, args: &GraphArgs) -> i32 {
         Ok(result) => {
             if args.format == twin_cli::cli::args::GraphFormat::Human {
                 if let Some(scan) = scan {
-                    emit_after_scan(global.json, &result, output::graph::render_with_scan, scan);
+                    emit_after_scan(
+                        global.json_mode(),
+                        &result,
+                        output::graph::render_with_scan,
+                        scan,
+                    );
                 } else if global.json {
                     emit(
-                        true,
+                        global.json_mode(),
                         &serde_json::json!({"at": args.at, "history_scope": "retained observations only", "graph": result}),
                         |_| String::new(),
                     );
@@ -671,25 +873,27 @@ fn eprint_graph_error(error: &AppError) {
     }
 }
 
-fn emit<T: serde::Serialize + ?Sized>(json: bool, value: &T, text: fn(&T) -> String) {
-    let rendered = if json {
-        output::json::render(value).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-    } else {
+fn emit<T: serde::Serialize + ?Sized>(json: JsonMode, value: &T, text: fn(&T) -> String) {
+    let rendered = if json == JsonMode::Off {
         text(value)
+    } else {
+        output::json::render_bounded(value, json)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
     };
     println!("{rendered}");
 }
 
 fn emit_after_scan<T: serde::Serialize>(
-    json: bool,
+    json: JsonMode,
     value: &T,
     text: fn(&T, Option<ScanFreshness>) -> String,
     scan: ScanFreshness,
 ) {
-    let rendered = if json {
-        output::json::render(value).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-    } else {
+    let rendered = if json == JsonMode::Off {
         text(value, Some(scan))
+    } else {
+        output::json::render_bounded(value, json)
+            .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
     };
     println!("{rendered}");
 }
@@ -697,7 +901,7 @@ fn emit_after_scan<T: serde::Serialize>(
 fn run_why(global: &GlobalArgs, args: &twin_cli::cli::args::WhyArgs) -> i32 {
     match twin_app::why_request(&args.target, args.config.clone()).and_then(twin_app::why) {
         Ok(result) => {
-            emit(global.json, &result, output::why::render);
+            emit(global.json_mode(), &result, output::why::render);
             0
         }
         Err(error) => {

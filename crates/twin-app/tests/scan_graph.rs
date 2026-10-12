@@ -45,7 +45,8 @@ fn scan_in_persists_process_nodes_and_parent_edges() {
     let proc = fixture_proc(&home);
     let empty_host = tempfile::TempDir::new().expect("empty host root");
     support::set_host_root(empty_host.path());
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     support::clear_scan_env();
     assert_eq!(result.process_count, 2);
     assert_eq!(result.parent_edge_count, 1);
@@ -59,7 +60,7 @@ fn scan_in_records_collector_run() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let store = Store::open(&home.layout.db_file()).expect("open");
     let runs = store
         .list_collector_runs(Some(COLLECTOR_NAME))
@@ -73,8 +74,8 @@ fn scan_in_twice_does_not_fail_on_edge_observation_links() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan1");
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan2");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan1");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan2");
 }
 
 #[test]
@@ -82,11 +83,11 @@ fn scan_in_repeated_scan_updates_last_seen() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan1");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan1");
     let store = Store::open(&home.layout.db_file()).expect("open");
     let first = store.get_node("process:pid:42").expect("get").expect("row");
     std::thread::sleep(std::time::Duration::from_millis(2));
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan2");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan2");
     let second = store.get_node("process:pid:42").expect("get").expect("row");
     assert_eq!(second.first_seen_ns, first.first_seen_ns);
     assert!(second.last_seen_ns >= first.last_seen_ns);
@@ -97,7 +98,7 @@ fn graph_in_lists_process_nodes() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -118,7 +119,7 @@ fn graph_in_returns_process_neighborhood() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let target = NodeId::process(42);
     let result = twin_app::graph_in(
         &home.layout,
@@ -140,7 +141,8 @@ fn scan_in_persists_service_and_cgroup_graph() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert_eq!(result.service_count, 1);
     assert_eq!(result.cgroup_count, 1);
     assert!(result.in_cgroup_edge_count >= 1);
@@ -169,7 +171,7 @@ fn graph_in_lists_service_nodes() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -190,7 +192,7 @@ fn graph_in_service_neighborhood_by_query() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -212,7 +214,7 @@ fn graph_in_service_target_by_id() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -261,7 +263,8 @@ fn scan_in_persists_port_and_listener_edges() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_listener(&home);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert_eq!(result.tcp_listener_count, 1);
     assert_eq!(result.port_count, 1);
     assert!(
@@ -298,7 +301,7 @@ fn graph_in_port_neighborhood() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_listener(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let port = NodeId::port_tcp("127.0.0.1", 5432).expect("port");
     let result = twin_app::graph_in(
         &home.layout,
@@ -321,7 +324,7 @@ fn graph_in_lists_port_nodes() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_listener(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -455,7 +458,7 @@ fn graph_in_service_shows_listening_ports() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_listener(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -479,7 +482,8 @@ fn scan_json_includes_warning_details() {
     support::write_proc_fixture(&proc, 9, "not valid stat", "", b"", None);
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert!(!result.warning_details.is_empty());
     assert!(!result.warnings.is_empty());
 }
@@ -522,7 +526,8 @@ fn scan_in_persists_active_connection_edges() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert_eq!(result.tcp_connection_count, 1);
     assert!(result.process_connects_to_edge_count >= 1);
     assert!(result.service_connects_to_edge_count >= 1);
@@ -542,7 +547,8 @@ fn scan_in_infers_service_dependency() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert!(result.service_depends_on_edge_count >= 1);
 
     let store = Store::open(&home.layout.db_file()).expect("open");
@@ -567,7 +573,7 @@ fn graph_in_service_shows_dependencies_and_dependents() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
 
     let django = twin_app::graph_in(
         &home.layout,
@@ -602,7 +608,7 @@ fn graph_in_port_shows_callers() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let port = NodeId::port_tcp("127.0.0.1", 5432).expect("port");
     let result = twin_app::graph_in(
         &home.layout,
@@ -623,7 +629,7 @@ fn impact_in_service_shows_direct_dependents() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -651,7 +657,7 @@ fn impact_in_port_shows_direct_callers() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -676,7 +682,7 @@ fn impact_in_service_shorthand_resolves() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -712,7 +718,7 @@ fn impact_in_ambiguous_service_errors() {
         None,
         Some("0::/system.slice/ang.service\n"),
     );
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let err = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -729,7 +735,7 @@ fn impact_in_no_dependents_low_risk() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -760,7 +766,7 @@ fn impact_in_unmapped_active_surfaces_unknowns() {
             "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0\n   1: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0"
         ),
     );
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::impact_in(
         &home.layout,
         ImpactRequest {
@@ -780,7 +786,7 @@ fn impact_in_multiple_dependents_raises_risk() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_active_connection(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let mut store = Store::open(&home.layout.db_file()).expect("open");
     store
         .upsert_node(&twin_store::NodeRow {
@@ -857,7 +863,8 @@ fn scan_in_infers_dependency_via_wildcard_listener() {
     );
     write_socket_fd(&proc, 721, 8, 12345);
     write_socket_fd(&proc, 8841, 12, 456);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert!(result.service_depends_on_edge_count >= 1);
     let store = Store::open(&home.layout.db_file()).expect("open");
     assert!(store
@@ -883,7 +890,8 @@ fn unmapped_active_connection_does_not_create_dependency() {
             "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0\n   1: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0"
         ),
     );
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert!(result.unmapped_active_socket_count >= 1);
     assert_eq!(result.service_depends_on_edge_count, 0);
 }
@@ -909,7 +917,8 @@ fn scan_with_systemd(
 ) -> twin_app::ScanResult {
     let _env = support::lock_scan_env();
     support::set_systemd_unit_root(systemd);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(home), proc).expect("scan");
     support::clear_scan_env();
     result
 }
@@ -1022,7 +1031,7 @@ fn impact_in_degraded_scan_still_low_without_local_unknowns() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let mut store = Store::open(&home.layout.db_file()).expect("open");
     store
         .insert_collector_run(&twin_store::CollectorRunRow {
@@ -1060,7 +1069,7 @@ fn graph_in_evidence_includes_ppid_line() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let result = twin_app::graph_in(
         &home.layout,
         GraphRequest {
@@ -1120,7 +1129,8 @@ fn scan_in_persists_unix_listener_and_infers_service_dependency() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_unix_dependency(&home);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert_eq!(result.unix_listener_count, 1);
     assert_eq!(result.unix_connection_count, 1);
     assert!(result.service_listens_on_unix_edge_count >= 1);
@@ -1147,7 +1157,7 @@ fn graph_in_unix_socket_neighborhood() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_unix_dependency(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let unix = NodeId::unix_socket("/run/dbus/system_bus_socket").expect("unix");
     let result = twin_app::graph_in(
         &home.layout,
@@ -1169,7 +1179,7 @@ fn impact_in_unix_socket_target_lists_callers() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let proc = fixture_proc_with_unix_dependency(&home);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     let unix = NodeId::unix_socket("/run/dbus/system_bus_socket").expect("unix");
     let result = twin_app::impact_in(
         &home.layout,
@@ -1276,7 +1286,8 @@ fn scan_in_applies_cgroup_correction_from_dbus_fixture() {
             r#"{"/system.slice/wrong.service":"correct.service"}"#,
         );
     }
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     support::clear_scan_env();
     assert!(result.cgroup_correction_count >= 1);
     let store = Store::open(&home.layout.db_file()).expect("open");
@@ -1429,7 +1440,8 @@ fn udp_scan_graph_impact_and_outage_preserve_protocol_separation() {
     write_socket_fd(&proc, 8841, 13, 457);
     write_tcp_table(&proc, "udp", &udp);
     write_tcp_table(&proc, "udp6", TCP_HEADER);
-    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    let result =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
     assert_eq!(result.tcp_listener_count, 1);
     assert_eq!(result.udp_listener_count, 1);
     assert_eq!(result.tcp_connection_count, 1);
@@ -1472,8 +1484,8 @@ fn udp_scan_graph_impact_and_outage_preserve_protocol_separation() {
         .flat_map(|peer| &peer.evidence)
         .any(|line| line.source.starts_with("/proc/net/udp:")));
     std::fs::remove_file(proc.join("net/udp")).expect("outage");
-    let result =
-        twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("outage scan");
+    let result = twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc)
+        .expect("outage scan");
     assert!(result
         .coverage
         .unavailable_collectors
@@ -1488,7 +1500,8 @@ fn udp_scan_graph_impact_and_outage_preserve_protocol_separation() {
         "active"
     );
     write_tcp_table(&proc, "udp", TCP_HEADER);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("empty UDP scan");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc)
+        .expect("empty UDP scan");
     assert_eq!(
         store.get_node(udp_id).expect("UDP").expect("node").state,
         "gone"
@@ -1556,7 +1569,7 @@ fn reused_pid_resets_lifetime_and_closes_previous_runtime_edges() {
         "11111111-1111-1111-1111-111111111111",
     )
     .expect("boot");
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("first");
     let mut store = Store::open(&home.layout.db_file()).expect("store");
     let first = store
         .get_node_typed(&NodeId::process(42))
@@ -1588,7 +1601,8 @@ fn reused_pid_resets_lifetime_and_closes_previous_runtime_edges() {
         format!("{} {}", &stat[..=close], fields.join(" ")),
     )
     .expect("new stat");
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("replacement");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc)
+        .expect("replacement");
     support::clear_scan_env();
     let replacement = store
         .get_node_typed(&NodeId::process(42))
@@ -1610,13 +1624,62 @@ fn missing_tcp_table_preserves_previous_listener_as_uncertain() {
     let proc = fixture_proc_with_listener(&home);
     let empty = tempfile::TempDir::new().expect("host");
     support::set_host_root(empty.path());
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("first");
     std::fs::remove_file(proc.join("net/tcp")).expect("missing table");
-    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("partial");
+    twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("partial");
     support::clear_scan_env();
     let store = Store::open(&home.layout.db_file()).expect("store");
     let edges = store.list_edges_from("process:pid:721").expect("edges");
     assert!(edges
         .iter()
         .any(|edge| edge.kind == "listens_on" && edge.state == "stale"));
+}
+
+#[test]
+fn host_wide_scan_warnings_are_grouped_once_per_detail_in_impact_unknowns() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("grouped-warning-proc");
+    std::fs::create_dir_all(&proc).expect("proc");
+    for pid in 100..112u32 {
+        write_proc_fixture_with_cgroup(
+            &proc,
+            pid,
+            &format!("{pid} (worker) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"),
+            "Uid:\t0\t0\t0\t0\n",
+            b"worker\0",
+            None,
+            Some("0::/system.slice/api.service\n"),
+        );
+    }
+    let scan =
+        twin_app::scan_in(&home.layout, support::host_isolated_scan(&home), &proc).expect("scan");
+    let repeated = scan
+        .warning_details
+        .iter()
+        .filter(|warning| warning.detail == scan.warning_details[0].detail)
+        .count();
+    assert!(
+        repeated > 1,
+        "fixture must repeat one warning: {:?}",
+        scan.warning_details
+    );
+    let result = twin_app::impact_in(
+        &home.layout,
+        ImpactRequest {
+            target_query: Some("api".to_string()),
+            ..ImpactRequest::default()
+        },
+    )
+    .expect("impact");
+    let matching = result
+        .unknowns
+        .iter()
+        .filter(|unknown| unknown.detail == scan.warning_details[0].detail)
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "unknowns: {:?}", result.unknowns);
+    assert!(matching[0]
+        .source
+        .as_deref()
+        .is_some_and(|source| source.ends_with(&format!("(+{} similar)", repeated - 1))));
 }

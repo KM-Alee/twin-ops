@@ -218,8 +218,10 @@ impl<'a> PathCollector<'a> {
             if dependent_node.kind() != NodeKind::Service {
                 continue;
             }
-            let impact_kind =
-                classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
+            let is_running =
+                crate::commands::evidence::is_service_running(self.store, &dependent_node)
+                    .map_err(ImpactError::Store)?;
+            let impact_kind = classify_dependent_impact_kind(&edge, is_running);
             if impact_kind.is_runtime() {
                 edges.push(edge);
             }

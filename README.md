@@ -1,240 +1,229 @@
 # twin
 
-**A read-only operational twin for Linux.**
+**Know what breaks before you touch a Linux box. Built for the AI agents doing the touching.**
 
-`twin` builds an evidence-backed dependency graph of what is running on your machine, then lets you explore it and simulate risky operations — without changing anything on the host.
+`twin` keeps a read-only, evidence-backed map of a Linux host: services, processes, listening
+ports, live connections, containers, config files, packages, Kubernetes objects, and what
+depends on what. One call tells you what is going on, or what a command would break, before you
+run it.
 
-Most tools answer *what is happening right now*. `twin` answers:
+```console
+$ twin preflight "sudo systemctl restart docker"
+twin preflight
+══════════════
 
-> What does this machine depend on, what changed, and what would likely break if I did this?
+  fail          STOP  restart docker — 1 dependent(s) interrupted: shop-web-1
+  —             command  sudo systemctl restart docker
+
+STOP · restart docker
+  ├──  target          service:docker.service
+  ├──  risk            high · evidence weak (15/100)
+  ├──  reason          1 running container(s) stop when the Docker daemon restarts
+  ├──  affected        shop-web-1 — shop-web-1 stops while the Docker daemon restarts (live-restore disabled)
+  └──  advice          validate configuration first: `dockerd --validate`
+```
+
+A 20-second recording of real output on a synthetic host is in [`docs/demo.cast`](docs/demo.cast)
+(`asciinema play docs/demo.cast`).
+
+Nothing was restarted. `twin` cannot change the host. That guarantee is enforced in code and by the
+test suite, which is why it is safe to hand to an agent.
 
 ---
 
-## What it is
+## Why
 
-`twin` is a Rust CLI for sysadmins, DevOps engineers, and Linux power users who need to reason about blast radius before touching production.
+Agents (Claude Code, Codex, Cursor, Gemini CLI, Copilot) are now routinely asked to "fix nginx",
+"free some disk" or "upgrade openssl" on real machines. To do that they run 10–20 shell commands
+(`systemctl status`, `ss -tlnp`, `lsof`, `docker ps`, `cat` on unit files) to rebuild a picture
+of the host, then run mutating commands without knowing who depends on what.
 
-| `twin` is | `twin` is not |
-|-----------|---------------|
-| A local, read-only dependency graph | A monitoring dashboard |
-| Evidence-backed impact analysis | A process manager or remediation tool |
-| Overlay-based “what if” emulation | A VM sandbox or K8s platform |
-| A `top` / `htop` / `lsof` replacement | — |
+`twin` collapses the investigation into one call and adds the missing step: **a blast-radius
+check before every mutating command.**
 
-Every conclusion separates **observed facts** from **inferred conclusions**, and reports **risk** separately from **evidence strength**.
+| Without twin | With twin |
+|---|---|
+| `systemctl status` + `ss -tlnp` + `lsof -i` + `cat /etc/...` + `docker ps` + `journalctl` | `twin brief nginx` |
+| "restarting docker should be fine" | `twin preflight "systemctl restart docker"` → STOP, names every container that goes down |
+| "what changed since it broke?" across logs and package history | `twin what-changed --since 1h --target api` |
+| Hope the agent doesn't `rm -rf` a data dir | hook auto-checks every agent shell command |
 
 ---
 
 ## Quick start
 
-### Requirements
-
-- Linux (reads `/proc`, systemd, socket tables, and more)
-- [Rust](https://rustup.rs/) toolchain (edition 2021)
-
-### Build and run
-
 ```bash
-git clone <repo-url>
-cd twin-ops
-cargo build --release
+# Static binary for x86_64/aarch64 Linux, checksum-verified, no sudo, into ~/.local/bin
+curl -fsSL https://github.com/KM-Alee/twin-ops/releases/latest/download/install.sh | sh
 
-# First-time setup
-./target/release/twin init
-./target/release/twin doctor
-
-# Collect system state into the local graph
-./target/release/twin scan
-
-# Explore
-./target/release/twin graph process
-./target/release/twin graph nginx
-./target/release/twin impact postgresql
+twin setup claude-code         # create twin's store, scan this host, print agent config
+twin brief                     # what runs here, what's exposed, what's fragile
+twin brief postgresql          # everything about one service/container/port/file
+twin preflight "apt remove openssl"
 ```
 
-Add `--json` to any command for machine-readable output.
+Releases also ship `.deb` and `.rpm` packages, and `packaging/aur/PKGBUILD` builds `twin-bin`.
+From source: `cargo build --release`. Commands create twin's own store on first use; an
+existing store is only migrated by `twin init`.
 
-### Local state
+For full process and socket coverage, run as root or give the binary read capabilities:
+`sudo setcap cap_dac_read_search,cap_sys_ptrace+ep "$(command -v twin)"`. Without them,
+`twin` still works and reports hidden processes as **unknown**, never as absent. `twin setup`
+tells you how many are hidden.
 
-`twin` stores config and observations under XDG paths:
-
-```text
-~/.config/twin/config.toml    # configuration
-~/.local/share/twin/twin.db   # SQLite graph store
-```
+On a remote machine, any MCP client can run `ssh host twin mcp` as its server command.
 
 ---
 
-## Commands
+## Plug it into your agent
 
-### `twin init`
-
-Create local config and database layout.
-
-```bash
-twin init
-twin init --force          # overwrite existing config
-```
-
-### `twin doctor`
-
-Check CLI, config, database, permissions, and scan quality.
+`twin setup <agent>` prepares twin and prints ready-to-paste config; `twin agent-config
+<agent>` prints only the config. Neither writes your agent's files, so you review and merge the
+snippets yourself.
 
 ```bash
-twin doctor
-twin doctor --json
+twin agent-config claude-code   # MCP server + PreToolUse hook (shell and file tools) + SKILL.md
+twin agent-config codex         # MCP server + PreToolUse hook (shell and apply_patch) + AGENTS.md
+twin agent-config cursor        # MCP server + beforeShellExecution hook
+twin agent-config gemini        # MCP server + BeforeTool hook
+twin agent-config vscode        # MCP server for Copilot agent mode
+twin agent-config generic       # AGENTS.md instructions for any shell-capable agent
 ```
 
-### `twin scan`
+There are three integration layers. Use any or all of them:
 
-Read the host and persist nodes, edges, and evidence into the graph.
+1. **MCP server** (`twin mcp`). Works with every MCP client and provides seven read-only tools:
 
-```bash
-twin scan
-twin scan --samples 5 --interval 2   # merge short-lived connections across samples
-```
+   | Tool | Use it to |
+   |---|---|
+   | `twin_overview` | orient on a machine: failed units, network exposure, hub services, containers, recent changes |
+   | `twin_brief` | get everything about one target in a single call |
+   | `twin_preflight` | predict a command's blast radius (go / caution / stop) |
+   | `twin_changes` | see restarts, config edits, listener and package changes in a window |
+   | `twin_why` | see the evidence chain behind a dependency |
+   | `twin_find` | look up exact ids by name |
+   | `twin_check` | run `twin.yaml` health contracts |
 
-Collectors cover processes, file descriptors, listening sockets, systemd units, and config file discovery. Missing permissions produce coverage gaps — the scan continues and reports what was hidden.
+   Every tool is annotated `readOnlyHint: true`. Answers are bounded, typically 1–3 KB.
 
-### `twin graph`
+2. **Pre-command hook** (`twin preflight --hook <agent>`). The agent's own hook system sends
+   each shell command **and each file edit made with its own tools** (Claude Code
+   Write/Edit/MultiEdit, Codex `apply_patch`, Gemini `write_file`/`replace`) to twin before
+   it runs. Cursor has no pre-edit hook, so its file edits are not checked in advance.
+   - **go**: silent.
+   - **caution**: the reasons are added to the agent's context.
+   - **stop**: the human is asked to confirm, or the command is blocked where the agent can't
+     ask. Pass `--on-stop deny|ask|warn` to choose.
 
-Inspect the dependency graph.
+   The hook fails open: if twin is unavailable, your agent keeps working.
 
-```bash
-twin graph                          # list processes (default)
-twin graph --kind service           # list systemd services
-twin graph 1234                     # neighborhood around a PID
-twin graph process:pid:1234         # same, by canonical node id
-twin graph service:nginx.service    # service and its dependencies
-twin graph file:/etc/nginx/nginx.conf
-```
+3. **Skill / AGENTS.md**. Plain instructions that teach an agent when to reach for twin, for
+   agents without MCP or hooks.
 
-### `twin impact`
+---
 
-Show what depends on a service or port — runtime, restart, and configured impact buckets.
+## What `preflight` understands
 
-```bash
-twin impact postgresql
-twin impact port:tcp:127.0.0.1:5432
-```
+| Area | Commands |
+|---|---|
+| Services | `systemctl`, `service`, `nginx -s`, `apachectl` |
+| Containers | `docker`/`podman`/`nerdctl`, `docker compose`/`docker-compose` (resolved to the project's containers) |
+| Files | `rm`, `unlink`, `shred`, `sed -i`, `perl -i`, `tee`, `truncate`, `mv`, `cp`, `chmod`, `chown`, `>`/`>>` |
+| Packages | `apt`, `apt-get`, `dnf`, `yum`, `zypper`, `apk`, `pacman`, `dpkg`, `rpm` |
+| Processes | `kill` (including `-0`, `-STOP`, `-HUP`), `pkill`, `killall` |
+| Storage | `umount`, `mount -o remount,ro`, `mkfs*`, `wipefs`, `dd of=/dev/…`, `parted`, `sgdisk` |
+| Network | `ip link/addr/route`, `ifdown`, `nmcli`, `ufw`, `iptables`, `nft`, `firewall-cmd` |
+| System | `sysctl -w`, `/proc/sys` writes, `swapoff`, `crontab`, `userdel`, `usermod -L`, `reboot`, `shutdown` |
+| Kubernetes | `kubectl`/`oc` rollout, delete, scale, apply, drain |
+| Scripts | `./deploy.sh`, `bash x.sh`, `source x.sh`, `make TARGET`: every line is evaluated |
 
-### `twin emulate`
+It sees through `sudo`/`doas`, env assignments, `nohup`/`timeout`/`env`, `&&`/`||`/`;`/pipes,
+nested `bash -c '…'` and heredocs. In scripts, only lines that are operations are shown; lines
+that depend on shell variables are flagged as not assessable rather than guessed. Direct file
+changes can be checked with `twin preflight --file PATH --op edit|delete|create`.
 
-Hypothetically perform an action using a graph overlay. **Nothing is changed on the host.**
+Examples of what it catches:
 
-```bash
-twin emulate restart postgresql
-twin emulate restart service:postgresql.service
+- **Killing a pid** is resolved to its owning service, with that service's dependents.
+- **Restarting Docker** lists every running container that stops (it reads `live-restore`).
+- **`rm -rf /var/lib/docker`** is a stop: a running service reads data under that path.
+- **Editing `/etc/nginx/nginx.conf`** reports that nginx reads the file and suggests `nginx -t`.
+- **Stopping sshd or NetworkManager** is a stop: you can lock yourself out.
+- **`ufw deny 5432`** finds the listener and its connected clients.
+- **`ip link set eth0 down`** is a stop when that interface carries the default route.
+- **`umount /srv` or `mkfs` on its device** names every service using paths on that mount.
+- **`docker compose down`** finds the project's containers from their Compose labels.
+- **`pacman -Syu` / `apt upgrade`** is a caution: twin explains it can't see the package
+  manager's plan, and suggests preflighting specific packages.
 
-twin emulate delete /etc/nginx/nginx.conf
-twin emulate delete file:/etc/nginx/nginx.conf
-```
+Exit codes: `0` go, `3` caution, `4` stop, `1` error. Use it in scripts too:
+`twin preflight "$cmd" && eval "$cmd"`.
 
-Emulation applies a temporary overlay on top of the scanned graph. Overlays are never persisted.
+---
+
+## Principles
+
+- **Read-only forever.** No restarts, kills, writes to the host, firewall changes, installs, or
+  container/Kubernetes mutations. `twin-safety` scans every production source file for
+  execution primitives (`Command::new`, `kill`, Kubernetes `patch`/`delete`). Only the preflight
+  parser may name commands such as `systemctl restart`, and only as text to recognize.
+- **Evidence first.** Every relationship cites its observations and an evidence strength;
+  observed facts are kept separate from inferences.
+- **Risk ≠ confidence.** "How bad" and "how sure" are reported separately.
+- **Unknown is not absent.** Permission gaps, unmapped sockets and unavailable collectors are
+  reported as coverage gaps and lower confidence. They never turn into a green result.
+- **Secrets never stored.** Process argument values, environment variables, Kubernetes secret
+  data and log bodies are never persisted.
+
+---
+
+## All commands
+
+| Command | Purpose |
+|---|---|
+| `twin brief [target]` | one-call host overview or target briefing |
+| `twin preflight "<cmd>"` | predict a command's blast radius |
+| `twin mcp` | MCP server for agents |
+| `twin setup <agent>` | first run: store, scan, visibility check, agent snippets |
+| `twin agent-config <agent>` | print agent setup snippets |
+| `twin scan` / `twin watch` | collect host state once, or continuously (optionally with eBPF) |
+| `twin graph [target]` | explore the dependency graph (also `--format dot|mermaid`) |
+| `twin impact <target>` | dependents of a service, port or package |
+| `twin emulate restart|delete|fill-disk|upgrade|rollout` | detailed what-if overlays |
+| `twin what-changed --since 1h [--target X]` | incident timeline |
+| `twin why <target>` | evidence chains |
+| `twin snapshot` / `twin diff` | baselines and structural diffs |
+| `twin test run twin.yaml` | health contracts; see [operational workflows](docs/operational-workflows.md) |
+| `twin k8s scan|graph|impact|watch|logs` | read-only Kubernetes |
+| `twin doctor` | permissions, collectors, eBPF/Docker/Kubernetes availability |
+
+Add `--json` to any command for machine-readable output. Lists are capped at 100 items with a
+`<field>_omitted` count beside them; add `--full` to get everything.
 
 ---
 
 ## How it works
 
 ```text
-read-only collectors
+read-only collectors (/proc, systemd + D-Bus, sockets, Docker/containerd, K8s, packages, eBPF)
+        ↓ observations (facts, with source + timestamp)
+temporal dependency graph (SQLite, retained history)
         ↓
-evidence observations
+overlay emulation (hypothetical; never persisted, never executed)
         ↓
-temporal operational graph  (SQLite)
-        ↓
-overlay-based emulation
-        ↓
-impact, risk, and evidence reports
+brief · preflight · impact · why · what-changed · contracts
 ```
 
-**Collectors** read `/proc`, systemd, socket tables, and config paths. They emit observations — not conclusions.
-
-**The graph** connects processes, ports, services, files, and sockets with typed edges and linked evidence.
-
-**Emulation** patches a hypothetical overlay onto the base graph to predict blast radius for restarts, file deletion, and (planned) network blocks — without cloning or mutating the system.
-
----
-
-## Safety
-
-`twin` is **read-only forever**. It will never:
-
-- kill, restart, or stop processes or services
-- edit, delete, or create files
-- change firewall rules or block traffic
-- install packages or mutate containers
-- apply, patch, or delete Kubernetes resources
-
-Safety constraints are enforced in code and checked by automated scans in `twin-safety` tests. If a collector cannot read something (permissions, vanished PID), it records a coverage gap and moves on — no panics, no crashes.
-
----
-
-## Project status
-
-Development follows [23 vertical slices](docs/plan-slices.md). Each slice ships a working CLI command with tests.
-
-**Implemented today**
-
-| Area | Commands / behavior |
-|------|---------------------|
-| Foundation | `init`, `doctor`, config, SQLite store |
-| Scan | processes, FDs, sockets, systemd, config files |
-| Graph | process/service/file neighborhoods |
-| Impact | service and port blast radius |
-| Emulate | `restart`, `delete` with overlay impact |
-
-**Planned** (see [PRD](docs/prd.md))
-
-```bash
-twin watch --ebpf
-twin what-changed --since 1h
-twin why nginx
-twin emulate block endpoint api.stripe.com:443
-twin test run twin.yaml
-twin k8s graph deployment/api
-```
-
----
+State lives under XDG paths (`~/.config/twin/config.toml`, `~/.local/share/twin/twin.db`).
 
 ## Development
 
-### Workspace crates
-
-```text
-twin-cli          # binary + human/JSON output
-twin-app          # command orchestration
-twin-core         # domain types, config
-twin-store        # SQLite persistence
-twin-observation  # observation vocabulary
-twin-collectors   # read-only host collectors
-twin-emulate      # overlay-based impact emulation
-```
-
-Dependency direction flows inward: `cli → app → {core, store, collectors, emulate}`. Domain types live in `twin-core`; collectors never write conclusions directly.
-
-### Build and test
-
 ```bash
-cargo build
-cargo test --workspace
-cargo clippy --workspace -- -D warnings
-cargo fmt --check
+cargo build && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --check
 ```
 
-Integration tests use `twin-fixtures` with fake `/proc`, systemd, and socket data — no root, Docker, or live K8s required.
-
-### Documentation
-
-| Document | Purpose |
-|----------|---------|
-| [docs/prd.md](docs/prd.md) | Product requirements and vision |
-| [docs/tech-document.md](docs/tech-document.md) | Technical design |
-| [docs/plan-slices.md](docs/plan-slices.md) | Incremental build plan |
-| [docs/code-layout.md](docs/code-layout.md) | Module layout and test conventions |
-| [AGENTS.md](AGENTS.md) | Contributor and agent conventions |
-
----
+Tests use fixtures (fake `/proc`, systemd, Docker, Kubernetes, eBPF streams); no root, Docker
+or cluster required. See [AGENTS.md](AGENTS.md) for conventions and [docs/](docs/) for design.
 
 ## License
 

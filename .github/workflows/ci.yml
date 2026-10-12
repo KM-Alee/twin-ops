@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    name: fmt · clippy · test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        # Tests use fixtures only: no root, Docker containers, cluster or eBPF needed.
+        run: cargo test --workspace --locked --no-fail-fast
+
+  probes:
+    name: bundled eBPF object matches its manifest
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source and object hashes
+        # Byte-for-byte rebuilds need the pinned clang (tools/build_ebpf.py --check);
+        # this catches a probe edited without rebuilding on any runner.
+        run: |
+          cd crates/twin-ebpf/probes
+          expected_source=$(awk '$1 == "source" {print $2}' twin.bpf.sha256)
+          expected_object=$(awk '$1 == "object" {print $2}' twin.bpf.sha256)
+          test "$(sha256sum twin.bpf.c | cut -d' ' -f1)" = "$expected_source"
+          test "$(sha256sum twin.bpf.o | cut -d' ' -f1)" = "$expected_object"
+
+  release-build:
+    name: release binary size
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p twin-cli
+      - name: Report size
+        run: |
+          size=$(stat -c %s target/release/twin)
+          echo "### twin release binary: $((size / 1024 / 1024)) MiB ($size bytes)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Smoke test
+        run: |
+          ./target/release/twin --version
+          ./target/release/twin init
+          ./target/release/twin scan
+          ./target/release/twin preflight "ls -la"
+          ./target/release/twin --json brief | head -c 400

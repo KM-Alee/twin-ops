@@ -26,6 +26,65 @@ pub use model::{
 };
 pub use paths::TwinLayout;
 
+pub use commands::brief::BriefRequest;
+pub use commands::preflight::{FileChange, FileOperation, PreflightRequest};
+pub use model::{BriefFact, BriefItem, BriefRestart, BriefResult, BriefSection};
+
+/// Rescan the host when the stored graph is older than `max_age_secs`; returns the
+/// graph age in seconds after any refresh.
+pub fn refresh_graph_in(
+    layout: &TwinLayout,
+    config_override: Option<&Path>,
+    max_age_secs: u64,
+    proc_root: &Path,
+) -> Result<u64, AppError> {
+    commands::preflight::refresh_if_stale(layout, config_override, max_age_secs, proc_root)
+}
+
+/// Create twin's own config and database on first use. An existing database is left
+/// untouched: schema migrations still run only through `twin init`.
+pub fn ensure_initialized_in(
+    layout: &TwinLayout,
+    config_override: Option<&Path>,
+) -> Result<(), AppError> {
+    if layout.db_file().exists() {
+        return Ok(());
+    }
+    init_in(
+        layout,
+        InitRequest {
+            force: false,
+            config_override: config_override.map(Path::to_path_buf),
+        },
+    )
+    .map(|_| ())
+}
+
+pub fn brief(request: BriefRequest) -> Result<BriefResult, AppError> {
+    commands::brief::run_home(request)
+}
+
+pub fn brief_in(
+    layout: &TwinLayout,
+    request: &BriefRequest,
+    proc_root: &Path,
+) -> Result<BriefResult, AppError> {
+    commands::brief::run(layout, request, proc_root)
+}
+pub use model::{PreflightAffected, PreflightResult, PreflightStep, PreflightVerdict};
+
+pub fn preflight(request: PreflightRequest) -> Result<PreflightResult, AppError> {
+    commands::preflight::run_home(request)
+}
+
+pub fn preflight_in(
+    layout: &TwinLayout,
+    request: &PreflightRequest,
+    proc_root: &Path,
+) -> Result<PreflightResult, AppError> {
+    commands::preflight::run(layout, request, proc_root)
+}
+
 pub use crate::commands::scan_quality::assess_scan_quality;
 
 pub const DEFAULT_MAX_DEPTH: usize = 4;

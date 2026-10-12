@@ -77,6 +77,8 @@ pub fn run(layout: &TwinLayout, request: &WhyRequest) -> Result<WhyResult, AppEr
                         timestamp_ns: observation.timestamp_ns,
                         raw_ref,
                         facts,
+                        repeat_count: 1,
+                        first_timestamp_ns: observation.timestamp_ns,
                     });
                 }
                 None => unknowns.push(format!("observation {id} is no longer retained")),
@@ -87,7 +89,8 @@ pub fn run(layout: &TwinLayout, request: &WhyRequest) -> Result<WhyResult, AppEr
                 .cmp(&b.timestamp_ns)
                 .then_with(|| a.id.cmp(&b.id))
         });
-        let omitted = observations.len().saturating_sub(8);
+        let mut observations = collapse_repeated(observations);
+        let omitted = observations.len().saturating_sub(4);
         if omitted > 0 {
             observations.drain(..omitted);
             unknowns.push(format!("{omitted} earlier observations omitted from this explanation; score uses all retained evidence"));
@@ -125,7 +128,6 @@ pub fn run(layout: &TwinLayout, request: &WhyRequest) -> Result<WhyResult, AppEr
         ) {
             unknowns.push("supporting evidence is old or its observation time is unknown".into());
         }
-        unknowns.extend(coverage.unknown_lines().into_iter().map(|line| line.detail));
         let strength = if assessment.supporting_ids.is_empty() {
             EvidenceStrength::new(0)
         } else {
@@ -149,6 +151,8 @@ pub fn run(layout: &TwinLayout, request: &WhyRequest) -> Result<WhyResult, AppEr
     } else {
         Vec::new()
     };
+    // Host-wide coverage gaps apply to every relationship; list them once.
+    unknowns.extend(coverage.unknown_lines().into_iter().map(|line| line.detail));
     if traversal_capped {
         unknowns.push(
             "proof neighborhood capped at 64 relationships and 32 nodes; explanation is partial"
@@ -173,6 +177,34 @@ pub fn run(layout: &TwinLayout, request: &WhyRequest) -> Result<WhyResult, AppEr
         relationships,
         unknowns,
     })
+}
+
+/// Every scan re-observes unchanged facts; show each distinct fact once with its
+/// repeat count and first/latest time instead of one identical line per scan.
+fn collapse_repeated(sorted: Vec<WhyObservation>) -> Vec<WhyObservation> {
+    let mut collapsed: Vec<WhyObservation> = Vec::new();
+    for observation in sorted {
+        let existing = collapsed.iter_mut().find(|known| {
+            known.source == observation.source
+                && known.kind == observation.kind
+                && known.raw_ref == observation.raw_ref
+                && known.facts == observation.facts
+        });
+        match existing {
+            Some(known) => {
+                known.repeat_count += 1;
+                known.id = observation.id;
+                known.timestamp_ns = observation.timestamp_ns;
+            }
+            None => collapsed.push(observation),
+        }
+    }
+    collapsed.sort_by(|a, b| {
+        a.timestamp_ns
+            .cmp(&b.timestamp_ns)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    collapsed
 }
 
 fn proof_link(kind: &str) -> bool {

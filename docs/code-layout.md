@@ -220,3 +220,22 @@ The process socket module exports protocol-neutral Inet* parser types; twin-core
 `commands/operational_changes.rs` summarizes retained domain transitions; `model/operational_change.rs` carries sourced results. Core ChangeCategory is the typed category vocabulary.
 
 `twin-fixtures/src/procfs.rs` owns the shared fake-proc writer, used by app/CLI/collector test-support wrappers. Store::get_edge_typed is the typed single-edge read boundary. Systemd file collection receives concrete runtime/proc instances through collect_with_instances; template fallback does not invent running instances. `tools/watch_soak.py` runs live read-only polling with isolated temporary XDG state and records RSS/timing statistics.
+
+## Agent integration modules (slice 24)
+
+- `twin-app/src/commands/preflight/{shell,intent,mod}.rs` and `model/preflight_result.rs`: command tokenizer, typed intents, graph-backed verdicts.
+- `twin-app/src/commands/brief.rs` and `model/brief_result.rs`: host and target briefings composed from graph, emulation and history.
+- `twin-cli/src/hook.rs`: agent hook input parsing and per-agent response dialects.
+- `twin-cli/src/mcp/{mod,tools}.rs`: stdio MCP server and tool implementations.
+- `twin-cli/src/agent_config.rs` and `assets/SKILL.md`: printed setup snippets and the embedded skill.
+- Tests: `twin-app/tests/{preflight,brief}.rs` (shared `support::scan_postgres_django` fixture), `twin-cli/tests/{hook,agent_integration}.rs`.
+
+## Slice 25 modules
+
+- `twin-app/src/commands/preflight/script.rs`: script and Makefile expansion into operation lines.
+- `twin-collectors/src/interfaces.rs`: `/proc/net` interface/address/default-route parser.
+- `twin-cli/src/output/json.rs`: `JsonMode` and `cap_lists` output budgets.
+- `twin-cli/src/agent_config.rs`: also `SetupSummary`/`render_setup` for `twin setup`.
+- Release and packaging: `.github/workflows/{ci,release}.yml`, `install.sh`, `packaging/aur/PKGBUILD`, `LICENSE`.
+- Tests: `twin-cli/tests/output_budget.rs`, `twin-collectors/tests/interfaces.rs`.
+

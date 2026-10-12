@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::error::ContainerError;
 use crate::model::{
-    parse_container_inspect, parse_container_list, parse_image_inspect, ContainerInspect,
-    ContainerSummary, ImageInspect, PortMapping, VolumeMount,
+    parse_container_inspect, parse_container_list, parse_image_inspect, parse_live_restore,
+    ContainerInspect, ContainerSummary, ImageInspect, PortMapping, VolumeMount,
 };
 
 pub struct FixtureDocker {
@@ -49,6 +49,15 @@ impl FixtureDocker {
 
     pub fn mounts(&self, id: &str) -> Result<Vec<VolumeMount>, ContainerError> {
         Ok(self.inspect_container(id)?.mounts().to_vec())
+    }
+
+    pub fn live_restore(&self) -> Result<Option<bool>, ContainerError> {
+        let path = self.root.join("info.json");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let body = read_text(&path)?;
+        parse_live_restore(&path.display().to_string(), &body)
     }
 
     fn container_inspect_path(&self, id: &str) -> Result<PathBuf, ContainerError> {

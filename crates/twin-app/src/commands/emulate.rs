@@ -713,7 +713,87 @@ fn restart_service_emulate(
     let report = emulate_restart_service(input);
     let mut result = EmulationResult::from_domain(report, unknowns);
     result.show_evidence = show_evidence;
+    if label == "docker.service" {
+        add_daemon_managed_containers(store, &mut result)?;
+    }
     Ok(result)
+}
+
+/// Docker stops every running container when dockerd restarts unless the daemon runs
+/// with live-restore; the graph has no dependency edge for this daemon-level relation.
+fn add_daemon_managed_containers(
+    store: &Store,
+    result: &mut EmulationResult,
+) -> Result<(), AppError> {
+    let mut interrupted = Vec::new();
+    let mut survives = 0usize;
+    for node in store
+        .list_nodes_by_kind_typed(NodeKind::Container)
+        .map_err(EmulateError::Store)?
+    {
+        if node.state() != twin_core::NodeState::Active {
+            continue;
+        }
+        let metadata: serde_json::Value =
+            serde_json::from_str(node.metadata().as_str()).unwrap_or_default();
+        if metadata.get("source").and_then(|v| v.as_str()) != Some("docker")
+            || metadata.get("is_running").and_then(|v| v.as_bool()) != Some(true)
+        {
+            continue;
+        }
+        match metadata
+            .get("daemon_live_restore")
+            .and_then(|v| v.as_bool())
+        {
+            Some(true) => survives += 1,
+            known => interrupted.push((node, known.is_none())),
+        }
+    }
+    if survives > 0 {
+        result.risk.reasons.push(format!(
+            "{survives} running container(s) keep running: the daemon has live-restore enabled"
+        ));
+    }
+    if interrupted.is_empty() {
+        return Ok(());
+    }
+    let is_assumed = interrupted.iter().any(|(_, unknown)| *unknown);
+    for (node, unknown) in &interrupted {
+        result.runtime_impacts.push(crate::model::EmulationImpact {
+            id: node.id().to_string(),
+            label: node.label().to_string(),
+            statement: if *unknown {
+                format!("{} stops while the Docker daemon restarts unless live-restore is enabled (not reported by the daemon)", node.label())
+            } else {
+                format!("{} stops while the Docker daemon restarts (live-restore disabled)", node.label())
+            },
+            path: format!("{} runs under service:docker.service", node.id()),
+            evidence: vec![format!(
+                "Observed: {} is running (docker API)",
+                node.label()
+            )],
+        });
+    }
+    result.risk.reasons.insert(
+        0,
+        format!(
+            "{} running container(s) stop when the Docker daemon restarts",
+            interrupted.len()
+        ),
+    );
+    if is_assumed {
+        result
+            .risk
+            .reasons
+            .push("live-restore state was not reported; container survival is unknown".into());
+    }
+    if matches!(
+        result.risk.level,
+        twin_core::RiskLevel::Low | twin_core::RiskLevel::Medium | twin_core::RiskLevel::Unknown
+    ) {
+        result.risk.level = twin_core::RiskLevel::High;
+    }
+    Ok(())
 }
 
 fn newest_stamp(store: &Store, ids: &[String]) -> Option<i64> {

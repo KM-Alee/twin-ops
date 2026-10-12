@@ -13,6 +13,8 @@ pub trait DockerReadOnly {
     fn inspect_image(&self, reference: &str) -> Result<ImageInspect, ContainerError>;
     fn port_mappings(&self, id: &str) -> Result<Vec<PortMapping>, ContainerError>;
     fn mounts(&self, id: &str) -> Result<Vec<VolumeMount>, ContainerError>;
+    /// Whether running containers survive a daemon restart; `None` when not reported.
+    fn live_restore(&self) -> Result<Option<bool>, ContainerError>;
 }
 
 pub enum DockerBackend {
@@ -67,6 +69,13 @@ impl DockerReadOnly for DockerBackend {
         match self {
             Self::Fixture(docker) => docker.mounts(id),
             Self::Live(docker) => docker.mounts(id),
+        }
+    }
+
+    fn live_restore(&self) -> Result<Option<bool>, ContainerError> {
+        match self {
+            Self::Fixture(docker) => docker.live_restore(),
+            Self::Live(docker) => docker.live_restore(),
         }
     }
 }

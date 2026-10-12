@@ -88,3 +88,8 @@ Logs return observed volume and typed phrase counts, including connection-refuse
 Containerd hosts are scanned through read-only namespace, container, task and image List RPCs. Run `twin doctor --containers` to check Docker and containerd separately. Containerd targets include their namespace: `twin graph container:containerd:default:api`. Task ownership requires a current matching process incarnation. OCI configuration, port mappings and volume declarations are excluded; missing runtime data remains Unknown. For offline scans use `twin scan --containerd-fixture DIR`, with `namespaces.json` and `namespaces/NAME/{containers,tasks,images}.json`.
 
 Nginx includes are expanded in their enclosing HTTP/stream/upstream context, within bounded file/depth/byte limits. Stream TCP, UDP and Unix backends retain separate endpoint kinds. Concrete hostname backends resolve through the scanner's bounded system resolver; these current answers support inferred mappings and do not establish nginx's own resolver cache or namespace state. Failed resolution retains explicit uncertainty.
+
+## JSON output limits
+
+`--json` caps every list at 100 items and adds `<field>_omitted` beside it; `--full` returns everything. `what-changed --json` reports `raw_change_counts` instead of raw node/edge delta lists unless `--verbose`. Regression ceilings on a synthetic 1 000-process host (`twin-cli/tests/output_budget.rs`): 64 KiB for `scan`, `graph --kind process|port`, `what-changed`, `impact`, `emulate`; 96 KiB for target `graph` and `why`; 16 KiB for `brief`.
+

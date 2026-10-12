@@ -44,6 +44,7 @@ struct SeenContainer {
     pid: Option<u32>,
     ports: Vec<PortMapping>,
     mounts: Vec<VolumeMount>,
+    compose: Option<twin_container::ComposeIdentity>,
 }
 
 enum RecordError {
@@ -155,11 +156,12 @@ fn record(
     let summaries = docker
         .list_containers()
         .map_err(|err| RecordError::Docker(err.to_string()))?;
+    let live_restore = docker.live_restore().ok().flatten();
     let mut incomplete = 0;
     for summary in summaries {
         let (seen, is_incomplete) = seen_container(docker, summary);
         incomplete += usize::from(is_incomplete);
-        persist_one(store, history, edge_cache, scan_time, &seen)?;
+        persist_one(store, history, edge_cache, scan_time, &seen, live_restore)?;
     }
     Ok(incomplete)
 }
@@ -178,6 +180,7 @@ fn seen_container(docker: &DockerBackend, summary: ContainerSummary) -> (SeenCon
                 pid: None,
                 ports: summary.ports,
                 mounts: summary.mounts,
+                compose: summary.compose,
             },
             true,
         ),
@@ -195,6 +198,7 @@ fn seen_from_inspect(inspect: ContainerInspect) -> SeenContainer {
         image: inspect.image,
         image_id: inspect.image_id,
         pid: inspect.pid,
+        compose: inspect.compose,
         ports,
         mounts,
     }
@@ -220,6 +224,7 @@ fn persist_one(
     edge_cache: &mut ScanEdgeCache,
     scan_time: TimestampNs,
     seen: &SeenContainer,
+    live_restore: Option<bool>,
 ) -> Result<(), StoreError> {
     let container = NodeId::container(&seen.name);
     if NodeId::from_str(container.as_str()).is_err() {
@@ -263,7 +268,7 @@ fn persist_one(
             scan_time,
             existing.as_ref().filter(|_| !recreated),
         ),
-        serde_json::json!({"source":"docker", "docker_id":seen.id, "image_id":seen.image_id, "running_known":seen.is_running.is_some(), "is_running":seen.is_running, "health_status":seen.health.as_str()}),
+        serde_json::json!({"source":"docker", "docker_id":seen.id, "image_id":seen.image_id, "running_known":seen.is_running.is_some(), "is_running":seen.is_running, "health_status":seen.health.as_str(), "daemon_live_restore":live_restore, "compose_project":seen.compose.as_ref().map(|c| c.project.as_str()), "compose_service":seen.compose.as_ref().map(|c| c.service.as_str())}),
     );
     super::scan_history::upsert_node(store, history, &node)?;
     let image_existing = store.get_node_typed(&image)?;

@@ -8,17 +8,27 @@ pub struct WhyObservation {
     pub timestamp_ns: i64,
     pub raw_ref: Option<String>,
     pub facts: Vec<String>,
+    pub repeat_count: usize,
+    pub first_timestamp_ns: i64,
 }
 
 impl WhyObservation {
     pub fn timestamp_label(&self) -> String {
-        chrono::DateTime::from_timestamp(
-            self.timestamp_ns.div_euclid(1_000_000_000),
-            self.timestamp_ns.rem_euclid(1_000_000_000) as u32,
-        )
-        .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-        .unwrap_or_else(|| format!("{} ns since epoch", self.timestamp_ns))
+        timestamp_label(self.timestamp_ns)
     }
+
+    pub fn first_timestamp_label(&self) -> String {
+        timestamp_label(self.first_timestamp_ns)
+    }
+}
+
+fn timestamp_label(timestamp_ns: i64) -> String {
+    chrono::DateTime::from_timestamp(
+        timestamp_ns.div_euclid(1_000_000_000),
+        timestamp_ns.rem_euclid(1_000_000_000) as u32,
+    )
+    .map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+    .unwrap_or_else(|| format!("{timestamp_ns} ns since epoch"))
 }
 
 #[derive(Debug, Clone, Serialize)]

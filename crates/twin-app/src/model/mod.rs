@@ -1,3 +1,4 @@
+mod brief_result;
 mod coverage;
 mod diff_result;
 mod doctor_result;
@@ -6,12 +7,14 @@ mod graph_result;
 mod impact_result;
 mod init_result;
 mod k8s_result;
+mod preflight_result;
 mod scan_quality;
 mod scan_result;
 mod snapshot_result;
 mod watch_result;
 mod what_changed_result;
 
+pub use brief_result::{BriefFact, BriefItem, BriefRestart, BriefResult, BriefSection};
 pub use coverage::{CoverageReport, CoverageUnknown};
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
@@ -35,6 +38,7 @@ pub use impact_result::{
 };
 pub use init_result::InitResult;
 pub use k8s_result::{K8sGraphResult, K8sImpactResult, K8sScanResult};
+pub use preflight_result::{PreflightAffected, PreflightResult, PreflightStep, PreflightVerdict};
 pub use scan_quality::{ScanQuality, ScanQualityAssessment};
 pub use scan_result::{ScanResult, ScanWarning, ScanWarningDetail};
 pub use snapshot_result::{SnapshotCreateResult, SnapshotEntry, SnapshotListResult};

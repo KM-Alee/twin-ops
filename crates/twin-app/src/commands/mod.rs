@@ -1,3 +1,4 @@
+pub mod brief;
 mod coverage;
 pub mod diff;
 mod disk_usage;
@@ -15,6 +16,7 @@ mod impact_scoring;
 pub mod init;
 pub(crate) mod k8s;
 mod nginx_includes;
+pub mod preflight;
 pub(crate) mod resolve_port;
 mod resolve_service;
 pub mod scan;

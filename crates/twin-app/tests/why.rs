@@ -314,3 +314,31 @@ fn old_observation_is_stale_even_when_latest_scan_ended_at_the_same_time() {
             |reason| reason == "supporting evidence is old or its observation time is unknown"
         )));
 }
+
+#[test]
+fn repeated_scans_of_an_unchanged_fact_collapse_into_one_counted_observation() {
+    let home = support::IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("proc");
+    std::fs::create_dir_all(&proc).unwrap();
+    support::write_proc_fixture_with_cgroup(&proc, 42,
+        "42 (api) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t0\t0\t0\t0\n", b"api\0", None, Some("0::/system.slice/api.service\n"));
+    for _ in 0..3 {
+        twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).unwrap();
+    }
+    let result = twin_app::why_in(
+        &home.layout,
+        twin_app::why_request("service:api.service", None).unwrap(),
+    )
+    .unwrap();
+    let owns = result
+        .relationships
+        .iter()
+        .find(|relationship| relationship.kind == "owns")
+        .expect("ownership relationship");
+    assert_eq!(owns.observations.len(), 1);
+    let observation = &owns.observations[0];
+    assert_eq!(observation.repeat_count, 3);
+    assert!(observation.first_timestamp_ns < observation.timestamp_ns);
+}

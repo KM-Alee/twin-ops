@@ -157,7 +157,9 @@ pub(crate) fn load_typed_service_dependents(
             relationship,
         );
         let reason = service_dependent_reason(store, &edge, &observation_ids, label);
-        let impact_kind = classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
+        let is_running = crate::commands::evidence::is_service_running(store, &dependent_node)
+            .map_err(ImpactError::Store)?;
+        let impact_kind = classify_dependent_impact_kind(&edge, is_running);
         let dependent = TypedServiceDependent {
             id: dependent_id.clone(),
             label: dependent_node.label().to_string(),
@@ -868,6 +870,10 @@ fn append_coverage_unknowns(
                 .get("warning_details")
                 .and_then(|value| value.as_array())
             {
+                // Host-wide warnings repeat per process and per socket; one entry per
+                // warning pattern keeps every report bounded on large hosts while
+                // preserving the occurrence count.
+                let mut grouped: Vec<(String, String, Option<String>, usize)> = Vec::new();
                 for warning in details {
                     let Some(detail) = warning.get("detail").and_then(|value| value.as_str())
                     else {
@@ -877,13 +883,28 @@ fn append_coverage_unknowns(
                         .get("path")
                         .and_then(|value| value.as_str())
                         .map(str::to_string);
+                    let pattern = warning_pattern(detail);
+                    match grouped
+                        .iter_mut()
+                        .find(|(known, _, _, _)| *known == pattern)
+                    {
+                        Some(entry) => entry.3 += 1,
+                        None => grouped.push((pattern, detail.to_string(), source, 1)),
+                    }
+                }
+                for (_, detail, source, count) in grouped {
+                    let source = match (source, count) {
+                        (source, 1) => source,
+                        (Some(first), count) => Some(format!("{first} (+{} similar)", count - 1)),
+                        (None, count) => Some(format!("{count} scan warnings")),
+                    };
                     if !unknowns
                         .iter()
                         .any(|unknown| unknown.detail == detail && unknown.source == source)
                     {
                         unknowns.push(ImpactUnknown {
                             kind: UnknownKind::MissingEvidence.as_str().into(),
-                            detail: detail.into(),
+                            detail,
                             source,
                             weakens_evidence: false,
                         });
@@ -893,6 +914,45 @@ fn append_coverage_unknowns(
         }
     }
     Ok(())
+}
+
+/// Masks numbers, paths and IPv6 literals so per-pid/per-socket warnings share one
+/// pattern.
+fn warning_pattern(detail: &str) -> String {
+    let mut pattern = String::with_capacity(detail.len());
+    let mut in_brackets = false;
+    let mut in_path = false;
+    for ch in detail.chars() {
+        if in_path {
+            if ch.is_whitespace() {
+                in_path = false;
+                pattern.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '/' | '@' if pattern.is_empty() || pattern.ends_with(' ') => {
+                in_path = true;
+                pattern.push_str("/#");
+            }
+            '[' => {
+                in_brackets = true;
+                pattern.push_str("[#");
+            }
+            ']' => {
+                in_brackets = false;
+                pattern.push(']');
+            }
+            _ if in_brackets => {}
+            '0'..='9' => {
+                if !pattern.ends_with('#') {
+                    pattern.push('#');
+                }
+            }
+            other => pattern.push(other),
+        }
+    }
+    pattern
 }
 
 fn evidence_adjustments(

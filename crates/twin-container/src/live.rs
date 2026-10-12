@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use crate::error::ContainerError;
 use crate::model::{
-    parse_container_inspect, parse_container_list, parse_image_inspect, ContainerInspect,
-    ContainerSummary, ImageInspect, PortMapping, VolumeMount,
+    parse_container_inspect, parse_container_list, parse_image_inspect, parse_live_restore,
+    ContainerInspect, ContainerSummary, ImageInspect, PortMapping, VolumeMount,
 };
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
@@ -45,6 +45,12 @@ impl LiveDocker {
                 path.trim_start_matches('/')
             ),
         )
+    }
+
+    pub fn live_restore(&self) -> Result<Option<bool>, ContainerError> {
+        let path = "/info";
+        let body = self.get(path)?;
+        parse_live_restore(path, &body)
     }
 
     pub fn list_containers(&self) -> Result<Vec<ContainerSummary>, ContainerError> {
@@ -149,6 +155,7 @@ fn allow_read_path(path: &str) -> bool {
         path.to_string()
     };
     path == "/containers/json"
+        || path == "/info"
         || allowed_object_path(&path, "/containers/")
         || allowed_object_path(&path, "/images/")
 }
@@ -401,6 +408,8 @@ mod tests {
         assert!(allow_read_path("/images/redis%3A7/json"));
         assert!(!allow_read_path("/containers/abc/json/extra"));
         assert!(allow_read_path("/version"));
+        assert!(allow_read_path("/v1.51/info"));
+        assert!(!allow_read_path("/info/extra"));
         assert!(allow_read_path("/v1.51/containers/json"));
         assert!(!allow_read_path("/v1.999/containers/json"));
         // Compose the rejected path so production safety scanning does not flag this negative fixture.

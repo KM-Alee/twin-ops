@@ -132,3 +132,50 @@ fn inspect_projects_health_without_retaining_health_logs() {
     assert_eq!(inspect.image_id.as_deref(), Some("sha256:running-artifact"));
     assert!(!format!("{inspect:?}").contains("PRIVATE_HEALTH_BODY"));
 }
+
+#[test]
+fn live_restore_is_read_from_daemon_info_and_unknown_when_absent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_redis_fixture(dir.path());
+    let docker = DockerBackend::open(Some(dir.path()), Path::new("/missing.sock")).expect("open");
+    assert_eq!(docker.live_restore().expect("absent info"), None);
+    std::fs::write(
+        dir.path().join("info.json"),
+        r#"{"LiveRestoreEnabled":true,"Name":"host"}"#,
+    )
+    .expect("info");
+    assert_eq!(docker.live_restore().expect("info"), Some(true));
+    std::fs::write(dir.path().join("info.json"), "{not json").expect("bad info");
+    assert!(docker.live_restore().is_err());
+}
+
+#[test]
+fn only_compose_project_and_service_labels_are_projected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_redis_fixture(dir.path());
+    let inspect = dir.path().join("containers/abc123redis.json");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&inspect).expect("read")).expect("json");
+    value["Config"]["Labels"] = serde_json::json!({
+        "com.docker.compose.project": "shop",
+        "com.docker.compose.service": "cache",
+        "com.example.api-token": "LABEL_SECRET_SENTINEL",
+    });
+    std::fs::write(&inspect, value.to_string()).expect("write");
+    let docker = DockerBackend::open(Some(dir.path()), Path::new("/missing.sock")).expect("open");
+    let container = docker.inspect_container("abc123redis").expect("inspect");
+    let compose = container.compose.clone().expect("compose identity");
+    assert_eq!(
+        (compose.project.as_str(), compose.service.as_str()),
+        ("shop", "cache")
+    );
+    assert!(!format!("{container:?}").contains("LABEL_SECRET_SENTINEL"));
+
+    value["Config"]["Labels"] = serde_json::json!({
+        "com.docker.compose.project": "shop; rm -rf /",
+        "com.docker.compose.service": "cache",
+    });
+    std::fs::write(&inspect, value.to_string()).expect("write");
+    let unsafe_name = docker.inspect_container("abc123redis").expect("inspect");
+    assert!(unsafe_name.compose.is_none());
+}

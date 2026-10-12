@@ -2379,7 +2379,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "twin-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "twin-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "twin-collectors"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -2439,14 +2439,14 @@ dependencies = [
 
 [[package]]
 name = "twin-config"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "twin-core",
 ]
 
 [[package]]
 name = "twin-container"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "h2",
  "http",
@@ -2465,7 +2465,7 @@ dependencies = [
 
 [[package]]
 name = "twin-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2477,7 +2477,7 @@ dependencies = [
 
 [[package]]
 name = "twin-ebpf"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aya",
  "aya-obj",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "twin-emulate"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 1.0.69",
@@ -2498,14 +2498,14 @@ dependencies = [
 
 [[package]]
 name = "twin-fixtures"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "twin-k8s"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "k8s-openapi",
@@ -2521,7 +2521,7 @@ dependencies = [
 
 [[package]]
 name = "twin-observation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2531,7 +2531,7 @@ dependencies = [
 
 [[package]]
 name = "twin-package"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "tempfile",
@@ -2542,11 +2542,11 @@ dependencies = [
 
 [[package]]
 name = "twin-safety"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "twin-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "rusqlite",
  "tempfile",
@@ -2557,7 +2557,7 @@ dependencies = [
 
 [[package]]
 name = "twin-test"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_yaml",

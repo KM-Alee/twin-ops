@@ -54,16 +54,24 @@ pub fn render(result: &WhyResult) -> String {
             ),
         );
         for observation in &relationship.observations {
-            out.tree_leaf(
-                false,
-                &observation.source,
-                &format!(
+            let seen = if observation.repeat_count > 1 {
+                format!(
+                    "{} ×{} from {} to {} — latest {}",
+                    observation.kind,
+                    observation.repeat_count,
+                    observation.first_timestamp_label(),
+                    observation.timestamp_label(),
+                    observation.id
+                )
+            } else {
+                format!(
                     "{} at {} — {}",
                     observation.kind,
                     observation.timestamp_label(),
                     observation.id
-                ),
-            );
+                )
+            };
+            out.tree_leaf(false, &observation.source, &seen);
             if let Some(raw_ref) = &observation.raw_ref {
                 out.tree_leaf(false, "source path", raw_ref);
             }

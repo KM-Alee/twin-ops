@@ -3,6 +3,9 @@ name = "twin-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Read-only dependency map and blast-radius check for Linux hosts, built for AI agents"
+repository = "https://github.com/KM-Alee/twin-ops"
+readme = "../../README.md"
 
 [lib]
 name = "twin_cli"
@@ -30,3 +33,23 @@ twin-store = { workspace = true }
 twin-ebpf = { workspace = true }
 
 twin-fixtures = { workspace = true }
+
+[package.metadata.deb]
+name = "twin"
+maintainer = "twin-ops contributors"
+section = "admin"
+priority = "optional"
+extended-description = "twin keeps a read-only, evidence-backed map of a Linux host and predicts what a command would break before it runs. It never changes the host."
+assets = [
+    ["target/release/twin", "usr/bin/", "755"],
+    ["../../README.md", "usr/share/doc/twin/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "twin"
+summary = "Read-only dependency map and blast-radius check for Linux hosts"
+assets = [
+    { source = "target/release/twin", dest = "/usr/bin/twin", mode = "755" },
+    { source = "../../README.md", dest = "/usr/share/doc/twin/README.md", mode = "644", doc = true },
+]
+

@@ -1,0 +1,22 @@
+# Maintainer: twin-ops contributors
+# Release helper: set pkgver, then `updpkgsums` to fill the checksums from the release.
+pkgname=twin-bin
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Read-only dependency map and blast-radius check for Linux hosts, built for AI agents"
+arch=('x86_64' 'aarch64')
+url="https://github.com/KM-Alee/twin-ops"
+license=('MIT')
+provides=('twin')
+conflicts=('twin')
+source_x86_64=("${url}/releases/download/v${pkgver}/twin-${pkgver}-x86_64-linux.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/twin-${pkgver}-aarch64-linux.tar.gz")
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
+
+package() {
+    cd "twin-${pkgver}-${CARCH}-linux"
+    install -Dm755 twin "${pkgdir}/usr/bin/twin"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+}

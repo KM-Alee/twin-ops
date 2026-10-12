@@ -2104,6 +2104,8 @@ fn why_renderer_separates_inference_and_observation_sources() {
                 timestamp_ns: 100,
                 raw_ref: Some("/proc/42/cgroup".into()),
                 facts: vec!["pid=42".into()],
+                repeat_count: 1,
+                first_timestamp_ns: 100,
             }],
         }],
     };
@@ -2135,4 +2137,98 @@ fn container_restart_default_view_lists_transitive_overlay_effects() {
     assert!(text.contains("dependency chain impact"));
     assert!(text.contains("service:frontend.service"));
     assert!(!text.contains("impact paths"));
+}
+
+fn preflight_fixture(verdict: twin_app::PreflightVerdict) -> twin_app::PreflightResult {
+    twin_app::PreflightResult {
+        command: "sudo systemctl stop postgresql".into(),
+        verdict,
+        headline: "stop postgresql — 1 dependent(s) stay down until it is back: django.service"
+            .into(),
+        has_operations: true,
+        steps: vec![twin_app::PreflightStep {
+            segment: "sudo systemctl stop postgresql".into(),
+            operation: "stop postgresql".into(),
+            target: Some("service:postgresql.service".into()),
+            verdict,
+            is_assessed: true,
+            risk: Some(twin_core::RiskLevel::High),
+            evidence: None,
+            reasons: vec!["1 dependent(s) stay down until it is back: django.service".into()],
+            affected: vec![twin_app::PreflightAffected {
+                id: "service:django.service".into(),
+                label: "django.service".into(),
+                effect: "loses its dependency while postgresql.service is stopped".into(),
+            }],
+            affected_total: 3,
+            advice: vec!["validate configuration first: `pg_ctl status`".into()],
+        }],
+        graph_age_secs: Some(4),
+        coverage_notes: vec!["12 processes hidden due to permissions".into()],
+        action_performed: false,
+    }
+}
+
+#[test]
+fn preflight_renderer_shows_verdict_affected_coverage_and_safety() {
+    let text = output::preflight::render(&preflight_fixture(twin_app::PreflightVerdict::Stop));
+    for expected in [
+        "twin preflight",
+        "══════════════",
+        "fail",
+        "STOP",
+        "STOP · stop postgresql",
+        "├──  target          service:postgresql.service",
+        "affected        django.service — loses its dependency",
+        "… 2 more",
+        "advice",
+        "coverage",
+        "12 processes hidden due to permissions",
+        "Nothing was executed; this is a read-only prediction.",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+}
+
+#[test]
+fn brief_renderer_lists_facts_restart_sections_and_next_steps() {
+    let result = twin_app::BriefResult {
+        target: Some("service:nginx.service".into()),
+        title: "nginx.service".into(),
+        kind: "service".into(),
+        facts: vec![twin_app::BriefFact {
+            label: "state".into(),
+            value: "active (running)".into(),
+        }],
+        restart: Some(twin_app::BriefRestart {
+            verdict: twin_app::PreflightVerdict::Caution,
+            summary: "1 dependent(s) interrupted: api.service".into(),
+        }),
+        sections: vec![twin_app::BriefSection {
+            title: "listens on".into(),
+            items: vec![twin_app::BriefItem {
+                id: Some("port:tcp:0.0.0.0:443".into()),
+                label: "tcp:0.0.0.0:443".into(),
+                detail: "inferred".into(),
+            }],
+            omitted: 3,
+        }],
+        graph_age_secs: 7,
+        coverage_notes: vec!["containerd collector unavailable".into()],
+        next_steps: vec!["twin why service:nginx.service".into()],
+    };
+    let text = output::brief::render(&result);
+    for expected in [
+        "twin brief · nginx.service",
+        "state  active (running)",
+        "if restarted  CAUTION — 1 dependent(s) interrupted: api.service",
+        "scanned 7s ago",
+        "listens on",
+        "tcp:0.0.0.0:443",
+        "…               3 more",
+        "containerd collector unavailable",
+        "run             twin why service:nginx.service",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
 }

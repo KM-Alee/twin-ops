@@ -440,3 +440,41 @@ fn render_hidden_edge_line(
         &format!("{hidden} {label} edges {section} (hidden — use --json for full list)"),
     );
 }
+
+const RAW_LISTS: [&str; 10] = [
+    "new_nodes",
+    "new_edges",
+    "disappeared_nodes",
+    "disappeared_edges",
+    "stale_nodes",
+    "stale_edges",
+    "changed_nodes",
+    "changed_edges",
+    "reappeared_nodes",
+    "reappeared_edges",
+];
+
+/// Machine output mirrors the human view: without `--verbose` the raw node/edge delta
+/// lists are summarized as counts, because on a busy host they reach megabytes per hour.
+pub fn render_json(
+    result: &WhatChangedResult,
+    verbose: bool,
+    mode: super::json::JsonMode,
+) -> Result<String, serde_json::Error> {
+    let mut value = serde_json::to_value(result)?;
+    if !verbose {
+        if let serde_json::Value::Object(map) = &mut value {
+            let mut counts = serde_json::Map::new();
+            for key in RAW_LISTS {
+                if let Some(serde_json::Value::Array(items)) = map.remove(key) {
+                    counts.insert(key.to_string(), serde_json::Value::from(items.len()));
+                }
+            }
+            map.insert(
+                "raw_change_counts".into(),
+                serde_json::Value::Object(counts),
+            );
+        }
+    }
+    super::json::render_bounded(&value, mode)
+}

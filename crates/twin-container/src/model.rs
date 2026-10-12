@@ -42,6 +42,35 @@ pub struct VolumeMount {
     pub destination: String,
 }
 
+/// The Compose project and service that created a container. These are the only
+/// container labels twin projects; all other labels can carry arbitrary values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposeIdentity {
+    pub project: String,
+    pub service: String,
+}
+
+fn compose_identity(labels: Option<&Value>) -> Option<ComposeIdentity> {
+    let labels = labels?;
+    let safe = |key: &str| {
+        labels
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+            })
+            .map(str::to_string)
+    };
+    Some(ComposeIdentity {
+        project: safe("com.docker.compose.project")?,
+        service: safe("com.docker.compose.service")?,
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSummary {
     pub id: String,
@@ -49,6 +78,7 @@ pub struct ContainerSummary {
     pub image: String,
     pub image_id: Option<String>,
     pub is_running: Option<bool>,
+    pub compose: Option<ComposeIdentity>,
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<VolumeMount>,
 }
@@ -62,6 +92,7 @@ pub struct ContainerInspect {
     pub is_running: Option<bool>,
     pub health: ContainerHealth,
     pub pid: Option<u32>,
+    pub compose: Option<ComposeIdentity>,
     ports: Vec<PortMapping>,
     mounts: Vec<VolumeMount>,
 }
@@ -161,6 +192,7 @@ fn summary_from_value(value: &Value) -> Option<ContainerSummary> {
             .map(str::to_string),
         ports: ports_from_list(value),
         mounts: mounts_from_value(value),
+        compose: compose_identity(value.get("Labels")),
     })
 }
 
@@ -211,6 +243,7 @@ fn inspect_from_value(value: &Value) -> Option<ContainerInspect> {
             .filter(|value| value.starts_with("sha256:"))
             .map(str::to_string),
         pid,
+        compose: compose_identity(value.pointer("/Config/Labels")),
         ports,
         mounts: mounts_from_value(value),
     })
@@ -429,6 +462,12 @@ fn json_u16(value: &Value) -> Option<u16> {
         Value::String(text) => text.parse().ok(),
         _ => None,
     }
+}
+
+pub(crate) fn parse_live_restore(path: &str, body: &str) -> Result<Option<bool>, ContainerError> {
+    Ok(parse_json(path, body)?
+        .get("LiveRestoreEnabled")
+        .and_then(Value::as_bool))
 }
 
 fn parse_json(path: &str, body: &str) -> Result<Value, ContainerError> {

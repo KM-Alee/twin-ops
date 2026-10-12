@@ -1,0 +1,93 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Build static binary
+        run: cross build --release --locked -p twin-cli --target ${{ matrix.target }}
+      - name: Package
+        id: package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          arch="${{ matrix.target }}"
+          arch="${arch%%-*}"
+          name="twin-${version}-${arch}-linux"
+          mkdir -p "dist/${name}"
+          cp "target/${{ matrix.target }}/release/twin" "dist/${name}/"
+          cp README.md LICENSE "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          echo "archive=dist/${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "arch=${arch}" >> "$GITHUB_OUTPUT"
+      - name: Smoke test (x86_64 only)
+        if: startsWith(matrix.target, 'x86_64')
+        run: |
+          bin=target/${{ matrix.target }}/release/twin
+          file "$bin" | grep -qE "static(-pie)? linked"
+          for image in debian:12 ubuntu:24.04 fedora:41 archlinux:latest alpine:3.20; do
+            docker run --rm -v "$PWD/$bin:/usr/local/bin/twin:ro" "$image" \
+              sh -c 'twin --version && twin init >/dev/null && twin scan >/dev/null && twin preflight "ls"'
+          done
+      - name: Debian and RPM packages (x86_64 only)
+        if: startsWith(matrix.target, 'x86_64')
+        run: |
+          cargo install cargo-deb cargo-generate-rpm --locked
+          cargo deb -p twin-cli --no-build --target ${{ matrix.target }} --output dist/
+          cargo generate-rpm -p crates/twin-cli --target ${{ matrix.target }} --output dist/
+          (cd dist && for f in *.deb *.rpm; do sha256sum "$f" > "$f.sha256"; done)
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ steps.package.outputs.arch }}
+          path: dist/*.*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Combined checksums
+        run: cat dist/*.sha256 > dist/SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS
+            install.sh
+          generate_release_notes: true

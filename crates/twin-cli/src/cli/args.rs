@@ -16,6 +16,24 @@ pub struct Cli {
 pub struct GlobalArgs {
     #[arg(long, global = true, help = "Output as JSON")]
     pub json: bool,
+
+    #[arg(
+        long,
+        global = true,
+        help = "With --json, include every list item (default caps lists at 100 and reports <field>_omitted)"
+    )]
+    pub full: bool,
+}
+
+impl GlobalArgs {
+    pub fn json_mode(&self) -> crate::output::json::JsonMode {
+        use crate::output::json::JsonMode;
+        match (self.json, self.full) {
+            (false, _) => JsonMode::Off,
+            (true, false) => JsonMode::Bounded,
+            (true, true) => JsonMode::Full,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -39,6 +57,172 @@ pub enum Command {
     Test(TestArgs),
     #[command(about = "Read-only Kubernetes graph")]
     K8s(K8sArgs),
+    #[command(
+        about = "Predict what a shell command would break before running it (go / caution / stop)",
+        long_about = "Predict what a shell command would break before running it.\n\n\
+Recognizes systemctl/service, docker/podman, rm/sed -i/tee/redirection, apt/dnf/pacman/zypper/apk, \
+kill/pkill, kubectl, ufw/iptables and reboot. Nothing is executed.\n\n\
+Exit codes: 0 go, 3 caution, 4 stop, 1 error. With --hook, reads an agent's hook JSON on stdin \
+and answers in that agent's format."
+    )]
+    Preflight(PreflightArgs),
+    #[command(
+        about = "One-call briefing: the host overview, or everything about one service/container/port/file"
+    )]
+    Brief(BriefArgs),
+    #[command(
+        about = "Serve twin's read-only tools to AI agents over the Model Context Protocol (stdio)"
+    )]
+    Mcp(McpArgs),
+    #[command(
+        name = "agent-config",
+        about = "Print ready-to-paste MCP, hook and skill setup for an AI coding agent (writes nothing)"
+    )]
+    AgentConfig(AgentConfigArgs),
+    #[command(
+        about = "First-run setup: create twin's store, scan this host, and print agent integration snippets"
+    )]
+    Setup(SetupArgs),
+}
+
+#[derive(Args)]
+pub struct SetupArgs {
+    #[arg(value_enum, help = "Agent to configure")]
+    pub agent: crate::agent_config::AgentTarget,
+
+    #[arg(long, help = "twin executable path to embed (default: this binary)")]
+    pub twin_path: Option<PathBuf>,
+
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct AgentConfigArgs {
+    #[arg(value_enum, help = "Agent to configure")]
+    pub agent: crate::agent_config::AgentTarget,
+
+    #[arg(long, help = "twin executable path to embed (default: this binary)")]
+    pub twin_path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct McpArgs {
+    #[arg(
+        long,
+        default_value_t = 60,
+        help = "Rescan the host when the stored graph is older than this many seconds"
+    )]
+    pub max_age: u64,
+
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct BriefArgs {
+    #[arg(
+        help = "Service, container, port (:5432), pid, path or node id; omit for the host overview"
+    )]
+    pub target: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "24h",
+        help = "Window for the recent-changes section (e.g. 1h, 24h)"
+    )]
+    pub since: String,
+
+    #[arg(
+        long,
+        default_value_t = 120,
+        help = "Rescan the host when the stored graph is older than this many seconds"
+    )]
+    pub max_age: u64,
+
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum FileOp {
+    Create,
+    Edit,
+    Delete,
+}
+
+impl From<FileOp> for twin_app::FileOperation {
+    fn from(op: FileOp) -> Self {
+        match op {
+            FileOp::Create => Self::Create,
+            FileOp::Edit => Self::Edit,
+            FileOp::Delete => Self::Delete,
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct PreflightArgs {
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        help = "Shell command to evaluate (quote it, or pass after --)"
+    )]
+    pub command: Vec<String>,
+
+    #[arg(
+        long,
+        value_enum,
+        help = "Read agent hook JSON from stdin and reply in its format"
+    )]
+    pub hook: Option<crate::hook::HookAgent>,
+
+    #[arg(
+        long,
+        help = "Evaluate a direct file change instead of (or besides) a command; repeatable"
+    )]
+    pub file: Vec<PathBuf>,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value = "edit",
+        help = "Kind of change for --file"
+    )]
+    pub op: FileOp,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value = "ask",
+        help = "Hook behavior for a stop verdict"
+    )]
+    pub on_stop: crate::hook::StopPolicy,
+
+    #[arg(long, help = "Working directory used to resolve relative paths")]
+    pub cwd: Option<PathBuf>,
+
+    #[arg(
+        long,
+        default_value_t = 120,
+        help = "Rescan the host when the stored graph is older than this many seconds"
+    )]
+    pub max_age: u64,
+
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
+    pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]

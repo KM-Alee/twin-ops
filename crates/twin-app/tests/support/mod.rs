@@ -104,3 +104,57 @@ pub fn write_proc_fixture_with_cgroup(
     twin_fixtures::write_proc_fixture_with_cgroup(base, pid, stat, status, cmdline, exe, cgroup)
         .expect("proc fixture");
 }
+
+/// postgresql.service listens on 0.0.0.0:5432 and django.service holds a live
+/// connection to it.
+pub fn scan_postgres_django(home: &IsolatedHome) -> std::path::PathBuf {
+    twin_app::init_in(&home.layout, twin_app::InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("fixture-proc");
+    std::fs::create_dir_all(&proc).expect("proc");
+    write_proc_fixture_with_cgroup(
+        &proc,
+        721,
+        "721 (postgres) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t999\t999\t999\t999\n",
+        b"/usr/bin/postgres\0",
+        None,
+        Some("0::/system.slice/postgresql.service\n"),
+    );
+    write_proc_fixture_with_cgroup(
+        &proc,
+        8841,
+        "8841 (gunicorn) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t1000\t1000\t1000\t1000\n",
+        b"/usr/bin/gunicorn\0",
+        None,
+        Some("0::/system.slice/django.service\n"),
+    );
+    write_tcp_table(
+        &proc,
+        "tcp",
+        "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0\n   1: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0",
+    );
+    write_socket_fd(&proc, 721, 8, 12345);
+    write_socket_fd(&proc, 8841, 12, 456);
+    let docker = home.layout.data_dir.join("empty-docker");
+    std::fs::create_dir_all(docker.join("containers")).expect("docker fixture");
+    std::fs::write(docker.join("containers/list.json"), "[]").expect("container list");
+    let scan = twin_app::ScanRequest {
+        docker_fixture: Some(docker),
+        ..twin_app::ScanRequest::default()
+    };
+    twin_app::scan_in(&home.layout, scan, &proc).expect("scan");
+    proc
+}
+
+/// A scan request that never reads the host's Docker daemon, so graph counts do not
+/// depend on which containers happen to run on the test machine.
+pub fn host_isolated_scan(home: &IsolatedHome) -> twin_app::ScanRequest {
+    let docker = home.layout.data_dir.join("isolated-empty-docker");
+    std::fs::create_dir_all(docker.join("containers")).expect("docker fixture");
+    std::fs::write(docker.join("containers/list.json"), "[]").expect("container list");
+    twin_app::ScanRequest {
+        docker_fixture: Some(docker),
+        ..twin_app::ScanRequest::default()
+    }
+}

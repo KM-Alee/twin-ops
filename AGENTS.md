@@ -2,6 +2,7 @@
 
 Agent working on **`twin`**: Rust read-only operational twin for Linux.
 Source of truth: `docs/prd.md`, `docs/tech-document.md`, `docs/plan-slices.md`, `docs/code-layout.md` (implemented module/test layout). Read them before changes.
+Next work: `docs/plan-agent-roadmap.md` (slices 25–30, in order). Start each slice by creating `docs/state/slice-NN.md`.
 
 ## Self-Evolution
 
@@ -20,7 +21,7 @@ This file living. Add crate/dependency/convention/discover better pattern → up
 
 ## Crates
 
-`cli` `app` `core` `observation` `collectors` `store` `graph` `rules` `emulate` `test` `ebpf` `container` `k8s` `package` `config` `output` `fixtures` `safety` — all prefixed `twin-`. `twin-test` parses `twin.yaml` and evaluates graph checks. It does not run a shell. `twin-app` loads the stored graph and persists the report. `twin-config` parses config text (nginx `proxy_pass`) and fingerprints file bytes. It does not read the host; scan passes the bytes in.
+`cli` `app` `core` `observation` `collectors` `store` `graph` `rules` `emulate` `test` `ebpf` `container` `k8s` `package` `config` `output` `fixtures` `safety` — all prefixed `twin-`. `twin-test` parses `twin.yaml` and evaluates graph checks. It does not run a shell. `twin-app` loads the stored graph and persists the report. Agent-facing commands: `brief`, `preflight`, `mcp`, `agent-config` (see `docs/state/slice-24.md`). `twin-config` parses config text (nginx `proxy_pass`) and fingerprints file bytes. It does not read the host; scan passes the bytes in.
 
 **Dependency direction:** inward. `core` depends on almost nothing. `cli→app→{core,store,graph,collectors,emulate,test,output,ebpf}`. Collectors → `core+observation`. `ebpf` → `core+observation`. Reasoning → `core+graph+rules`. **Forbidden:** `core→ebpf`, `core→k8s`, `core→container`, `graph→cli`, `emulate→collectors`. `twin-container` is a read-only Docker adapter (list and inspect only). `twin-k8s` is read-only (get/list only; secret values are never stored).
 
@@ -232,3 +233,22 @@ Systemd main/template/drop-in file reads are bounded to 1 MiB. `[Unit]` is optio
 
 
 Systemd D-Bus `Socket.Listen` is observed manager configuration, never proof of an open listener or descriptor ownership. Store `socket_config_known` separately from active/substate; failed properties clear current configuration addresses and raise per-unit coverage gaps. Runtime FIFO ownership requires stable descriptor mode/device/inode evidence and namespace-safe path agreement; VSOCK requires kernel socket-diag evidence, never an invented `/proc/net/vsock` table or declaration-only join.
+
+## Agent integration (slice 24)
+
+- Agent surfaces are `twin brief`, `twin preflight`, `twin mcp` and `twin agent-config`. Keep every agent-facing answer bounded: sections ≤12 items, preflight reasons ≤4 and affected ≤8, hook text ≤~1.8 KB, MCP tool text ≤24 KB. Never let host-wide warnings repeat per item; group them by distinct detail.
+- Only `twin-app/src/commands/preflight/` may name mutating commands (`systemctl restart`, `iptables -`, ...), and only as text to recognize. Execution primitives stay banned everywhere; `twin-safety` enforces both rules.
+- Preflight never says go for something it could not assess on the graph. Unknown targets and failed emulations are caution with `is_assessed=false`. Unmodeled tools (`git`, `cargo`, `ssh`) are go and silent in hooks.
+- Hooks fail open and never answer "allow" unless the agent protocol requires an answer (Cursor). Add a new agent dialect in `twin-cli/src/hook.rs` with a test in `twin-cli/tests/hook.rs` that pins its JSON shape.
+- The MCP server is hand-written newline JSON-RPC; do not add an SDK without a concrete need. Tools must stay annotated `readOnlyHint: true`. `agent-config` prints snippets and never writes agent configuration files.
+- Restart emulation of `docker.service` treats running Docker containers as runtime impacts unless the daemon reports live-restore (`GET /info`, stored as `daemon_live_restore` on container nodes).
+
+## Slice 25 conventions
+
+- `--json` output is bounded by `output::json::cap_lists` (100 items per list plus `<field>_omitted`); `--full` disables it. New commands emit through `emit`/`emit_after_scan` with `global.json_mode()`, never `serde_json` directly. Keep `twin-cli/tests/output_budget.rs` ceilings passing.
+- Hook file edits come only from the allowlist of file-changing tools in `hook.rs` (`FILE_EDIT_TOOLS`); read tools that carry a path must never become edits.
+- Script expansion (`preflight/script.rs`) surfaces only operation lines; never echo other script lines (they can hold credentials). Lines using shell variables are cautions, not guesses.
+- Docker labels: only `com.docker.compose.project` and `com.docker.compose.service` are projected, character-filtered. Do not add label projection without a sentinel test.
+- Interface data comes from `/proc/net` text via `twin_collectors::parse_interfaces`; no netlink, ioctls or unsafe.
+- Release artifacts: musl static builds via `cross`, `.sha256` per artifact plus `SHA256SUMS`, provenance attestation. `install.sh` must never use sudo or write outside its install directory.
+
