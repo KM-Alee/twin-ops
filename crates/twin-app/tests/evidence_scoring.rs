@@ -98,3 +98,64 @@ fn scan_reports_readable_processes_in_coverage() {
         result.coverage.restricted_processes
     );
 }
+
+#[test]
+fn optional_wants_does_not_become_a_runtime_outage_for_an_active_service() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    let seen = TimestampNs::now();
+    for name in ["api.service", "metrics.service"] {
+        let node = GraphNode::service(name, seen, None);
+        let mut row = twin_store::NodeRow::from(&node);
+        row.metadata_json = r#"{"active_state":"active"}"#.into();
+        store.upsert_node(&row).expect("node");
+    }
+    for (key, runtime_count) in [("Wants", 0), ("Requires", 1)] {
+        let edge = twin_core::GraphEdge::observed_service_depends_on_declared(
+            &NodeId::service("api.service"),
+            &NodeId::service("metrics.service"),
+            seen,
+            None,
+            key,
+            "/etc/systemd/system/api.service",
+        );
+        store.upsert_edge_typed(&edge).expect("edge");
+        let impact = impact_in(
+            &home.layout,
+            ImpactRequest {
+                target: Some(NodeId::service("metrics.service")),
+                ..ImpactRequest::default()
+            },
+        )
+        .expect("impact");
+        assert_eq!(impact.direct_dependents.len(), runtime_count, "{key}");
+        let emulation = emulate_in(
+            &home.layout,
+            EmulateRequest::restart_query("metrics.service"),
+        )
+        .expect("emulate");
+        assert_eq!(emulation.transient_impacts.len(), runtime_count, "{key}");
+        assert_eq!(
+            emulation.configured_impacts.len(),
+            1 - runtime_count,
+            "{key}"
+        );
+    }
+    let edge = twin_core::GraphEdge::inferred_service_depends_on(
+        &NodeId::service("api.service"),
+        &NodeId::service("metrics.service"),
+        seen,
+        None,
+    );
+    store.upsert_edge_typed(&edge).expect("runtime edge");
+    let impact = impact_in(
+        &home.layout,
+        ImpactRequest {
+            target: Some(NodeId::service("metrics.service")),
+            ..ImpactRequest::default()
+        },
+    )
+    .expect("impact");
+    assert_eq!(impact.direct_dependents.len(), 1);
+}

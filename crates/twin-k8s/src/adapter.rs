@@ -163,19 +163,26 @@ impl K8sReadOnly for FixtureK8s {
 
 pub enum OpenSource {
     Fixture(Box<FixtureK8s>),
+    Live(Box<ClusterView>),
     Gap { detail: String },
 }
 
-pub fn open_source() -> OpenSource {
-    match std::env::var("TWIN_K8S_FIXTURE") {
-        Ok(value) if !value.is_empty() => match FixtureK8s::open(Path::new(&value)) {
+pub fn open_source(fixture: Option<&Path>) -> OpenSource {
+    let legacy = std::env::var_os("TWIN_K8S_FIXTURE")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    match fixture.or(legacy.as_deref()) {
+        Some(path) => match FixtureK8s::open(path) {
             Ok(fixture) => OpenSource::Fixture(Box::new(fixture)),
             Err(err) => OpenSource::Gap {
                 detail: err.to_string(),
             },
         },
-        _ => OpenSource::Gap {
-            detail: "no TWIN_K8S_FIXTURE directory is set".to_string(),
+        None => match crate::read_cluster() {
+            Ok(view) => OpenSource::Live(Box::new(view)),
+            Err(error) => OpenSource::Gap {
+                detail: error.to_string(),
+            },
         },
     }
 }
@@ -183,6 +190,7 @@ pub fn open_source() -> OpenSource {
 pub fn cluster_view(source: &OpenSource) -> Option<&ClusterView> {
     match source {
         OpenSource::Fixture(fixture) => Some(fixture.view()),
+        OpenSource::Live(view) => Some(view),
         OpenSource::Gap { .. } => None,
     }
 }

@@ -9,12 +9,17 @@ mod warning;
 pub use cgroup::{parse_cgroup_memberships, CgroupMembership};
 pub use collector::{ProcessBatch, ProcessCollector, COLLECTOR_NAME};
 pub use process_record::ProcessRecord;
-pub use procfs::{ProcReader, StdProcReader};
+pub use procfs::{FileIdentity, ProcReader, StdProcReader};
 pub use socket::{
-    parse_socket_fd_target, parse_tcp_table, ParseTcpWarning, SocketOwner, SocketState,
-    TcpConnectionRecord, TcpSocketRecord, TcpTableKind, TcpTableParse,
+    parse_inet_table, parse_socket_fd_target, InetConnectionRecord, InetSocketRecord,
+    InetTableKind, InetTableParse, ParseInetWarning, SocketOwner, SocketState,
 };
 pub use unix::{
     parse_unix_table, UnixConnectionRecord, UnixSocketRecord, UnixTableParse, UNIX_FLAG_LISTEN,
 };
 pub use warning::{ProcessWarning, ProcessWarningKind};
+
+mod namespace;
+pub use namespace::NetworkNamespaceBatch;
+
+mod fifo;

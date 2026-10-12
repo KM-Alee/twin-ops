@@ -60,3 +60,14 @@ fn write_default(path: &Path) -> Result<(), ConfigError> {
     })?;
     Ok(())
 }
+
+pub(crate) fn load(
+    layout: &crate::paths::TwinLayout,
+    config_override: Option<&Path>,
+) -> Result<TwinConfig, ConfigError> {
+    let path = layout.config_file(config_override);
+    if config_override.is_none() && !path.exists() {
+        return Ok(TwinConfig::default());
+    }
+    read(&path)
+}

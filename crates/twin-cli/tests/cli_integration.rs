@@ -201,8 +201,8 @@ fn graph_json_service_view_has_expected_shape() {
     let value: serde_json::Value =
         serde_json::from_str(stdout_utf8(&out).trim()).expect("graph json");
     assert_eq!(value["service"]["id"], "service:nginx.service");
-    assert!(value["owned_processes"].as_array().unwrap().len() >= 1);
-    assert!(value["evidence"].as_array().unwrap().len() >= 1);
+    assert!(!value["owned_processes"].as_array().unwrap().is_empty());
+    assert!(!value["evidence"].as_array().unwrap().is_empty());
     let source = value["evidence"][0]["source"].as_str().expect("source");
     assert!(source.contains("/proc/42/cgroup"));
 }
@@ -637,4 +637,110 @@ fn emulate_restart_rejects_port_target() {
     let out = home.run(&["emulate", "restart", "port:tcp:127.0.0.1:5432"]);
     assert!(!out.status.success());
     assert!(stderr_utf8(&out).contains("unsupported") || stderr_utf8(&out).contains("Error"));
+}
+
+#[test]
+fn invalid_read_requests_do_not_refresh_or_write_history() {
+    let home = TwinHome::new();
+    assert!(home.run(&["init"]).status.success());
+    write_slice5_fixture(&home.proc_root);
+    for args in [
+        vec!["graph", "--kind", "bogus"],
+        vec!["graph", "process", "--kind", "service"],
+        vec!["impact", "nginx", "--max-depth", "0"],
+        vec!["impact", "process:pid:42"],
+        vec!["emulate", "delete", "relative.conf"],
+        vec!["emulate", "fill-disk", "/var", "--to", "101%"],
+        vec!["emulate", "restart", "process:pid:42"],
+        vec!["emulate", "upgrade", "bad/name"],
+    ] {
+        let out = home.run(&args);
+        assert!(!out.status.success(), "unexpected success: {args:?}");
+        let store = Store::open(&xdg_db_path(&home)).unwrap();
+        assert!(
+            store.list_node_history_since(0).unwrap().is_empty(),
+            "wrote history: {args:?}"
+        );
+        assert!(
+            store.list_current_nodes().unwrap().is_empty(),
+            "wrote nodes: {args:?}"
+        );
+    }
+}
+
+#[test]
+fn completions_are_generated_without_initializing_or_scanning() {
+    let home = TwinHome::new();
+    for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+        let output = home.run(&["completions", shell]);
+        assert!(output.status.success(), "{}", stderr_utf8(&output));
+        assert!(stdout_utf8(&output).contains("twin"));
+        assert!(!xdg_db_path(&home).exists());
+    }
+    assert!(!home.run(&["completions", "bogus"]).status.success());
+}
+
+#[test]
+fn fixture_flags_are_discoverable_and_missing_fixture_warns() {
+    let home = TwinHome::new();
+    assert!(stdout_utf8(&home.run(&["scan", "--help"])).contains("--docker-fixture"));
+    assert!(stdout_utf8(&home.run(&["k8s", "scan", "--help"])).contains("--fixture"));
+    assert!(home.run(&["init"]).status.success());
+    let missing = home.home_path().join("missing-fixture");
+    let output = home.run(&[
+        "k8s",
+        "scan",
+        "--fixture",
+        missing.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(output.status.success(), "{}", stderr_utf8(&output));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(result["coverage_gap"].is_string());
+}
+
+#[test]
+fn historical_exports_and_why_read_the_store_without_refreshing() {
+    let home = TwinHome::new();
+    init_and_scan(&home);
+    let store = Store::open(&xdg_db_path(&home)).expect("store");
+    let before = store.latest_collector_run("proc_process").expect("run");
+    let graph = home.run(&["graph", "--kind", "process", "--json"]);
+    assert!(graph.status.success(), "{}", stderr_utf8(&graph));
+    let store = Store::open(&xdg_db_path(&home)).expect("store");
+    let nodes = store.list_nodes().expect("nodes");
+    let process = nodes
+        .iter()
+        .find(|node| node.kind == "process")
+        .expect("process");
+    let before = store
+        .latest_collector_run("proc_process")
+        .expect("run")
+        .or(before)
+        .map(|run| run.id);
+    let history = home.run(&["graph", "--kind", "process", "--at", "now", "--json"]);
+    assert!(history.status.success(), "{}", stderr_utf8(&history));
+    let historical: serde_json::Value = serde_json::from_str(&stdout_utf8(&history)).expect("json");
+    assert_eq!(historical["history_scope"], "retained observations only");
+    for format in ["dot", "mermaid"] {
+        let export = home.run(&["graph", &process.id, "--at", "now", "--format", format]);
+        assert!(export.status.success(), "{}", stderr_utf8(&export));
+        let text = stdout_utf8(&export);
+        assert!(text.contains(&process.id));
+        assert!(text.starts_with(if format == "dot" {
+            "digraph twin {"
+        } else {
+            "flowchart LR"
+        }));
+    }
+    let why = home.run(&["why", &process.id, "--json"]);
+    assert!(why.status.success(), "{}", stderr_utf8(&why));
+    let store = Store::open(&xdg_db_path(&home)).expect("store");
+    assert_eq!(
+        store
+            .latest_collector_run("proc_process")
+            .expect("run")
+            .map(|run| run.id),
+        before
+    );
 }

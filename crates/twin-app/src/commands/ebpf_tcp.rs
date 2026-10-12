@@ -2,7 +2,8 @@ use std::str::FromStr;
 
 use twin_core::{
     score_evidence, EdgeId, EdgeKind, EvidenceFactors, EvidenceRecency, EvidenceSourceKind,
-    EvidenceStrength, GraphEdge, GraphNode, NodeId, NodeKind, ObservationId, TimestampNs,
+    EvidenceStrength, GraphEdge, GraphMetadata, GraphNode, NodeId, NodeKind, ObservationId,
+    TimestampNs,
 };
 use twin_ebpf::{
     dropped_observation, tcp_to_raw, TcpConnect, TcpEvent, TcpRateLimiter, TcpRateLimits,
@@ -14,20 +15,27 @@ use crate::error::{AppError, ScanError};
 use crate::model::{ImpactEvidenceLine, RuntimeDependency, WatchTcpEvent};
 
 use super::scan::listener_port_candidates;
+use super::scan_history::{self, FinalizeScope, ScanHistorySession};
 
 pub struct TcpIngestor {
     limiter: TcpRateLimiter,
+    kernel_drops: u64,
 }
 
 impl TcpIngestor {
     pub fn new(limits: TcpRateLimits) -> Self {
         Self {
             limiter: TcpRateLimiter::new(limits),
+            kernel_drops: 0,
         }
     }
 
     pub fn dropped(&self) -> u64 {
-        self.limiter.dropped()
+        self.limiter.dropped().saturating_add(self.kernel_drops)
+    }
+
+    pub(crate) fn record_kernel_drops(&mut self, total: u64) {
+        self.kernel_drops = self.kernel_drops.max(total);
     }
 
     pub fn push(
@@ -35,21 +43,68 @@ impl TcpIngestor {
         store: &mut Store,
         event: &TcpEvent,
     ) -> Result<Option<WatchTcpEvent>, AppError> {
-        if !self.limiter.admit(event.pid(), &event.endpoint()) {
+        if !self.limiter.admit(
+            event.pid(),
+            &event.endpoint(),
+            event.cgroup_id(),
+            event.kind(),
+        ) {
             return Ok(None);
         }
+        let mut raw = tcp_to_raw(event);
+        if let Some(twin_observation::RawIdentity::NamespacedEndpoint {
+            namespace,
+            ip,
+            port,
+            protocol: _,
+        }) = raw.object.as_ref()
+        {
+            if host_namespace() == Some(*namespace) {
+                raw.object = Some(twin_observation::RawIdentity::TcpEndpoint {
+                    ip: ip.clone(),
+                    port: *port,
+                });
+            }
+        }
         let observation = Pipeline::default()
-            .process(tcp_to_raw(event))
+            .process(raw)
             .map_err(ScanError::Observation)?;
-        ensure_process(store, event.pid(), observation.timestamp())?;
+        let mut history = ScanHistorySession::new(
+            observation.timestamp().as_i64(),
+            None,
+            false,
+            false,
+            FinalizeScope::Host,
+        );
+        let start = event.start_ticks();
+        if !ensure_process(
+            store,
+            &mut history,
+            event.pid(),
+            observation.timestamp(),
+            start,
+        )
+        .map_err(ScanError::Store)?
+        {
+            self.kernel_drops = self.kernel_drops.saturating_add(1);
+            return Ok(None);
+        }
         if let Some(port) = observation.object() {
-            ensure_port(store, port, observation.timestamp())?;
+            ensure_port(store, &mut history, port, observation.timestamp())?;
         }
         store
             .insert_observation_typed(&observation)
             .map_err(ScanError::Store)?;
+        super::ebpf_cgroup::attribute(
+            store,
+            &mut history,
+            &observation,
+            event.pid(),
+            event.cgroup_id(),
+        )
+        .map_err(ScanError::Store)?;
         if let TcpEvent::Connect(connect) = event {
-            apply_connect(store, &observation, connect)?;
+            apply_connect(store, &mut history, &observation, connect)?;
         }
         Ok(Some(WatchTcpEvent {
             node_id: format!("process:pid:{}", event.pid()),
@@ -59,7 +114,7 @@ impl TcpIngestor {
     }
 
     pub fn sync_drops(&self, store: &mut Store, timestamp_ns: i64) -> Result<(), AppError> {
-        let count = self.limiter.dropped();
+        let count = self.dropped();
         if count == 0 {
             return Ok(());
         }
@@ -67,6 +122,18 @@ impl TcpIngestor {
             .list_observations_by_kind(&ObservationKind::EbpfDroppedEvents.to_string())
             .map_err(ScanError::Store)?;
         for row in &rows {
+            if !serde_json::from_str::<serde_json::Value>(&row.metadata_json)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("source")
+                        .and_then(|source| source.as_str())
+                        .map(str::to_string)
+                })
+                .is_some_and(|source| source == "ebpf_tcp")
+            {
+                continue;
+            }
             store
                 .delete_observation(&row.id)
                 .map_err(ScanError::Store)?;
@@ -230,29 +297,33 @@ fn connect_counts(store: &Store, edge_id: &str) -> Result<(u64, bool), AppError>
 
 fn apply_connect(
     store: &mut Store,
+    history: &mut ScanHistorySession,
     observation: &Observation,
     event: &TcpConnect,
 ) -> Result<(), AppError> {
     let process = NodeId::process(event.pid());
-    let port = NodeId::port_tcp(&event.daddr().to_string(), event.dport()).map_err(|err| {
-        ScanError::Store(twin_store::StoreError::Decode {
-            detail: err.to_string(),
-        })
-    })?;
+    let Some(port) = observation.object().cloned() else {
+        return Ok(());
+    };
     let seen = observation.timestamp();
-    upsert_process_connect(store, &process, &port, seen, observation.id())?;
+    upsert_process_connect(store, history, &process, &port, seen, observation.id())?;
     let owners = owning_services(store, &process)?;
     if owners.is_empty() {
         return Ok(());
     }
-    let listeners = listener_services(store, &event.daddr().to_string(), event.dport())?;
+    let listeners = listener_services(
+        store,
+        &event.daddr().to_string(),
+        event.dport(),
+        port.network_namespace(),
+    )?;
     for owner in owners {
         if listeners.is_empty() {
-            upsert_service_connect(store, &owner, &port, seen, observation.id())?;
+            upsert_service_connect(store, history, &owner, &port, seen, observation.id())?;
             continue;
         }
         for listener in &listeners {
-            upsert_service_connect(store, &owner, listener, seen, observation.id())?;
+            upsert_service_connect(store, history, &owner, listener, seen, observation.id())?;
         }
     }
     Ok(())
@@ -260,14 +331,18 @@ fn apply_connect(
 
 fn upsert_process_connect(
     store: &mut Store,
+    history: &mut ScanHistorySession,
     process: &NodeId,
     port: &NodeId,
     seen: TimestampNs,
     observation: ObservationId,
 ) -> Result<(), AppError> {
     let existing = load_edge(store, process, EdgeKind::ConnectsTo, port)?;
-    let edge = GraphEdge::observed_process_connects_to(process, port, seen, existing.as_ref());
-    store.upsert_edge_typed(&edge).map_err(ScanError::Store)?;
+    // eBPF evidence outlives the connection; the marker keeps host finalization
+    // from discarding an edge whose connect events are still stored.
+    let edge = GraphEdge::observed_process_connects_to(process, port, seen, existing.as_ref())
+        .with_metadata(ebpf_edge_metadata());
+    scan_history::upsert_edge(store, history, &edge).map_err(ScanError::Store)?;
     store
         .link_edge_observation(edge.id().as_str(), &observation.to_string(), "direct")
         .map_err(ScanError::Store)?;
@@ -276,18 +351,24 @@ fn upsert_process_connect(
 
 fn upsert_service_connect(
     store: &mut Store,
+    history: &mut ScanHistorySession,
     service: &NodeId,
     target: &NodeId,
     seen: TimestampNs,
     observation: ObservationId,
 ) -> Result<(), AppError> {
     let existing = load_edge(store, service, EdgeKind::ConnectsTo, target)?;
-    let edge = GraphEdge::inferred_service_connects_to(service, target, seen, existing.as_ref());
-    store.upsert_edge_typed(&edge).map_err(ScanError::Store)?;
+    let edge = GraphEdge::inferred_service_connects_to(service, target, seen, existing.as_ref())
+        .with_metadata(ebpf_edge_metadata());
+    scan_history::upsert_edge(store, history, &edge).map_err(ScanError::Store)?;
     store
         .link_edge_observation(edge.id().as_str(), &observation.to_string(), "support")
         .map_err(ScanError::Store)?;
     Ok(())
+}
+
+fn ebpf_edge_metadata() -> GraphMetadata {
+    GraphMetadata::from_json(r#"{"source":"ebpf_tcp"}"#)
 }
 
 fn load_edge(
@@ -327,9 +408,24 @@ fn listener_services(
     store: &Store,
     remote_ip: &str,
     remote_port: u16,
+    namespace: Option<twin_core::NetworkNamespaceId>,
 ) -> Result<Vec<NodeId>, AppError> {
     let mut listeners = Vec::new();
-    for port in listener_port_candidates(remote_ip, remote_port) {
+    for port in listener_port_candidates(remote_ip, remote_port)
+        .into_iter()
+        .filter_map(|port| match namespace {
+            Some(namespace) => port_parts(&port).and_then(|(ip, number)| {
+                NodeId::inet_port_in_namespace(
+                    namespace,
+                    twin_core::TransportProtocol::Tcp,
+                    &ip,
+                    number,
+                )
+                .ok()
+            }),
+            None => Some(port),
+        })
+    {
         let rows = store
             .list_active_edges_to(port.as_str())
             .map_err(ScanError::Store)?;
@@ -349,40 +445,81 @@ fn listener_services(
     Ok(listeners)
 }
 
-fn ensure_process(store: &mut Store, pid: u32, seen: TimestampNs) -> Result<(), AppError> {
+pub(crate) fn ensure_process(
+    store: &mut Store,
+    history: &mut ScanHistorySession,
+    pid: u32,
+    seen: TimestampNs,
+    start_ticks: Option<u64>,
+) -> Result<bool, twin_store::StoreError> {
     let id = NodeId::process(pid);
-    if store
-        .get_node_typed(&id)
-        .map_err(ScanError::Store)?
-        .is_some()
+    let existing = store.get_node_typed(&id)?;
+    let mut metadata: serde_json::Value = existing
+        .as_ref()
+        .and_then(|node| serde_json::from_str(node.metadata().as_str()).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let previous = metadata.get("start_ticks").and_then(|value| value.as_u64());
+    if start_ticks
+        .zip(previous)
+        .is_some_and(|(new, old)| new < old)
     {
-        return Ok(());
+        return Ok(false);
     }
-    let node = GraphNode::process(pid, format!("pid:{pid}"), seen, None);
-    store.upsert_node_typed(&node).map_err(ScanError::Store)?;
-    Ok(())
+    let changed = start_ticks
+        .zip(previous)
+        .is_some_and(|(new, old)| new != old);
+    if changed {
+        let mut edges = store.list_edges_from(id.as_str())?;
+        edges.extend(store.list_edges_to(id.as_str())?);
+        let ids: Vec<_> = edges.iter().map(|edge| edge.id.clone()).collect();
+        store.mark_edges_missing(&ids, seen.as_i64(), false, history.collector_run_id())?;
+        for row in edges {
+            let edge = GraphEdge::try_from(&row)?;
+            store.reset_edge_incarnation(edge.id(), seen)?;
+        }
+        store.mark_nodes_missing(
+            &[id.to_string()],
+            seen.as_i64(),
+            false,
+            history.collector_run_id(),
+        )?;
+        store.reset_node_incarnation(&id, seen)?;
+    }
+    if let Some(start) = start_ticks {
+        metadata["start_ticks"] = start.into();
+        metadata["start_identity_known"] = true.into();
+    }
+    let prior = existing.as_ref().filter(|_| !changed);
+    let node = GraphNode::from_parts(twin_core::GraphNodeParts {
+        id,
+        kind: NodeKind::Process,
+        label: prior
+            .map(|node| node.label().to_string())
+            .unwrap_or_else(|| format!("pid:{pid}")),
+        state: twin_core::NodeState::Active,
+        first_seen: prior.map_or(seen, GraphNode::first_seen),
+        last_seen: seen,
+        valid_from: prior.map_or(seen, GraphNode::valid_from),
+        valid_to: None,
+        metadata: GraphMetadata::from_json(metadata.to_string()),
+    });
+    scan_history::upsert_node(store, history, &node)?;
+    Ok(true)
 }
 
-fn ensure_port(store: &mut Store, port: &NodeId, seen: TimestampNs) -> Result<(), AppError> {
+fn ensure_port(
+    store: &mut Store,
+    history: &mut ScanHistorySession,
+    port: &NodeId,
+    seen: TimestampNs,
+) -> Result<(), AppError> {
     if port.kind() != Some(NodeKind::Port) {
         return Ok(());
     }
-    if store
-        .get_node_typed(port)
-        .map_err(ScanError::Store)?
-        .is_some()
-    {
-        return Ok(());
-    }
-    let Some((ip, number)) = port_parts(port) else {
-        return Ok(());
-    };
-    let node = GraphNode::tcp_port(&ip, number, seen, None).map_err(|err| {
-        ScanError::Store(twin_store::StoreError::Decode {
-            detail: err.to_string(),
-        })
-    })?;
-    store.upsert_node_typed(&node).map_err(ScanError::Store)?;
+    let existing = store.get_node_typed(port).map_err(ScanError::Store)?;
+    let node = GraphNode::from_parts(twin_core::GraphNodeParts { id: port.clone(), kind: NodeKind::Port, label: port.to_string(), state: twin_core::NodeState::Active, first_seen: existing.as_ref().map_or(seen, GraphNode::first_seen), last_seen: seen, valid_from: existing.as_ref().map_or(seen, GraphNode::valid_from), valid_to: None, metadata: GraphMetadata::from_json(serde_json::json!({"source":"ebpf_tcp", "network_namespace":port.network_namespace().map(|namespace| namespace.to_string())}).to_string()) });
+    scan_history::upsert_node(store, history, &node).map_err(ScanError::Store)?;
     Ok(())
 }
 
@@ -430,4 +567,14 @@ fn connect_reason(count: u64) -> String {
     } else {
         format!("eBPF observed {count} connect events")
     }
+}
+
+fn host_namespace() -> Option<twin_core::NetworkNamespaceId> {
+    let value = std::fs::read_link("/proc/self/ns/net").ok()?;
+    value
+        .to_str()?
+        .strip_prefix("net:[")?
+        .strip_suffix(']')?
+        .parse()
+        .ok()
 }

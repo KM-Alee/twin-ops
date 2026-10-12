@@ -59,3 +59,7 @@ cargo fmt --check
 ```
 
 All passed on implementation completion.
+
+## 2026-10-08 follow-up: PostgreSQL configuration discovery
+
+Bounded `/etc/postgresql/<version>/<cluster>/*.conf` discovery maps existing postgresql@version-cluster.service or postgresql.service to config files. Discovery does not follow directory symlinks. Observation normalization errors return StoreError rather than panic. Tests: mounts.

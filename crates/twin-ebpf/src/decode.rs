@@ -6,22 +6,27 @@ use twin_observation::{
 
 use crate::error::EbpfError;
 
-pub const EXEC_EVENT_LEN: usize = 40;
+pub const EXEC_EVENT_LEN: usize = 44;
+pub const EXEC_LIVE_EVENT_LEN: usize = 60;
 const COMM_LEN: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EbpfExec {
     pid: u32,
     ppid: u32,
+    uid: u32,
     comm: String,
     cgroup_id: u64,
     timestamp_ns: u64,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+    start_ticks: Option<u64>,
 }
 
 impl EbpfExec {
     pub fn new(
         pid: u32,
         ppid: u32,
+        uid: u32,
         comm: impl Into<String>,
         cgroup_id: u64,
         timestamp_ns: u64,
@@ -29,10 +34,24 @@ impl EbpfExec {
         Self {
             pid,
             ppid,
+            uid,
             comm: bound_comm(comm.into().as_str()),
             cgroup_id,
             timestamp_ns,
+            namespace: None,
+            start_ticks: None,
         }
+    }
+
+    pub fn network_namespace(&self) -> Option<twin_core::NetworkNamespaceId> {
+        self.namespace
+    }
+    pub fn start_ticks(&self) -> Option<u64> {
+        self.start_ticks
+    }
+    pub(crate) fn with_timestamp(mut self, timestamp: u64) -> Self {
+        self.timestamp_ns = timestamp;
+        self
     }
 
     pub fn pid(&self) -> u32 {
@@ -41,6 +60,10 @@ impl EbpfExec {
 
     pub fn ppid(&self) -> u32 {
         self.ppid
+    }
+
+    pub fn uid(&self) -> u32 {
+        self.uid
     }
 
     pub fn comm(&self) -> &str {
@@ -57,7 +80,7 @@ impl EbpfExec {
 }
 
 pub fn decode_exec(bytes: &[u8]) -> Result<EbpfExec, EbpfError> {
-    if bytes.len() != EXEC_EVENT_LEN {
+    if ![EXEC_EVENT_LEN, EXEC_LIVE_EVENT_LEN].contains(&bytes.len()) {
         return Err(EbpfError::Malformed {
             reason: format!(
                 "exec event is {} bytes, expected {EXEC_EVENT_LEN}",
@@ -69,13 +92,31 @@ pub fn decode_exec(bytes: &[u8]) -> Result<EbpfExec, EbpfError> {
     let ppid = read_u32(bytes, 4);
     let cgroup_id = read_u64(bytes, 8);
     let timestamp_ns = read_u64(bytes, 16);
+    let uid = read_u32(bytes, 40);
     let comm = comm_from_bytes(&bytes[24..40]);
     Ok(EbpfExec {
         pid,
         ppid,
+        uid,
         comm,
         cgroup_id,
         timestamp_ns,
+        namespace: if bytes.len() == EXEC_LIVE_EVENT_LEN {
+            Some(
+                twin_core::NetworkNamespaceId::new(read_u64(bytes, 44)).map_err(|_| {
+                    EbpfError::Malformed {
+                        reason: "exec event namespace invalid".into(),
+                    }
+                })?,
+            )
+        } else {
+            None
+        },
+        start_ticks: if bytes.len() == EXEC_LIVE_EVENT_LEN {
+            Some(read_u64(bytes, 52))
+        } else {
+            None
+        },
     })
 }
 
@@ -85,6 +126,7 @@ pub fn encode_exec(event: &EbpfExec) -> [u8; EXEC_EVENT_LEN] {
     out[4..8].copy_from_slice(&event.ppid.to_le_bytes());
     out[8..16].copy_from_slice(&event.cgroup_id.to_le_bytes());
     out[16..24].copy_from_slice(&event.timestamp_ns.to_le_bytes());
+    out[40..44].copy_from_slice(&event.uid.to_le_bytes());
     let comm = event.comm.as_bytes();
     let n = comm.len().min(COMM_LEN);
     out[24..24 + n].copy_from_slice(&comm[..n]);
@@ -93,9 +135,19 @@ pub fn encode_exec(event: &EbpfExec) -> [u8; EXEC_EVENT_LEN] {
 
 pub fn exec_to_raw(event: &EbpfExec) -> RawObservation {
     let mut metadata = ObservationMetadata::new();
-    metadata.insert_u32("ppid", event.ppid);
+    if event.namespace.is_none() || event.ppid > 0 {
+        metadata.insert_u32("ppid", event.ppid);
+    }
+    metadata.insert_bool("ppid_known", event.namespace.is_none() || event.ppid > 0);
+    metadata.insert_u32("uid", event.uid);
     metadata.insert_str("comm", &event.comm);
     metadata.insert_str("cgroup_id", &event.cgroup_id.to_string());
+    if let Some(namespace) = event.network_namespace() {
+        metadata.insert_str("network_namespace", &namespace.to_string());
+    }
+    if let Some(start) = event.start_ticks() {
+        metadata.insert_u64("start_ticks", start);
+    }
     let timestamp = i64::try_from(event.timestamp_ns).unwrap_or(i64::MAX);
     RawObservation {
         source: ObservationSource::Ebpf,

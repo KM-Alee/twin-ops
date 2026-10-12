@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 const API_NAMES: &[&str] = &[
     "DeleteParams",
     "Api::delete",
-    "patch",
-    "replace",
-    "create",
-    "exec",
+    ".patch(",
+    ".replace(",
+    ".create(",
+    ".exec(",
     "Attach",
     "portforward",
-    "scale",
+    ".scale(",
 ];
 
 fn manifest_dir() -> PathBuf {

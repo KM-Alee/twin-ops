@@ -408,3 +408,71 @@ fn foreign_key_violations_rejected() {
     let obs_fk = store.insert_observation(&obs).expect_err("obs fk");
     assert_foreign_key_err(obs_fk);
 }
+
+#[test]
+fn command_observations_never_persist_arbitrary_argument_values() {
+    use twin_core::{CollectorName, TimestampNs};
+    use twin_observation::{
+        ConfidenceHint, ObservationKind, ObservationMetadata, ObservationSource, Pipeline,
+        RawObservation,
+    };
+    use twin_store::Store;
+    let mut store = Store::open_in_memory().expect("store");
+    store.initialize().expect("schema");
+    for argv in [
+        vec!["curl", "-H", "Authorization: Bearer SENTINEL"],
+        vec!["redis-cli", "-a", "SENTINEL"],
+        vec!["mysql", "-pSENTINEL"],
+        vec!["SENTINEL", "positional"],
+    ] {
+        let mut metadata = ObservationMetadata::new();
+        metadata.insert_str_array(
+            "argv_json",
+            &argv.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+        );
+        let observation = Pipeline::default()
+            .process(RawObservation {
+                source: ObservationSource::Proc,
+                kind: ObservationKind::ProcessCommandSeen,
+                collector: CollectorName::new("proc"),
+                subject: None,
+                object: None,
+                timestamp: TimestampNs::new(1),
+                raw_ref: None,
+                confidence_hint: ConfidenceHint::High,
+                metadata,
+            })
+            .expect("pipeline");
+        store
+            .insert_observation_typed(&observation)
+            .expect("insert");
+        let row = store
+            .get_observation(&observation.id().to_string())
+            .expect("query")
+            .expect("row");
+        assert!(!row.metadata_json.contains("SENTINEL"));
+        assert!(!row.metadata_json.contains("argv_json"));
+        assert!(row.metadata_json.contains("argc"));
+        assert_eq!(row.redaction_state, "partial");
+    }
+}
+
+#[test]
+fn node_incarnation_reset_is_explicit_and_does_not_change_history_rows() {
+    use twin_store::Store;
+    let mut store = Store::open_in_memory().expect("store");
+    store.initialize().expect("schema");
+    let node = twin_core::GraphNode::process(42, "old", TimestampNs::new(1), None);
+    store
+        .upsert_node(&twin_store::NodeRow::from(&node))
+        .expect("node");
+    store
+        .reset_node_incarnation(node.id(), TimestampNs::new(2))
+        .expect("reset");
+    let row = store
+        .get_node(node.id().as_str())
+        .expect("query")
+        .expect("row");
+    assert_eq!(row.first_seen_ns, 2);
+    assert_eq!(row.valid_from_ns, 2);
+}

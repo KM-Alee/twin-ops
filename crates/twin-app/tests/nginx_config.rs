@@ -60,7 +60,8 @@ fn nginx_and_django_proc(proc: &Path) {
 fn scan_fixture(home: &IsolatedHome, proc: &Path, systemd: &Path, host_root: &Path) {
     set_systemd_unit_root(systemd);
     set_host_root(host_root);
-    twin_app::scan_in(&home.layout, ScanRequest::default(), proc).expect("scan");
+    twin_app::scan_in_with_dns(&home.layout, ScanRequest::default(), proc, &FixtureDns)
+        .expect("scan");
     clear_scan_env();
 }
 
@@ -201,6 +202,10 @@ fn config_byte_change_appears_in_what_changed() {
     let changed = twin_app::what_changed_in(
         &home.layout,
         WhatChangedRequest {
+            target_query: None,
+            categories: vec![],
+            limit: 50,
+            max_depth: 2,
             since: "1h".to_string(),
             config_override: None,
             verbose: false,
@@ -215,4 +220,400 @@ fn config_byte_change_appears_in_what_changed() {
         "changed nodes: {:?}",
         changed.changed_nodes
     );
+}
+
+#[test]
+fn nginx_includes_follow_globs_and_cycles_with_file_evidence_and_secret_safe_origins() {
+    let _env = lock_scan_env();
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("proc-includes");
+    nginx_and_django_proc(&proc);
+    let systemd = home.layout.data_dir.join("units-includes");
+    write_units(&systemd);
+    let host = home.layout.data_dir.join("host-includes");
+    write_conf(
+        &host,
+        "http { include conf.d/*.conf; include missing.conf; }\n",
+    );
+    std::fs::create_dir_all(host.join("etc/nginx/conf.d")).expect("dirs");
+    let content = "include nginx.conf; proxy_pass http://user:PRIVATE_PASSWORD@127.0.0.1:8000/private?token=PRIVATE_TOKEN;";
+    std::fs::write(host.join("etc/nginx/conf.d/api.conf"), content).expect("include");
+    set_systemd_unit_root(&systemd);
+    set_host_root(&host);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    clear_scan_env();
+    let report = serde_json::to_string(&result).expect("json");
+    assert!(report.contains("included file is missing"), "{report}");
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    assert!(store
+        .get_edge("service:nginx.service|configured_by|file:/etc/nginx/conf.d/api.conf")
+        .expect("config")
+        .is_some());
+    assert!(store
+        .get_edge("service:nginx.service|proxies_to|service:django.service")
+        .expect("proxy")
+        .is_some());
+    let observations = store
+        .list_observations_by_kind("config_proxy_pass")
+        .expect("observations");
+    assert!(!observations.is_empty());
+    let stored = format!("{observations:?}");
+    assert!(!stored.contains("PRIVATE_PASSWORD"));
+    assert!(!stored.contains("PRIVATE_TOKEN"));
+    assert_eq!(
+        std::fs::read_to_string(host.join("etc/nginx/conf.d/api.conf")).expect("file"),
+        content
+    );
+}
+
+#[test]
+fn named_upstream_from_include_resolves_with_both_file_sources() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("proc-upstream");
+    nginx_and_django_proc(&proc);
+    let systemd = home.layout.data_dir.join("units-upstream");
+    write_units(&systemd);
+    let host = home.layout.data_dir.join("host-upstream");
+    write_conf(&host, "http { include conf.d/*.conf; server { location / { proxy_pass http://api_pool/private?token=SECRET; } } }");
+    std::fs::create_dir_all(host.join("etc/nginx/conf.d")).expect("dirs");
+    std::fs::write(
+        host.join("etc/nginx/conf.d/upstream.conf"),
+        "upstream api_pool { server 127.0.0.1:8000; server 192.0.2.1:9000 down; }",
+    )
+    .expect("upstream");
+    set_systemd_unit_root(&systemd);
+    set_host_root(&host);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    clear_scan_env();
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let edge = store
+        .get_edge("service:nginx.service|proxies_to|service:django.service")
+        .expect("proxy")
+        .expect("edge");
+    assert_eq!(edge.class, "inferred");
+    for file in ["/etc/nginx/nginx.conf", "/etc/nginx/conf.d/upstream.conf"] {
+        assert!(store
+            .get_edge(&format!("file:{file}|references|port:tcp:127.0.0.1:8000"))
+            .expect("reference")
+            .is_some());
+    }
+    assert!(store
+        .get_node("port:tcp:192.0.2.1:9000")
+        .expect("down")
+        .is_none());
+    let observations = store
+        .list_observations_by_kind("config_proxy_pass")
+        .expect("observations");
+    assert!(observations
+        .iter()
+        .any(
+            |obs| serde_json::from_str::<serde_json::Value>(&obs.metadata_json)
+                .ok()
+                .as_ref()
+                .and_then(|value| value.get("__raw_ref"))
+                .and_then(|value| value.as_str())
+                == Some("file:/etc/nginx/nginx.conf")
+        ));
+    assert!(observations
+        .iter()
+        .any(
+            |obs| serde_json::from_str::<serde_json::Value>(&obs.metadata_json)
+                .ok()
+                .as_ref()
+                .and_then(|value| value.get("__raw_ref"))
+                .and_then(|value| value.as_str())
+                == Some("file:/etc/nginx/conf.d/upstream.conf")
+        ));
+    assert!(!format!("{observations:?}").contains("SECRET"));
+    // Conflicting declarations must not choose a backend arbitrarily.
+    std::fs::write(
+        host.join("etc/nginx/conf.d/duplicate.conf"),
+        "upstream api_pool { server 127.0.0.1:9999; }",
+    )
+    .expect("duplicate");
+    set_systemd_unit_root(&systemd);
+    set_host_root(&host);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    clear_scan_env();
+    assert!(result
+        .warning_details
+        .iter()
+        .any(|warning| warning.detail.contains("ambiguous")));
+    assert!(store
+        .get_node("port:tcp:127.0.0.1:9999")
+        .expect("ambiguous target")
+        .is_none());
+}
+
+#[test]
+fn incomplete_config_marks_proxy_evidence_stale_then_complete_scans_finalize_or_reactivate() {
+    let _env = lock_scan_env();
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("nginx-lifecycle-proc");
+    nginx_and_django_proc(&proc);
+    let systemd = home.layout.data_dir.join("nginx-lifecycle-systemd");
+    write_units(&systemd);
+    let host = home.layout.data_dir.join("nginx-lifecycle-host");
+    let valid = "http { server { location / { proxy_pass http://127.0.0.1:8000; } location /remote { proxy_pass http://192.0.2.1:9000; } } }";
+    write_conf(&host, valid);
+    scan_fixture(&home, &proc, &systemd, &host);
+    let store = Store::open(&home.layout.db_file()).unwrap();
+    let proxy = "service:nginx.service|proxies_to|service:django.service";
+    let reference = "file:/etc/nginx/nginx.conf|references|port:tcp:192.0.2.1:9000";
+    let before = store.get_edge(proxy).unwrap().unwrap().last_seen_ns;
+    for _ in 0..2 {
+        write_conf(&host, "http { server { proxy_pass");
+        scan_fixture(&home, &proc, &systemd, &host);
+        let edge = store.get_edge(proxy).unwrap().unwrap();
+        assert_eq!(edge.state, "stale");
+        assert_eq!(
+            edge.last_seen_ns, before,
+            "missing evidence must not refresh last_seen"
+        );
+        assert_eq!(store.get_edge(reference).unwrap().unwrap().state, "stale");
+        assert_eq!(
+            store
+                .get_node("port:tcp:192.0.2.1:9000")
+                .unwrap()
+                .unwrap()
+                .state,
+            "stale"
+        );
+        assert_eq!(
+            store
+                .get_node("port:tcp:127.0.0.1:8000")
+                .unwrap()
+                .unwrap()
+                .state,
+            "active",
+            "live socket evidence remains current"
+        );
+    }
+    write_conf(&host, "events {} http {}");
+    set_systemd_unit_root(&systemd);
+    set_host_root(&host);
+    let complete = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).unwrap();
+    clear_scan_env();
+    assert_eq!(
+        store.get_edge(proxy).unwrap().unwrap().state,
+        "gone",
+        "{:?}",
+        complete.warning_details
+    );
+    assert_eq!(store.get_edge(reference).unwrap().unwrap().state, "gone");
+    assert_eq!(
+        store
+            .get_node("port:tcp:192.0.2.1:9000")
+            .unwrap()
+            .unwrap()
+            .state,
+        "gone"
+    );
+    write_conf(&host, valid);
+    scan_fixture(&home, &proc, &systemd, &host);
+    assert_eq!(store.get_edge(proxy).unwrap().unwrap().state, "active");
+    assert_eq!(store.get_edge(reference).unwrap().unwrap().state, "active");
+    assert_eq!(
+        store
+            .get_node("port:tcp:192.0.2.1:9000")
+            .unwrap()
+            .unwrap()
+            .state,
+        "active"
+    );
+}
+
+#[test]
+fn named_upstream_matching_is_case_insensitive_and_explicit_ports_are_rejected() {
+    let _env = lock_scan_env();
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("upstream-port-proc");
+    nginx_and_django_proc(&proc);
+    let systemd = home.layout.data_dir.join("upstream-port-systemd");
+    write_units(&systemd);
+    let host = home.layout.data_dir.join("upstream-port-host");
+    write_conf(
+        &host,
+        "http { upstream Pool { server 127.0.0.1:8000; } server { proxy_pass http://pOOL:80; } }",
+    );
+    set_systemd_unit_root(&systemd);
+    set_host_root(&host);
+    let scan = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).unwrap();
+    clear_scan_env();
+    assert!(scan
+        .warning_details
+        .iter()
+        .any(|warning| warning.detail.contains("must not specify a port")));
+    let store = Store::open(&home.layout.db_file()).unwrap();
+    let proxy = "service:nginx.service|proxies_to|service:django.service";
+    assert!(store.get_edge(proxy).unwrap().is_none());
+    write_conf(
+        &host,
+        "http { upstream Pool { server 127.0.0.1:8000; } server { proxy_pass http://pOOL; } }",
+    );
+    scan_fixture(&home, &proc, &systemd, &host);
+    assert_eq!(store.get_edge(proxy).unwrap().unwrap().state, "active");
+}
+
+#[test]
+fn upstream_server_includes_inherit_the_enclosing_group() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("proc-context");
+    nginx_and_django_proc(&proc);
+    let units = home.layout.data_dir.join("units-context");
+    write_units(&units);
+    let host = home.layout.data_dir.join("host-context");
+    write_conf(&host, "http { upstream backend { include servers.conf; } server { proxy_pass http://backend; } } stream { upstream backend { server 127.0.0.1:9000; } server { proxy_pass backend; } }");
+    std::fs::write(
+        host.join("etc/nginx/servers.conf"),
+        "server 127.0.0.1:8000;",
+    )
+    .expect("servers");
+    scan_fixture(&home, &proc, &units, &host);
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    assert!(store
+        .get_edge("service:nginx.service|proxies_to|service:django.service")
+        .unwrap()
+        .is_some());
+    assert!(store.get_node("port:tcp:127.0.0.1:9000").unwrap().is_some());
+}
+
+#[test]
+fn current_hostname_resolution_is_stored_as_inference_with_dns_provenance() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("proc-dns");
+    nginx_and_django_proc(&proc);
+    let units = home.layout.data_dir.join("units-dns");
+    write_units(&units);
+    let host = home.layout.data_dir.join("host-dns");
+    write_conf(
+        &host,
+        "http { server { proxy_pass http://localhost:8000; } }",
+    );
+    scan_fixture(&home, &proc, &units, &host);
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let observations = store
+        .list_observations_by_kind("dns_address_resolved")
+        .unwrap();
+    assert!(!observations.is_empty());
+    assert!(observations
+        .iter()
+        .all(|observation| observation.source == "system_dns"));
+    for observation in observations {
+        let edge = store
+            .get_edge(&format!(
+                "file:/etc/nginx/nginx.conf|references|{}",
+                observation.object_node_id.unwrap()
+            ))
+            .unwrap()
+            .unwrap();
+        assert_eq!(edge.class, "inferred");
+    }
+}
+
+struct FixtureDns;
+impl twin_collectors::dns::DnsReader for FixtureDns {
+    fn resolve(
+        &self,
+        hosts: &std::collections::BTreeSet<String>,
+    ) -> twin_collectors::dns::DnsAnswers {
+        hosts
+            .iter()
+            .map(|host| {
+                (
+                    host.clone(),
+                    if host == "localhost" {
+                        Ok(vec![
+                            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+                        ])
+                    } else {
+                        Err(twin_collectors::dns::DnsError::Unavailable)
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+#[test]
+fn configured_stream_udp_backend_does_not_create_a_tcp_reference() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("proc-udp-config");
+    nginx_and_django_proc(&proc);
+    let units = home.layout.data_dir.join("units-udp-config");
+    write_units(&units);
+    let host = home.layout.data_dir.join("host-udp-config");
+    write_conf(
+        &host,
+        "stream { server { proxy_pass 127.0.0.1:53; listen 5300 udp; } }",
+    );
+    scan_fixture(&home, &proc, &units, &host);
+    let store = Store::open(&home.layout.db_file()).unwrap();
+    let observation = store
+        .list_observations_by_kind("config_proxy_pass")
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        observation.object_node_id.as_deref(),
+        Some("port:udp:127.0.0.1:53")
+    );
+    assert!(store.get_node("port:tcp:127.0.0.1:53").unwrap().is_none());
+}
+
+#[test]
+fn unix_proxy_joins_an_observed_listener_and_failed_dns_preserves_uncertainty() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("proc-unix-dns");
+    nginx_and_django_proc(&proc);
+    support::write_unix_table(&proc, "Num RefCount Protocol Flags Type St Inode Path\n1: 00000001 00000000 00010000 0001 01 9001 /run/api.sock\n");
+    write_socket_fd(&proc, 721, 9, 9001);
+    let units = home.layout.data_dir.join("units-unix-dns");
+    write_units(&units);
+    let host = home.layout.data_dir.join("host-unix-dns");
+    write_conf(
+        &host,
+        "stream { server { proxy_pass unix:/run/api.sock; } }",
+    );
+    scan_fixture(&home, &proc, &units, &host);
+    let store = Store::open(&home.layout.db_file()).unwrap();
+    let proxy = "service:nginx.service|proxies_to|service:django.service";
+    assert_eq!(store.get_edge(proxy).unwrap().unwrap().class, "inferred");
+    write_conf(
+        &host,
+        "http { server { proxy_pass http://unavailable.example:8000; } }",
+    );
+    set_systemd_unit_root(&units);
+    set_host_root(&host);
+    let result =
+        twin_app::scan_in_with_dns(&home.layout, ScanRequest::default(), &proc, &FixtureDns)
+            .unwrap();
+    clear_scan_env();
+    assert!(result
+        .warning_details
+        .iter()
+        .any(|warning| warning.detail.contains("hostname resolution unavailable")));
+    assert_eq!(store.get_edge(proxy).unwrap().unwrap().state, "stale");
+    assert!(store
+        .list_observations_by_kind("dns_address_resolved")
+        .unwrap()
+        .is_empty());
 }

@@ -42,6 +42,7 @@ pub use restart_container::{
 pub use restart_service::emulate_restart_service;
 pub use rollout_k8s::{
     emulate_rollout_k8s_deployment, RolloutK8sDeploymentInput, RolloutK8sDeploymentOverlayBuilder,
+    RolloutPolicy,
 };
 pub use upgrade_package::{
     emulate_upgrade_package, UpgradeAffectedService, UpgradePackageInput,

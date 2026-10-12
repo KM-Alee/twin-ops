@@ -271,6 +271,35 @@ impl GraphNode {
         }
     }
 
+    pub fn package_versioned(
+        name: &str,
+        version: Option<&str>,
+        source: crate::PackageSource,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let mut node = Self::package(name, seen_at, existing);
+        let mut metadata = serde_json::json!({ "source": source.to_string() });
+        if let Some(version) = version {
+            metadata["version"] = serde_json::Value::String(version.into());
+        }
+        node.metadata = GraphMetadata::from_json(metadata.to_string());
+        node
+    }
+
+    pub fn identified_cgroup(
+        path: &str,
+        kernel_id: Option<u64>,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Self {
+        let mut node = Self::cgroup(path, seen_at, existing);
+        if let Some(kernel_id) = kernel_id {
+            node.metadata = GraphMetadata::from_json(serde_json::json!({ "source": "proc_cgroup", "kernel_cgroup_id": kernel_id.to_string() }).to_string());
+        }
+        node
+    }
+
     pub fn cgroup(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::cgroup(path);
         let (first_seen, valid_from) = match existing {
@@ -324,7 +353,17 @@ impl GraphNode {
         seen_at: TimestampNs,
         existing: Option<&Self>,
     ) -> Result<Self, crate::error::ParseError> {
-        let id = NodeId::port_tcp(ip, port)?;
+        Self::inet_port(crate::TransportProtocol::Tcp, ip, port, seen_at, existing)
+    }
+
+    pub fn inet_port(
+        protocol: crate::TransportProtocol,
+        ip: &str,
+        port: u16,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+    ) -> Result<Self, crate::error::ParseError> {
+        let id = NodeId::inet_port(protocol, ip, port)?;
         let (first_seen, valid_from) = match existing {
             Some(node) => (node.first_seen, node.valid_from),
             None => (seen_at, seen_at),
@@ -337,13 +376,18 @@ impl GraphNode {
         Ok(Self {
             id,
             kind: NodeKind::Port,
-            label: format!("tcp:{display_ip}:{port}"),
+            label: format!("{protocol}:{display_ip}:{port}"),
             state: NodeState::Active,
             first_seen,
             last_seen: seen_at,
             valid_from,
             valid_to: None,
-            metadata: GraphMetadata::from_json(r#"{"protocol":"tcp"}"#),
+            metadata: GraphMetadata::from_json(&match protocol {
+                crate::TransportProtocol::Tcp => r#"{"protocol":"tcp"}"#.to_string(),
+                crate::TransportProtocol::Udp => {
+                    r#"{"protocol":"udp","source":"proc_net_udp"}"#.to_string()
+                }
+            }),
         })
     }
 
@@ -367,7 +411,11 @@ impl GraphNode {
             last_seen: seen_at,
             valid_from,
             valid_to: None,
-            metadata: GraphMetadata::from_json(r#"{"source":"systemd_cgroup_inference"}"#),
+            metadata: existing
+                .map(|node| node.metadata.clone())
+                .unwrap_or_else(|| {
+                    GraphMetadata::from_json(r#"{"source":"systemd_cgroup_inference"}"#)
+                }),
         }
     }
 

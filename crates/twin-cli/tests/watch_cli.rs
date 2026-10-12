@@ -79,6 +79,7 @@ fn watch_tcp_unavailable_still_prints_a_tick() {
     assert!(text.contains('['), "{text}");
 }
 
+#[test]
 fn watch_rejects_unknown_events() {
     let home = TwinHome::new();
     let out = home.run(&["watch", "--ebpf", "--events", "dns", "--ticks", "1"]);

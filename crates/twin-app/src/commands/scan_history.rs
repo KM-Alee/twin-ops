@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use twin_collectors::ProcessWarningKind;
-use twin_core::{ChangeKind, GraphEdge, GraphNode};
+use twin_core::{ChangeKind, GraphEdge, GraphNode, TimestampNs};
 use twin_store::{EdgeRow, NodeRow, Store, StoreError};
 
 pub(crate) struct ScanHistorySession {
@@ -11,6 +11,19 @@ pub(crate) struct ScanHistorySession {
     collector_run_id: Option<i64>,
     prefer_stale: bool,
     finalize_missing: bool,
+    scope: FinalizeScope,
+    skipped_sources: HashSet<String>,
+    uncertain_sources: HashSet<String>,
+    complete_sources: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FinalizeScope {
+    /// Host rows (processes, services, ports, files, mounts, libraries, packages,
+    /// containers). Kubernetes-sourced rows belong to `twin k8s scan`.
+    Host,
+    /// Kubernetes-sourced rows only.
+    K8s,
 }
 
 impl ScanHistorySession {
@@ -19,6 +32,7 @@ impl ScanHistorySession {
         collector_run_id: Option<i64>,
         prefer_stale: bool,
         finalize_missing: bool,
+        scope: FinalizeScope,
     ) -> Self {
         Self {
             seen_nodes: HashSet::new(),
@@ -27,42 +41,220 @@ impl ScanHistorySession {
             collector_run_id,
             prefer_stale,
             finalize_missing,
+            scope,
+            skipped_sources: HashSet::new(),
+            uncertain_sources: HashSet::new(),
+            complete_sources: HashSet::new(),
         }
     }
 
+    pub fn collector_run_id(&self) -> Option<i64> {
+        self.collector_run_id
+    }
+
+    pub fn recorded_at(&self) -> TimestampNs {
+        TimestampNs::new(self.recorded_at_ns)
+    }
+
     pub fn prefer_stale_from_warnings(warnings: &[twin_collectors::ProcessWarning]) -> bool {
-        let mut fd_permission = 0usize;
-        let mut permission = 0usize;
-        for warning in warnings {
-            match warning.kind() {
-                ProcessWarningKind::PermissionDenied => permission += 1,
-                ProcessWarningKind::FdPermissionDenied => fd_permission += 1,
-                _ => {}
-            }
-        }
-        permission > 0 || fd_permission >= 50
+        warnings.iter().any(|warning| {
+            matches!(
+                warning.kind(),
+                ProcessWarningKind::PermissionDenied
+                    | ProcessWarningKind::Malformed
+                    | ProcessWarningKind::FdPermissionDenied
+                    | ProcessWarningKind::FdMalformed
+                    | ProcessWarningKind::FdVanished
+                    | ProcessWarningKind::CgroupPermissionDenied
+                    | ProcessWarningKind::CgroupMalformed
+            )
+        })
+    }
+
+    pub fn skip_source(&mut self, source: &str) {
+        self.skipped_sources.insert(source.to_string());
+    }
+
+    pub fn complete_source(&mut self, source: &str) {
+        self.complete_sources.insert(source.into());
+    }
+
+    fn source_prefers_stale(&self, source: Option<String>) -> bool {
+        source
+            .as_ref()
+            .is_some_and(|source| self.uncertain_sources.contains(source))
+            || (self.prefer_stale
+                && source
+                    .as_ref()
+                    .is_none_or(|source| !self.complete_sources.contains(source)))
+    }
+
+    pub fn uncertain_source(&mut self, source: &str) {
+        self.uncertain_sources.insert(source.to_string());
     }
 
     pub fn finalize_missing_rows(&mut self, store: &mut Store) -> Result<(), StoreError> {
         if !self.finalize_missing {
             return Ok(());
         }
-        let seen_nodes: Vec<String> = self.seen_nodes.iter().cloned().collect();
-        let seen_edges: Vec<String> = self.seen_edges.iter().cloned().collect();
-        store.mark_nodes_missing_since(
-            &seen_nodes,
+        let seen_nodes: HashSet<&str> = self.seen_nodes.iter().map(String::as_str).collect();
+        let active_nodes = store.list_unfinalized_nodes()?;
+        let active_edges = store.list_unfinalized_edges()?;
+        let uncertain_nodes: HashSet<&str> = active_edges
+            .iter()
+            .filter(|row| {
+                edge_source(row).is_some_and(|source| self.uncertain_sources.contains(&source))
+            })
+            .flat_map(|row| [row.from_node_id.as_str(), row.to_node_id.as_str()])
+            .collect();
+        let missing_nodes: Vec<String> = active_nodes
+            .iter()
+            .filter(|row| self.node_in_scope(row) && !seen_nodes.contains(row.id.as_str()))
+            .map(|row| row.id.clone())
+            .collect();
+        let stale_nodes: HashSet<&str> = active_nodes
+            .iter()
+            .filter(|row| self.source_prefers_stale(metadata_source(&row.metadata_json)))
+            .map(|row| row.id.as_str())
+            .collect();
+        let (uncertain, confirmed): (Vec<_>, Vec<_>) =
+            missing_nodes.iter().cloned().partition(|id| {
+                uncertain_nodes.contains(id.as_str()) || stale_nodes.contains(id.as_str())
+            });
+        store.mark_nodes_missing(
+            &confirmed,
             self.recorded_at_ns,
-            self.prefer_stale,
+            false,
             self.collector_run_id,
         )?;
-        store.mark_edges_missing_since(
-            &seen_edges,
+        store.mark_nodes_missing(&uncertain, self.recorded_at_ns, true, self.collector_run_id)?;
+
+        let missing_set: HashSet<&str> = missing_nodes.iter().map(String::as_str).collect();
+        let still_active: HashSet<&str> = active_nodes
+            .iter()
+            .map(|row| row.id.as_str())
+            .filter(|id| !missing_set.contains(id))
+            .collect();
+        let unavailable_nodes: HashSet<&str> = active_nodes
+            .iter()
+            .filter(|row| {
+                metadata_source(&row.metadata_json)
+                    .is_some_and(|source| self.skipped_sources.contains(&source))
+            })
+            .map(|row| row.id.as_str())
+            .collect();
+        let seen_edges: HashSet<&str> = self.seen_edges.iter().map(String::as_str).collect();
+        let missing_edges: Vec<String> = active_edges
+            .iter()
+            .filter(|row| !seen_edges.contains(row.id.as_str()))
+            .filter(|row| {
+                !unavailable_nodes.contains(row.from_node_id.as_str())
+                    && !unavailable_nodes.contains(row.to_node_id.as_str())
+            })
+            .filter(|row| self.edge_in_scope(row, &still_active))
+            .map(|row| row.id.clone())
+            .collect();
+        let uncertain_edge_ids: HashSet<&str> = active_edges
+            .iter()
+            .filter(|row| {
+                edge_source(row).is_some_and(|source| self.uncertain_sources.contains(&source))
+            })
+            .map(|row| row.id.as_str())
+            .collect();
+        let stale_edges: HashSet<&str> = active_edges
+            .iter()
+            .filter(|row| self.source_prefers_stale(edge_source(row)))
+            .map(|row| row.id.as_str())
+            .collect();
+        let (uncertain, confirmed): (Vec<_>, Vec<_>) = missing_edges.into_iter().partition(|id| {
+            uncertain_edge_ids.contains(id.as_str()) || stale_edges.contains(id.as_str())
+        });
+        store.mark_edges_missing(
+            &confirmed,
             self.recorded_at_ns,
-            self.prefer_stale,
+            false,
             self.collector_run_id,
         )?;
+        store.mark_edges_missing(&uncertain, self.recorded_at_ns, true, self.collector_run_id)?;
         Ok(())
     }
+
+    fn node_in_scope(&self, row: &NodeRow) -> bool {
+        match self.scope {
+            FinalizeScope::Host => match metadata_source(&row.metadata_json) {
+                Some(source) => source != "k8s" && !self.skipped_sources.contains(&source),
+                None => true,
+            },
+            FinalizeScope::K8s => metadata_source(&row.metadata_json).as_deref() == Some("k8s"),
+        }
+    }
+
+    fn edge_in_scope(&self, row: &EdgeRow, still_active: &HashSet<&str>) -> bool {
+        let source = edge_source(row);
+        match self.scope {
+            FinalizeScope::Host => match source.as_deref() {
+                Some("k8s") => false,
+                Some(source) if self.skipped_sources.contains(source) => false,
+                // Stored eBPF connect evidence outlives the connection; the edge
+                // is kept while its source endpoint is still known.
+                Some("ebpf_tcp") => !still_active.contains(row.from_node_id.as_str()),
+                _ => true,
+            },
+            FinalizeScope::K8s => source.as_deref() == Some("k8s"),
+        }
+    }
+}
+
+fn edge_source(row: &EdgeRow) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(&row.metadata_json).ok()?;
+    let source = metadata_source(&row.metadata_json);
+    let socket = matches!(
+        source.as_deref(),
+        Some(
+            "proc_socket_inode_join"
+                | "proc_tcp_established_inode_join"
+                | "proc_udp_connected_inode_join"
+        )
+    ) || matches!(
+        value.get("inference").and_then(|value| value.as_str()),
+        Some(
+            "service_owns_listening_process"
+                | "service_owns_connected_process"
+                | "active_connection_to_listening_service"
+                | "unix_connection_to_listener_service"
+        )
+    );
+    if socket {
+        return Some(
+            if row.to_node_id.starts_with("port:udp:")
+                || source.as_deref() == Some("proc_udp_connected_inode_join")
+            {
+                "proc_net_udp"
+            } else if row.to_node_id.starts_with("unix:")
+                || value.get("inference").and_then(|value| value.as_str())
+                    == Some("unix_connection_to_listener_service")
+            {
+                "proc_net_unix"
+            } else {
+                "proc_net_tcp"
+            }
+            .into(),
+        );
+    }
+    source
+}
+
+fn metadata_source(metadata_json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    value
+        .get("source")
+        .and_then(|source| source.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            (value.get("inference").and_then(|value| value.as_str()) == Some("nginx_proxy_pass")
+                || value.get("proxy_pass").is_some())
+            .then(|| "nginx".to_string())
+        })
 }
 
 pub(crate) fn upsert_node(

@@ -113,3 +113,80 @@ fn missing_directory_is_an_error() {
     };
     assert!(err.to_string().contains("missing"));
 }
+
+#[test]
+fn deployment_rollout_limits_follow_defaults_rounding_and_reject_invalid_values() {
+    let root = tempfile::tempdir().expect("temp");
+    let cases = [
+        ("replicas: 3", Some((3, false, 0, 1))),
+        ("replicas: 4", Some((4, false, 1, 1))),
+        ("replicas: 2\n  strategy:\n    type: Recreate", Some((2, true, 2, 0))),
+        ("replicas: 3\n  strategy:\n    rollingUpdate:\n      maxUnavailable: 1\n      maxSurge: 2", Some((3, false, 1, 2))),
+        ("replicas: 1\n  strategy:\n    rollingUpdate:\n      maxUnavailable: 1%\n      maxSurge: 0%", Some((1, false, 1, 0))),
+        ("replicas: 2\n  strategy:\n    rollingUpdate:\n      maxUnavailable: 0\n      maxSurge: 200%", Some((2, false, 0, 4))),
+        ("replicas: 2\n  strategy:\n    rollingUpdate:\n      maxUnavailable: 0\n      maxSurge: 0", None),
+        ("replicas: 2\n  strategy:\n    rollingUpdate:\n      maxUnavailable: SECRET_DO_NOT_RETAIN", None),
+        ("replicas: -1", None),
+        ("replicas: 3\n  strategy:\n    type: unsupported", None),
+    ];
+    for (spec, expected) in cases {
+        std::fs::write(
+            root.path().join("deployment.yaml"),
+            format!(
+                "kind: Deployment\nmetadata:\n  name: api\n  namespace: default\nspec:\n  {spec}\n"
+            ),
+        )
+        .expect("fixture");
+        let fixture = FixtureK8s::open(root.path()).expect("open");
+        let workload = fixture
+            .get_deployment("default", "api")
+            .expect("read")
+            .expect("deployment");
+        assert_eq!(
+            workload.rollout.map(|policy| (
+                policy.desired_replicas,
+                policy.is_recreate,
+                policy.max_unavailable,
+                policy.max_surge
+            )),
+            expected,
+            "{spec}"
+        );
+        assert!(!format!("{:?}", fixture.view()).contains("SECRET_DO_NOT_RETAIN"));
+    }
+}
+
+#[test]
+fn deployment_ready_replicas_require_current_observed_generation() {
+    let root = tempfile::tempdir().expect("temp");
+    for (status, expected_ready, is_known) in [
+        ("", None, false),
+        (
+            "status:\n  observedGeneration: 1\n  readyReplicas: 2",
+            Some(2),
+            false,
+        ),
+        (
+            "status:\n  observedGeneration: 2\n  readyReplicas: 2",
+            Some(2),
+            true,
+        ),
+        ("status:\n  observedGeneration: 2", Some(0), true),
+        (
+            "status:\n  observedGeneration: 2\n  readyReplicas: SECRET_NOT_RETAINED",
+            None,
+            false,
+        ),
+    ] {
+        std::fs::write(root.path().join("deployment.yaml"), format!("kind: Deployment\nmetadata:\n  name: api\n  namespace: default\n  generation: 2\nspec:\n  replicas: 3\n{status}\n")).expect("fixture");
+        let fixture = FixtureK8s::open(root.path()).expect("open");
+        let workload = fixture
+            .get_deployment("default", "api")
+            .expect("get")
+            .expect("deployment");
+        assert_eq!(workload.desired_replicas, Some(3));
+        assert_eq!(workload.ready_replicas, expected_ready);
+        assert_eq!(workload.readiness_known, is_known, "{status}");
+        assert!(!format!("{workload:?}").contains("SECRET_NOT_RETAINED"));
+    }
+}

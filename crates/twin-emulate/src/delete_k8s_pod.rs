@@ -1,4 +1,7 @@
-use twin_core::{EvidenceStrength, NodeId, NodeState, RiskLevel};
+use twin_core::{
+    score_evidence, EvidenceFactors, EvidenceRecency, EvidenceSourceKind, NodeId, NodeState,
+    RiskLevel,
+};
 
 use crate::action::{
     EmulationAction, DELETE_ACTION, K8S_POD_DELETE_SAFETY_STATEMENT, SAFETY_STATEMENT,
@@ -25,6 +28,9 @@ pub struct DeleteK8sPodInput {
     pub pod_name: String,
     pub pod_in_graph: bool,
     pub services: Vec<ReadyService>,
+    pub coverage_gaps: Vec<String>,
+    pub recency: EvidenceRecency,
+    pub source: String,
 }
 
 pub struct DeleteK8sPodOverlayBuilder {
@@ -73,12 +79,16 @@ pub fn pod_delete_risk(pod_name: &str, services: &[ReadyService]) -> (RiskLevel,
     let mut min_remaining = usize::MAX;
     let mut drops_last = false;
     for service in services {
+        let ready: std::collections::BTreeSet<_> =
+            service.ready_pods.iter().map(String::as_str).collect();
+        if ready.is_empty() {
+            return (
+                RiskLevel::High,
+                "a selecting service already has no ready endpoints.".into(),
+            );
+        }
         let was_ready = service.ready_pods.iter().any(|name| name == pod_name);
-        let remaining = service
-            .ready_pods
-            .iter()
-            .filter(|name| name.as_str() != pod_name)
-            .count();
+        let remaining = ready.iter().filter(|name| **name != pod_name).count();
         if was_ready && remaining == 0 {
             drops_last = true;
         }
@@ -96,11 +106,24 @@ pub fn emulate_delete_k8s_pod(input: DeleteK8sPodInput) -> EmulationDomainReport
     } else {
         Vec::new()
     };
-    let (risk_level, reason) = if input.pod_in_graph {
+    let mut gaps = input.coverage_gaps;
+    if matches!(
+        input.recency,
+        EvidenceRecency::Unknown | EvidenceRecency::Stale
+    ) {
+        gaps.push("Kubernetes observations are missing or stale".into());
+    }
+    let (risk_level, reason) = if !gaps.is_empty() {
+        (
+            RiskLevel::Unknown,
+            "service availability is unknown because Kubernetes evidence is incomplete or stale"
+                .into(),
+        )
+    } else if input.pod_in_graph {
         pod_delete_risk(&input.pod_name, &services)
     } else {
         (
-            RiskLevel::Low,
+            RiskLevel::Unknown,
             "pod is not in the graph; run `twin k8s scan` first".to_string(),
         )
     };
@@ -126,11 +149,27 @@ pub fn emulate_delete_k8s_pod(input: DeleteK8sPodInput) -> EmulationDomainReport
         .map(|service| EmulationImpact {
             id: service.id.to_string(),
             label: service.label.clone(),
-            statement: reason.clone(),
+            statement: if gaps.is_empty() {
+                pod_delete_risk(&input.pod_name, std::slice::from_ref(service)).1
+            } else {
+                reason.clone()
+            },
             path: format!("{} selects {}", service.id.as_str(), input.pod.id.as_str()),
-            evidence: vec!["service selector and ready endpoints".to_string()],
+            evidence: vec![format!(
+                "Observed service selector and ready endpoints from {}",
+                input.source
+            )],
         })
         .collect();
+    let evidence = score_evidence(EvidenceFactors {
+        source: if gaps.is_empty() && input.pod_in_graph {
+            EvidenceSourceKind::Config
+        } else {
+            EvidenceSourceKind::None
+        },
+        recency: input.recency,
+        ..EvidenceFactors::none()
+    });
     EmulationDomainReport {
         action: DELETE_ACTION.to_string(),
         target: input.pod.id.to_string(),
@@ -145,8 +184,8 @@ pub fn emulate_delete_k8s_pod(input: DeleteK8sPodInput) -> EmulationDomainReport
         general_safety_statement: SAFETY_STATEMENT.to_string(),
         risk_level,
         risk_reasons: vec![reason],
-        evidence_strength: EvidenceStrength::moderate(),
-        evidence_reasons: vec!["kubernetes ownership and selector edges".to_string()],
+        evidence_strength: evidence.strength,
+        evidence_reasons: evidence.reasons,
         overlay,
         overlay_summary,
         transient_impacts,
@@ -154,7 +193,16 @@ pub fn emulate_delete_k8s_pod(input: DeleteK8sPodInput) -> EmulationDomainReport
         runtime_impacts: Vec::new(),
         restart_impacts: Vec::new(),
         persistent_impacts: Vec::new(),
-        unknown_impacts: Vec::new(),
+        unknown_impacts: gaps
+            .iter()
+            .map(|gap| EmulationImpact {
+                id: input.pod.id.to_string(),
+                label: "unknown".into(),
+                statement: gap.clone(),
+                path: String::new(),
+                evidence: Vec::new(),
+            })
+            .collect(),
         evidence_lines: Vec::new(),
         impact_paths: Vec::new(),
         paths_requested: false,

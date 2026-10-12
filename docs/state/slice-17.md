@@ -20,6 +20,7 @@
 - `exists: false` passes only when the node or dependency is absent.
 - Warn does not fail the process. Fail does.
 - Docker and Kubernetes collectors are not part of this slice.
+- Outbound endpoint facts are keyed by endpoint and carry deduplicated evidence lines, so a failing `outbound_endpoints` check lists each endpoint and each evidence line once however many connections produced it
 
 ## Deviations from Plan
 
@@ -49,3 +50,7 @@ cargo clippy --workspace -- -D warnings
 ```
 
 All passed on implementation completion (412 tests).
+
+## 2026-10-09 retained report argument cleanup
+
+Schema 6 also removes structured argv/argv_json keys recursively from legacy test_runs.report_json while preserving safe report fields. The synthetic migration fixture proves nested report-key cleanup. Arbitrary old prose is not blanket-redacted by the migration, and backups/WAL/export forensic erasure is not claimed. Run `twin init` to upgrade an existing database.

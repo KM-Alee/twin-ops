@@ -106,6 +106,13 @@ impl Store {
         self.upsert_edge(&EdgeRow::from(edge))
     }
 
+    pub fn get_edge_typed(&self, id: &EdgeId) -> Result<Option<GraphEdge>, StoreError> {
+        self.get_edge(id.as_str())?
+            .as_ref()
+            .map(GraphEdge::try_from)
+            .transpose()
+    }
+
     pub fn get_node_typed(&self, id: &NodeId) -> Result<Option<GraphNode>, StoreError> {
         match self.get_node(id.as_str())? {
             Some(row) => Ok(Some(GraphNode::try_from(&row)?)),

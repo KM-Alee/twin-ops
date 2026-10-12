@@ -270,7 +270,7 @@ fn scan_in_persists_port_and_listener_edges() {
     );
     assert!(
         result.process_listens_on_edge_count >= 1,
-        "tcp_listeners={} ports={} unmapped={} owner_inodes={} warnings={:?}",
+        "inet_listeners={} ports={} unmapped={} owner_inodes={} warnings={:?}",
         result.tcp_listener_count,
         result.port_count,
         result.unmapped_listener_socket_count,
@@ -335,6 +335,119 @@ fn graph_in_lists_port_nodes() {
     };
     assert_eq!(list.kind, NodeKind::Port);
     assert_eq!(list.nodes.len(), 1);
+}
+
+fn seed_node(store: &mut Store, id: &str, kind: &str, label: &str, state: &str) {
+    store
+        .upsert_node(&twin_store::NodeRow {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            label: label.to_string(),
+            state: state.to_string(),
+            first_seen_ns: 1,
+            last_seen_ns: 1,
+            valid_from_ns: 1,
+            valid_to_ns: None,
+            metadata_json: "{}".to_string(),
+        })
+        .expect("seed node");
+}
+
+fn listed_ids(home: &IsolatedHome, kind: NodeKind) -> Vec<String> {
+    let result = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            kind: Some(kind),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let twin_app::GraphResult::List(list) = result else {
+        panic!("expected list");
+    };
+    assert_eq!(list.kind, kind);
+    list.nodes.into_iter().map(|node| node.id).collect()
+}
+
+#[test]
+fn graph_in_lists_file_unix_socket_and_cgroup_nodes_and_hides_gone() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("open");
+    seed_node(
+        &mut store,
+        "file:/etc/nginx/nginx.conf",
+        "file",
+        "/etc/nginx/nginx.conf",
+        "active",
+    );
+    seed_node(
+        &mut store,
+        "file:/etc/hosts",
+        "file",
+        "/etc/hosts",
+        "active",
+    );
+    seed_node(
+        &mut store,
+        "file:/etc/gone.conf",
+        "file",
+        "/etc/gone.conf",
+        "gone",
+    );
+    seed_node(
+        &mut store,
+        "unix:/run/app.sock",
+        "unix_socket",
+        "/run/app.sock",
+        "active",
+    );
+    seed_node(
+        &mut store,
+        "cgroup:/system.slice/app.service",
+        "cgroup",
+        "/system.slice/app.service",
+        "active",
+    );
+    drop(store);
+
+    assert_eq!(
+        listed_ids(&home, NodeKind::File),
+        vec![
+            "file:/etc/hosts".to_string(),
+            "file:/etc/nginx/nginx.conf".to_string()
+        ]
+    );
+    assert_eq!(
+        listed_ids(&home, NodeKind::UnixSocket),
+        vec!["unix:/run/app.sock".to_string()]
+    );
+    assert_eq!(
+        listed_ids(&home, NodeKind::Cgroup),
+        vec!["cgroup:/system.slice/app.service".to_string()]
+    );
+}
+
+#[test]
+fn graph_in_unsupported_kind_lists_supported_kinds() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let error = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            kind: Some(NodeKind::Host),
+            ..GraphRequest::default()
+        },
+    )
+    .expect_err("unsupported kind");
+    let message = error.to_string();
+    assert!(
+        message.contains("unsupported graph kind: host"),
+        "{message}"
+    );
+    assert!(message.contains("supported kinds"), "{message}");
+    assert!(message.contains("file"), "{message}");
+    assert!(message.contains("unix_socket"), "{message}");
 }
 
 #[test]
@@ -1272,4 +1385,238 @@ fn scan_in_multi_sample_merges_ephemeral_connections() {
             e.from_node_id == "service:django.service"
                 && e.to_node_id == "service:postgresql.service"
         }));
+}
+
+#[test]
+fn port_shorthand_resolves_unique_endpoints_and_rejects_ambiguity() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    let now = twin_core::TimestampNs::now();
+    store
+        .upsert_node_typed(
+            &twin_core::GraphNode::tcp_port("127.0.0.1", 5432, now, None).expect("port"),
+        )
+        .expect("insert");
+    let request = GraphRequest {
+        target_query: Some(":5432".into()),
+        ..GraphRequest::default()
+    };
+    let graph = twin_app::graph_in(&home.layout, request.clone()).expect("unique");
+    assert!(matches!(graph, twin_app::GraphResult::Port(_)));
+    store
+        .upsert_node_typed(&twin_core::GraphNode::tcp_port("::1", 5432, now, None).expect("port"))
+        .expect("insert");
+    let error = twin_app::graph_in(&home.layout, request).expect_err("ambiguous");
+    assert!(error.to_string().contains("port:tcp:[::1]:5432"));
+    assert!(error.to_string().contains("port:tcp:127.0.0.1:5432"));
+    for query in [":", ":0", ":65536", ":wrong"] {
+        assert!(twin_app::parse_port_query(query).is_err());
+    }
+}
+
+#[test]
+fn udp_scan_graph_impact_and_outage_preserve_protocol_separation() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc_with_active_connection(&home);
+    let tcp = std::fs::read_to_string(proc.join("net/tcp")).expect("tcp");
+    let udp = tcp
+        .replace(" 0A ", " 07 ")
+        .replace(" 12345 ", " 12346 ")
+        .replace(" 456 ", " 457 ");
+    write_socket_fd(&proc, 721, 9, 12346);
+    write_socket_fd(&proc, 8841, 13, 457);
+    write_tcp_table(&proc, "udp", &udp);
+    write_tcp_table(&proc, "udp6", TCP_HEADER);
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan");
+    assert_eq!(result.tcp_listener_count, 1);
+    assert_eq!(result.udp_listener_count, 1);
+    assert_eq!(result.tcp_connection_count, 1);
+    assert_eq!(result.udp_connection_count, 1);
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let udp_id = "port:udp:127.0.0.1:5432";
+    assert!(store.get_node(udp_id).expect("UDP").is_some());
+    assert!(store
+        .get_node("port:tcp:127.0.0.1:5432")
+        .expect("TCP")
+        .is_some());
+    let edge_id = format!("service:django.service|connects_to|{udp_id}");
+    let links = store.list_observations_for_edge(&edge_id).expect("links");
+    assert!(!links.is_empty());
+    let graph = twin_app::graph_in(
+        &home.layout,
+        GraphRequest {
+            target: Some(udp_id.parse().expect("UDP ID")),
+            ..GraphRequest::default()
+        },
+    )
+    .expect("graph");
+    let encoded = serde_json::to_string(&graph).expect("graph JSON");
+    assert!(encoded.contains(udp_id));
+    let impact = twin_app::impact_in(
+        &home.layout,
+        ImpactRequest {
+            target: Some(udp_id.parse().expect("UDP ID")),
+            ..ImpactRequest::default()
+        },
+    )
+    .expect("impact");
+    assert!(impact
+        .direct_dependents
+        .iter()
+        .any(|peer| peer.id == "service:django.service"));
+    assert!(impact
+        .direct_dependents
+        .iter()
+        .flat_map(|peer| &peer.evidence)
+        .any(|line| line.source.starts_with("/proc/net/udp:")));
+    std::fs::remove_file(proc.join("net/udp")).expect("outage");
+    let result =
+        twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("outage scan");
+    assert!(result
+        .coverage
+        .unavailable_collectors
+        .iter()
+        .any(|source| source == "proc_net_udp"));
+    assert_eq!(
+        store.get_node(udp_id).expect("UDP").expect("node").state,
+        "active"
+    );
+    assert_eq!(
+        store.get_edge(&edge_id).expect("edge").expect("edge").state,
+        "active"
+    );
+    write_tcp_table(&proc, "udp", TCP_HEADER);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("empty UDP scan");
+    assert_eq!(
+        store.get_node(udp_id).expect("UDP").expect("node").state,
+        "gone"
+    );
+    assert_eq!(
+        store
+            .get_node("port:tcp:127.0.0.1:5432")
+            .expect("TCP")
+            .expect("node")
+            .state,
+        "active"
+    );
+}
+
+#[test]
+fn observed_cgroup_instance_loads_template_without_explicit_instance_file() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("proc-template-instance");
+    std::fs::create_dir_all(&proc).expect("proc");
+    write_proc_fixture_with_cgroup(&proc, 501,
+        "501 (worker) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid: 1000 1000 1000 1000\n", b"worker\0", None, Some("0::/system.slice/worker@blue.service\n"));
+    let systemd = home.layout.data_dir.join("systemd-template-instance");
+    std::fs::create_dir_all(&systemd).expect("root");
+    std::fs::write(
+        systemd.join("worker@.service"),
+        "[Unit]\nRequires=database@%i.service\n",
+    )
+    .expect("template");
+    std::fs::write(
+        systemd.join("api.socket"),
+        "[Socket]\nListenStream=vsock:3:8080\nAccept=yes\n",
+    )
+    .expect("socket");
+    scan_with_systemd(&home, &proc, &systemd);
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    assert!(store
+        .get_edge("service:worker@blue.service|depends_on|service:database@blue.service")
+        .expect("edge")
+        .is_some());
+    assert!(store
+        .get_edge("service:api.socket|depends_on|service:api@.service")
+        .expect("activation")
+        .is_some());
+    let template = store
+        .get_node("service:api@.service")
+        .expect("template")
+        .expect("template node");
+    assert!(template.metadata_json.contains("service_template"));
+    assert!(!template.metadata_json.contains("active_state"));
+}
+
+#[test]
+fn reused_pid_resets_lifetime_and_closes_previous_runtime_edges() {
+    let _env = support::lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc(&home);
+    let empty = tempfile::TempDir::new().expect("host");
+    support::set_host_root(empty.path());
+    std::fs::create_dir_all(proc.join("sys/kernel/random")).expect("boot dir");
+    std::fs::write(
+        proc.join("sys/kernel/random/boot_id"),
+        "11111111-1111-1111-1111-111111111111",
+    )
+    .expect("boot");
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    let first = store
+        .get_node_typed(&NodeId::process(42))
+        .expect("query")
+        .expect("process");
+    let endpoint =
+        twin_core::GraphNode::tcp_port("192.0.2.10", 443, twin_core::TimestampNs::now(), None)
+            .expect("endpoint");
+    store
+        .upsert_node(&twin_store::NodeRow::from(&endpoint))
+        .expect("endpoint");
+    let mut edge = twin_store::EdgeRow::from(&twin_core::GraphEdge::observed_process_connects_to(
+        first.id(),
+        endpoint.id(),
+        twin_core::TimestampNs::now(),
+        None,
+    ));
+    edge.metadata_json = r#"{"source":"ebpf_tcp"}"#.into();
+    store.upsert_edge(&edge).expect("edge");
+    let stat = std::fs::read_to_string(proc.join("42/stat")).expect("stat");
+    let close = stat.rfind(')').expect("comm");
+    let mut fields: Vec<_> = stat[close + 1..]
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    fields[19] = "9999".into();
+    std::fs::write(
+        proc.join("42/stat"),
+        format!("{} {}", &stat[..=close], fields.join(" ")),
+    )
+    .expect("new stat");
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("replacement");
+    support::clear_scan_env();
+    let replacement = store
+        .get_node_typed(&NodeId::process(42))
+        .expect("query")
+        .expect("process");
+    assert!(replacement.first_seen() > first.first_seen());
+    assert!(replacement.metadata().as_str().contains("9999"));
+    assert_eq!(
+        store.get_edge(&edge.id).expect("edge").expect("row").state,
+        "gone"
+    );
+}
+
+#[test]
+fn missing_tcp_table_preserves_previous_listener_as_uncertain() {
+    let _env = support::lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = fixture_proc_with_listener(&home);
+    let empty = tempfile::TempDir::new().expect("host");
+    support::set_host_root(empty.path());
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    std::fs::remove_file(proc.join("net/tcp")).expect("missing table");
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("partial");
+    support::clear_scan_env();
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let edges = store.list_edges_from("process:pid:721").expect("edges");
+    assert!(edges
+        .iter()
+        .any(|edge| edge.kind == "listens_on" && edge.state == "stale"));
 }

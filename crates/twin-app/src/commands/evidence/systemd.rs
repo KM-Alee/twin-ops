@@ -88,6 +88,20 @@ pub fn classify_dependent_impact_kind(
     if edge.class() == EdgeClass::Inferred {
         return DependentImpactKind::Runtime;
     }
+    if edge.kind() == twin_core::EdgeKind::DependsOn
+        && serde_json::from_str::<serde_json::Value>(edge.metadata().as_str())
+            .ok()
+            .and_then(|metadata| {
+                metadata
+                    .get("key")
+                    .and_then(|key| key.as_str())
+                    .map(str::to_owned)
+            })
+            .as_deref()
+            == Some("Wants")
+    {
+        return DependentImpactKind::Configured;
+    }
     if is_runtime_active_metadata(dependent_metadata) {
         DependentImpactKind::Runtime
     } else {

@@ -37,7 +37,7 @@ pub enum EvidenceRecency {
 
 impl EvidenceRecency {
     pub fn from_timestamps(observed_ns: i64, reference_ns: i64) -> Self {
-        if observed_ns <= 0 || reference_ns <= 0 {
+        if observed_ns <= 0 || reference_ns <= 0 || observed_ns > reference_ns {
             return Self::Unknown;
         }
         let age = reference_ns.saturating_sub(observed_ns);

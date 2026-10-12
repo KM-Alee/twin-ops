@@ -47,6 +47,11 @@ impl GraphEdge {
         }
     }
 
+    pub fn with_metadata(mut self, metadata: GraphMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     const INFERENCE_METADATA: &str = r#"{"inference":"systemd_cgroup_path"}"#;
     const PROCESS_LISTENER_METADATA: &str = r#"{"source":"proc_socket_inode_join"}"#;
     const SERVICE_LISTENER_METADATA: &str = r#"{"inference":"service_owns_listening_process"}"#;
@@ -170,6 +175,7 @@ impl GraphEdge {
             None => (seen_at, 1),
         };
         let metadata = serde_json::json!({
+            "source": "nginx",
             "inference": "nginx_proxy_pass",
             "proxy_pass": proxy_pass,
         })
@@ -201,7 +207,8 @@ impl GraphEdge {
             Some(edge) => (edge.first_seen, edge.evidence_count.saturating_add(1)),
             None => (seen_at, 1),
         };
-        let metadata = serde_json::json!({ "proxy_pass": proxy_pass }).to_string();
+        let metadata =
+            serde_json::json!({ "source": "nginx", "proxy_pass": proxy_pass }).to_string();
         Self {
             id,
             from: file.clone(),
@@ -340,6 +347,22 @@ impl GraphEdge {
         seen_at: TimestampNs,
         existing: Option<&Self>,
     ) -> Self {
+        Self::observed_installed_by_source(
+            library,
+            package,
+            seen_at,
+            existing,
+            crate::PackageSource::Dpkg,
+        )
+    }
+
+    pub fn observed_installed_by_source(
+        library: &NodeId,
+        package: &NodeId,
+        seen_at: TimestampNs,
+        existing: Option<&Self>,
+        source: crate::PackageSource,
+    ) -> Self {
         counted_edge(
             library,
             EdgeKind::InstalledBy,
@@ -347,7 +370,11 @@ impl GraphEdge {
             EdgeClass::Observed,
             seen_at,
             existing,
-            r#"{"source":"dpkg_list"}"#,
+            match source {
+                crate::PackageSource::Dpkg => r#"{"source":"dpkg_list"}"#,
+                crate::PackageSource::Pacman => r#"{"source":"pacman_files"}"#,
+                crate::PackageSource::Rpm => r#"{"source":"rpm_header"}"#,
+            },
         )
     }
 
@@ -565,7 +592,11 @@ impl GraphEdge {
             evidence_count,
             first_seen,
             last_seen: seen_at,
-            metadata: GraphMetadata::from_json(Self::PROCESS_CONNECTION_METADATA),
+            metadata: GraphMetadata::from_json(if port.as_str().starts_with("port:udp:") {
+                r#"{"source":"proc_udp_connected_inode_join"}"#
+            } else {
+                Self::PROCESS_CONNECTION_METADATA
+            }),
         }
     }
 

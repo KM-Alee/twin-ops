@@ -10,6 +10,9 @@ thiserror = { workspace = true }
 twin-core = { workspace = true }
 twin-observation = { workspace = true }
 zbus = { workspace = true }
+tokio = { version = "1", features = ["rt", "net", "time"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+twin-fixtures = { workspace = true }

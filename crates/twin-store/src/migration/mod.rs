@@ -200,4 +200,26 @@ CREATE TABLE IF NOT EXISTS test_runs (
 CREATE INDEX IF NOT EXISTS idx_test_runs_started ON test_runs(started_at_ns);
 ";
 
-pub const LATEST_VERSION: i64 = 5;
+pub const MIGRATION_006: &str = r"
+UPDATE collector_runs SET error_message = 'Docker read failed; legacy error detail removed', metadata_json = '{}'
+WHERE collector = 'docker' AND (error_message IS NOT NULL OR status <> 'success');
+
+CREATE TABLE snapshot_edge_observations (
+    snapshot_name TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    PRIMARY KEY (snapshot_name, edge_id, observation_id),
+    FOREIGN KEY (snapshot_name) REFERENCES snapshots(name) ON DELETE CASCADE
+);
+
+INSERT INTO snapshot_edge_observations (snapshot_name, edge_id, observation_id, role)
+SELECT se.snapshot_name, se.id, eo.observation_id, eo.role
+FROM snapshot_edges se
+JOIN snapshots s ON s.name = se.snapshot_name
+JOIN edge_observations eo ON eo.edge_id = se.id
+JOIN observations o ON o.id = eo.observation_id
+WHERE o.timestamp_ns <= s.created_at_ns;
+";
+
+pub const LATEST_VERSION: i64 = 6;

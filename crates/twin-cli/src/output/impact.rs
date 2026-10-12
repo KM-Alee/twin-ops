@@ -65,6 +65,27 @@ pub fn render_with_scan(result: &ImpactResult, scan: Option<ScanFreshness>) -> S
         out.section(CONFIGURED_DEPENDENTS);
         render_dependents(&mut out, &result.configured_dependents, true);
     }
+    let mut transitive = std::collections::BTreeMap::new();
+    for path in &result.impact_paths {
+        for step in &path.steps {
+            if step.to.id != result.target
+                && step.from.id != result.target
+                && !result
+                    .direct_dependents
+                    .iter()
+                    .any(|dependent| dependent.id == step.from.id)
+            {
+                transitive.insert(&step.from.id, &step.from.label);
+            }
+        }
+    }
+    if !transitive.is_empty() {
+        out.blank();
+        out.section("transitive runtime dependents");
+        for (index, (id, label)) in transitive.iter().enumerate() {
+            out.tree_leaf(index + 1 == transitive.len(), label, id);
+        }
+    }
     if result.paths_requested {
         out.blank();
         out.section(IMPACT_PATHS);

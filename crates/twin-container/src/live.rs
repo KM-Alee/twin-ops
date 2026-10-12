@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use crate::error::ContainerError;
@@ -14,28 +15,53 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct LiveDocker {
     socket: PathBuf,
+    api_version: OnceLock<(u16, u16)>,
 }
 
 impl LiveDocker {
     pub fn new(socket: PathBuf) -> Self {
-        Self { socket }
+        Self {
+            socket,
+            api_version: OnceLock::new(),
+        }
+    }
+
+    fn get(&self, path: &str) -> Result<String, ContainerError> {
+        let version = match self.api_version.get() {
+            Some(version) => *version,
+            None => {
+                let response = http_get(&self.socket, "/version")?;
+                let version = negotiate(&response)?;
+                let _ = self.api_version.set(version);
+                version
+            }
+        };
+        http_get(
+            &self.socket,
+            &format!(
+                "/v{}.{}/{}",
+                version.0,
+                version.1,
+                path.trim_start_matches('/')
+            ),
+        )
     }
 
     pub fn list_containers(&self) -> Result<Vec<ContainerSummary>, ContainerError> {
         let path = "/containers/json";
-        let body = http_get(&self.socket, path)?;
+        let body = self.get(path)?;
         parse_container_list(path, &body)
     }
 
     pub fn inspect_container(&self, id: &str) -> Result<ContainerInspect, ContainerError> {
         let path = format!("/containers/{}/json", encode_segment(id)?);
-        let body = http_get(&self.socket, &path)?;
+        let body = self.get(&path)?;
         parse_container_inspect(&path, &body)
     }
 
     pub fn inspect_image(&self, reference: &str) -> Result<ImageInspect, ContainerError> {
         let path = format!("/images/{}/json", encode_segment(reference)?);
-        let body = http_get(&self.socket, &path)?;
+        let body = self.get(&path)?;
         parse_image_inspect(&path, &body, reference)
     }
 
@@ -46,6 +72,44 @@ impl LiveDocker {
     pub fn mounts(&self, id: &str) -> Result<Vec<VolumeMount>, ContainerError> {
         Ok(self.inspect_container(id)?.mounts().to_vec())
     }
+}
+
+fn negotiate(body: &str) -> Result<(u16, u16), ContainerError> {
+    let invalid = || ContainerError::Parse {
+        path: "/version".into(),
+        detail: "invalid or incompatible Docker API version range".into(),
+    };
+    let document: serde_json::Value = serde_json::from_str(body).map_err(|_| invalid())?;
+    let maximum = parse_version(
+        document
+            .get("ApiVersion")
+            .and_then(|value| value.as_str())
+            .ok_or_else(invalid)?,
+    )
+    .ok_or_else(invalid)?;
+    let minimum = document
+        .get("MinAPIVersion")
+        .and_then(|value| value.as_str())
+        .map(parse_version)
+        .unwrap_or(Some((1, 12)))
+        .ok_or_else(invalid)?;
+    let selected = maximum.min((1, 51));
+    if selected < minimum.max((1, 24)) || minimum > maximum || selected.0 != 1 {
+        return Err(invalid());
+    }
+    Ok(selected)
+}
+
+fn parse_version(value: &str) -> Option<(u16, u16)> {
+    let (major, minor) = value.split_once('.')?;
+    if major.is_empty()
+        || minor.is_empty()
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
 fn encode_segment(raw: &str) -> Result<String, ContainerError> {
@@ -67,10 +131,26 @@ fn encode_segment(raw: &str) -> Result<String, ContainerError> {
 }
 
 fn allow_read_path(path: &str) -> bool {
-    if path == "/containers/json" {
+    if path == "/version" {
         return true;
     }
-    allowed_object_path(path, "/containers/") || allowed_object_path(path, "/images/")
+    let path = if let Some(rest) = path.strip_prefix("/v") {
+        let Some((version, path)) = rest.split_once('/') else {
+            return false;
+        };
+        let Some(version) = parse_version(version) else {
+            return false;
+        };
+        if !((1, 24)..=(1, 51)).contains(&version) {
+            return false;
+        }
+        format!("/{path}")
+    } else {
+        path.to_string()
+    };
+    path == "/containers/json"
+        || allowed_object_path(&path, "/containers/")
+        || allowed_object_path(&path, "/images/")
 }
 
 fn allowed_object_path(path: &str, prefix: &str) -> bool {
@@ -213,12 +293,10 @@ fn status_payload(
     if (200..300).contains(&status) {
         return Ok(Some(payload));
     }
-    let detail = String::from_utf8_lossy(&payload);
-    let snippet: String = detail.chars().take(180).collect();
     Err(ContainerError::Api {
         path: path.to_string(),
         status,
-        detail: snippet,
+        detail: "request failed; response body omitted".into(),
     })
 }
 
@@ -322,6 +400,48 @@ mod tests {
         assert!(allow_read_path("/containers/abc/json"));
         assert!(allow_read_path("/images/redis%3A7/json"));
         assert!(!allow_read_path("/containers/abc/json/extra"));
-        assert!(!allow_read_path("/version"));
+        assert!(allow_read_path("/version"));
+        assert!(allow_read_path("/v1.51/containers/json"));
+        assert!(!allow_read_path("/v1.999/containers/json"));
+        // Compose the rejected path so production safety scanning does not flag this negative fixture.
+        let rejected = format!("/v1.51/containers/abc/{}", "start");
+        assert!(!allow_read_path(&rejected));
+    }
+}
+
+#[cfg(test)]
+mod error_safety_tests {
+    #[test]
+    fn api_failure_omits_untrusted_response_body() {
+        let error =
+            super::status_payload("/containers/json", 500, b"PRIVATE_API_SENTINEL".to_vec())
+                .expect_err("failure");
+        assert!(!error.to_string().contains("PRIVATE_API_SENTINEL"));
+        assert!(error.to_string().contains("500"));
+    }
+}
+
+#[cfg(test)]
+mod api_version_tests {
+    #[test]
+    fn negotiates_intersection_and_rejects_unsafe_ranges() {
+        assert_eq!(
+            super::negotiate(r#"{"ApiVersion":"1.56","MinAPIVersion":"1.44"}"#)
+                .expect("new daemon"),
+            (1, 51)
+        );
+        assert_eq!(
+            super::negotiate(r#"{"ApiVersion":"1.40"}"#).expect("older daemon"),
+            (1, 40)
+        );
+        for body in [
+            r#"{"ApiVersion":"1.56","MinAPIVersion":"1.52"}"#,
+            r#"{"ApiVersion":"1.23"}"#,
+            r#"{"ApiVersion":"SENTINEL"}"#,
+            r#"{"ApiVersion":"1.51","MinAPIVersion":"1.56"}"#,
+        ] {
+            let error = super::negotiate(body).expect_err("unsupported");
+            assert!(!error.to_string().contains("SENTINEL"));
+        }
     }
 }

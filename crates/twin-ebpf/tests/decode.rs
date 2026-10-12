@@ -13,12 +13,13 @@ fn short_and_long_buffers_are_rejected() {
 
 #[test]
 fn valid_exec_event_round_trips() {
-    let event = EbpfExec::new(4421, 4400, "curl", 0x11, 99);
+    let event = EbpfExec::new(4421, 4400, 1000, "curl", 0x11, 99);
     let bytes = encode_exec(&event);
     assert_eq!(bytes.len(), EXEC_EVENT_LEN);
     let decoded = decode_exec(&bytes).expect("decode");
     assert_eq!(decoded.pid(), 4421);
     assert_eq!(decoded.ppid(), 4400);
+    assert_eq!(decoded.uid(), 1000);
     assert_eq!(decoded.comm(), "curl");
     assert_eq!(decoded.cgroup_id(), 0x11);
     assert_eq!(decoded.timestamp_ns(), 99);
@@ -37,7 +38,7 @@ fn comm_is_task_name_only() {
 
 #[test]
 fn observation_is_exec_on_the_process_and_stores_no_argv() {
-    let event = EbpfExec::new(4421, 4400, "curl\nsecret", 77, 5);
+    let event = EbpfExec::new(4421, 4400, 1000, "curl\nsecret", 77, 5);
     let observation = Pipeline::default()
         .process(exec_to_raw(&event))
         .expect("pipeline");
@@ -62,7 +63,26 @@ fn observation_is_exec_on_the_process_and_stores_no_argv() {
             .and_then(|v| v.as_str()),
         Some("77")
     );
-    for key in ["argv", "argv_json", "env", "uid", "password", "credential"] {
+    assert_eq!(
+        observation.metadata().get("uid").and_then(|v| v.as_u64()),
+        Some(1000)
+    );
+    for key in ["argv", "argv_json", "env", "password", "credential"] {
         assert!(observation.metadata().get(key).is_none(), "{key}");
     }
+}
+
+#[test]
+fn live_exec_extension_preserves_namespace_and_process_generation() {
+    let original = twin_ebpf::EbpfExec::new(42, 1, 1000, "api", 9, 100);
+    let mut bytes = twin_ebpf::encode_exec(&original).to_vec();
+    bytes.extend_from_slice(&2u64.to_le_bytes());
+    bytes.extend_from_slice(&300u64.to_le_bytes());
+    let event = twin_ebpf::decode_exec(&bytes).unwrap();
+    assert_eq!(event.network_namespace().unwrap().to_string(), "2");
+    assert_eq!(event.start_ticks(), Some(300));
+    let raw = twin_ebpf::exec_to_raw(&event);
+    assert_eq!(raw.metadata.get("start_ticks").unwrap().as_u64(), Some(300));
+    bytes[44..52].fill(0);
+    assert!(twin_ebpf::decode_exec(&bytes).is_err());
 }

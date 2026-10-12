@@ -152,13 +152,73 @@ impl NodeId {
     }
 
     pub fn port_tcp(ip: &str, port: u16) -> Result<Self, ParseError> {
+        Self::inet_port(crate::TransportProtocol::Tcp, ip, port)
+    }
+
+    pub fn inet_port(
+        protocol: crate::TransportProtocol,
+        ip: &str,
+        port: u16,
+    ) -> Result<Self, ParseError> {
         let ip = normalize_ip(ip)?;
         let id = if ip.contains(':') {
-            format!("port:tcp:[{ip}]:{port}")
+            format!("port:{protocol}:[{ip}]:{port}")
         } else {
-            format!("port:tcp:{ip}:{port}")
+            format!("port:{protocol}:{ip}:{port}")
         };
         Ok(Self(id))
+    }
+
+    pub fn inet_port_in_namespace(
+        namespace: crate::NetworkNamespaceId,
+        protocol: crate::TransportProtocol,
+        ip: &str,
+        port: u16,
+    ) -> Result<Self, ParseError> {
+        let base = Self::inet_port(protocol, ip, port)?;
+        Ok(Self(format!("{}:netns:{namespace}", base.as_str())))
+    }
+
+    pub fn unix_socket_in_namespace(
+        namespace: crate::NetworkNamespaceId,
+        path: &str,
+    ) -> Result<Self, ParseError> {
+        let base = Self::unix_socket(path)?;
+        Ok(Self(format!(
+            "unix:netns:{namespace}:{}",
+            base.as_str().strip_prefix("unix:").unwrap_or(path)
+        )))
+    }
+
+    pub fn network_namespace(&self) -> Option<crate::NetworkNamespaceId> {
+        if self.0.starts_with("port:") {
+            self.0.rsplit_once(":netns:")?.1.parse().ok()
+        } else {
+            self.0
+                .strip_prefix("unix:netns:")?
+                .split_once(':')?
+                .0
+                .parse()
+                .ok()
+        }
+    }
+
+    pub fn unscoped_endpoint(&self) -> Option<Self> {
+        if self.0.starts_with("port:") {
+            Some(Self(
+                self.0
+                    .rsplit_once(":netns:")
+                    .map(|(base, _)| base)
+                    .unwrap_or(&self.0)
+                    .into(),
+            ))
+        } else if let Some(rest) = self.0.strip_prefix("unix:netns:") {
+            Self::unix_socket(rest.split_once(':')?.1).ok()
+        } else if self.0.starts_with("unix:") {
+            Some(self.clone())
+        } else {
+            None
+        }
     }
 
     pub fn unix_socket(path: &str) -> Result<Self, ParseError> {
@@ -198,6 +258,14 @@ impl NodeId {
 
     pub fn container(name: &str) -> Self {
         Self(format!("container:{name}"))
+    }
+
+    pub fn containerd(namespace: &str, id: &str) -> Result<Self, ParseError> {
+        Self::from_str(&format!("container:containerd:{namespace}:{id}"))
+    }
+
+    pub fn containerd_image(namespace: &str, reference: &str) -> Result<Self, ParseError> {
+        Self::from_str(&format!("image:containerd:{namespace}:{reference}"))
     }
 
     pub fn image(reference: &str) -> Self {
@@ -291,7 +359,7 @@ impl NodeId {
         if s.starts_with("service:") && s.len() > "service:".len() {
             return Some(NodeKind::Service);
         }
-        if s.starts_with("port:tcp:") {
+        if s.starts_with("port:tcp:") || s.starts_with("port:udp:") {
             return Some(NodeKind::Port);
         }
         if s.starts_with("unix:") && s.len() > "unix:".len() {
@@ -366,6 +434,28 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
         return Err(invalid());
     }
 
+    if s.starts_with("port:") {
+        if let Some((base, namespace)) = s.rsplit_once(":netns:") {
+            namespace
+                .parse::<crate::NetworkNamespaceId>()
+                .map_err(|_| invalid())?;
+            if base.contains(":netns:") {
+                return Err(invalid());
+            }
+            validate_node_id(base)?;
+            return Ok(());
+        }
+    }
+    if let Some(rest) = s.strip_prefix("unix:netns:") {
+        let (namespace, path) = rest.split_once(':').ok_or_else(invalid)?;
+        let namespace = namespace
+            .parse::<crate::NetworkNamespaceId>()
+            .map_err(|_| invalid())?;
+        if NodeId::unix_socket_in_namespace(namespace, path)?.as_str() != s {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
     if s.starts_with("k8s:") {
         return validate_k8s_id(s);
     }
@@ -446,23 +536,42 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
     }
 
     if let Some(name) = s.strip_prefix("container:") {
-        if !is_container_name(name) {
+        if !name.strip_prefix("containerd:").map_or_else(
+            || is_container_name(name),
+            |rest| {
+                rest.split_once(':')
+                    .is_some_and(|(ns, id)| is_container_name(ns) && is_container_name(id))
+            },
+        ) {
             return Err(invalid());
         }
         return Ok(());
     }
 
     if let Some(reference) = s.strip_prefix("image:") {
-        if !is_image_reference(reference) {
+        if !reference.strip_prefix("containerd:").map_or_else(
+            || is_image_reference(reference),
+            |rest| {
+                rest.split_once(':')
+                    .is_some_and(|(ns, image)| is_container_name(ns) && is_image_reference(image))
+            },
+        ) {
             return Err(invalid());
         }
         return Ok(());
     }
 
-    if s.starts_with("port:tcp:") {
-        let rest = s.strip_prefix("port:tcp:").ok_or_else(invalid)?;
+    if s.starts_with("port:tcp:") || s.starts_with("port:udp:") {
+        let (protocol, rest) = if let Some(rest) = s.strip_prefix("port:tcp:") {
+            (crate::TransportProtocol::Tcp, rest)
+        } else {
+            (
+                crate::TransportProtocol::Udp,
+                s.strip_prefix("port:udp:").ok_or_else(invalid)?,
+            )
+        };
         let (ip, port) = split_port_host_port(rest).map_err(|_| invalid())?;
-        let canonical = NodeId::port_tcp(&ip, port).map_err(|_| invalid())?;
+        let canonical = NodeId::inet_port(protocol, &ip, port).map_err(|_| invalid())?;
         if canonical.as_str() != s {
             return Err(invalid());
         }

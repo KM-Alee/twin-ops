@@ -10,12 +10,12 @@ use twin_observation::{
 use crate::error::CollectorError;
 use crate::process::process_record::ProcessRecord;
 use crate::process::procfs::{
-    read_fd_socket_owners, read_process, read_tcp_table_content, read_unix_table_content,
+    read_fd_socket_owners, read_inet_table_content, read_process, read_unix_table_content,
     ProcReader, StdProcReader,
 };
 use crate::process::socket::{
-    owners_by_inode, parse_tcp_table, SocketOwner, TcpConnectionRecord, TcpSocketRecord,
-    TcpTableKind,
+    owners_by_inode, parse_inet_table, InetConnectionRecord, InetSocketRecord, InetTableKind,
+    SocketOwner,
 };
 use crate::process::unix::{parse_unix_table, UnixConnectionRecord, UnixSocketRecord};
 use crate::process::warning::{ProcessWarning, ProcessWarningKind};
@@ -32,12 +32,13 @@ type UnixSocketCollectOutput = (
 pub struct ProcessBatch {
     observations: Vec<RawObservation>,
     records: Vec<ProcessRecord>,
-    tcp_listeners: Vec<TcpSocketRecord>,
-    tcp_connections: Vec<TcpConnectionRecord>,
+    inet_listeners: Vec<InetSocketRecord>,
+    inet_connections: Vec<InetConnectionRecord>,
     unix_listeners: Vec<UnixSocketRecord>,
     unix_connections: Vec<UnixConnectionRecord>,
     owners_by_inode: HashMap<u64, Vec<SocketOwner>>,
     warnings: Vec<ProcessWarning>,
+    namespaces: Vec<super::namespace::NetworkNamespaceBatch>,
     started_at: TimestampNs,
     ended_at: TimestampNs,
 }
@@ -51,12 +52,12 @@ impl ProcessBatch {
         &self.records
     }
 
-    pub fn tcp_listeners(&self) -> &[TcpSocketRecord] {
-        &self.tcp_listeners
+    pub fn inet_listeners(&self) -> &[InetSocketRecord] {
+        &self.inet_listeners
     }
 
-    pub fn tcp_connections(&self) -> &[TcpConnectionRecord] {
-        &self.tcp_connections
+    pub fn inet_connections(&self) -> &[InetConnectionRecord] {
+        &self.inet_connections
     }
 
     pub fn unix_listeners(&self) -> &[UnixSocketRecord] {
@@ -69,6 +70,10 @@ impl ProcessBatch {
 
     pub fn owners_by_inode(&self) -> &HashMap<u64, Vec<SocketOwner>> {
         &self.owners_by_inode
+    }
+
+    pub fn namespaces(&self) -> &[super::namespace::NetworkNamespaceBatch] {
+        &self.namespaces
     }
 
     pub fn warnings(&self) -> &[ProcessWarning] {
@@ -119,83 +124,223 @@ impl<R: ProcReader> ProcessCollector<R> {
         let mut warnings = Vec::new();
         let pids = self.reader.list_pids(&self.proc_root)?;
         let mut observations = Vec::new();
+        let boot_id = self
+            .reader
+            .read_file(&self.proc_root.join("sys/kernel/random/boot_id"))
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .map(|value| value.trim().to_string())
+            .filter(|value| {
+                value.len() == 36
+                    && value.bytes().enumerate().all(|(index, byte)| {
+                        if [8, 13, 18, 23].contains(&index) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    })
+            });
+        let host_namespace =
+            super::namespace::read_namespace(&self.reader, &self.proc_root.join("self/ns/net"));
+        if host_namespace.is_none() {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::PermissionDenied,
+                self.proc_root.join("self/ns/net"),
+                "scanner network namespace identity unavailable; host ownership unknown",
+            ));
+        }
         let mut records = Vec::new();
 
         for pid in pids {
-            let Some(record) = read_process(&self.reader, &self.proc_root, pid, &mut warnings)
+            let Some(mut record) = read_process(&self.reader, &self.proc_root, pid, &mut warnings)
             else {
                 continue;
             };
+            record.boot_id = boot_id.clone();
+            record.network_namespace = super::namespace::read_namespace(
+                &self.reader,
+                &self.proc_root.join(pid.to_string()).join("ns/net"),
+            );
+            if record.network_namespace.is_none() {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::PermissionDenied,
+                    self.proc_root.join(pid.to_string()).join("ns/net"),
+                    "network namespace identity unavailable",
+                ));
+            }
+            observations.extend(super::fifo::collect_fifo_descriptors(
+                &self.reader,
+                &self.proc_root,
+                &record,
+                started_at,
+                &mut warnings,
+            ));
             observations.extend(raw_observations_for_record(&record, started_at));
             records.push(record);
         }
 
-        let (tcp_listeners, tcp_connections, mut owners_by_inode, tcp_observations) =
-            collect_tcp_sockets(
+        if !records.is_empty() && boot_id.is_none() {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::PermissionDenied,
+                self.proc_root.join("sys/kernel/random/boot_id"),
+                "host boot identity unavailable; process and namespace continuity unknown",
+            ));
+        }
+        let host_records = records
+            .iter()
+            .filter(|record| {
+                host_namespace.is_some() && record.network_namespace() == host_namespace
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let (mut inet_listeners, mut inet_connections, mut owners_by_inode, mut tcp_observations) =
+            collect_inet_sockets(
                 &self.reader,
                 &self.proc_root,
-                &records,
+                &self.proc_root,
+                &host_records,
                 started_at,
                 &mut warnings,
             );
-        observations.extend(tcp_observations);
 
-        let (unix_listeners, unix_connections, unix_observations, mut unix_owners) =
+        let (mut unix_listeners, mut unix_connections, mut unix_observations, mut unix_owners) =
             collect_unix_sockets(
                 &self.reader,
                 &self.proc_root,
-                &records,
+                &self.proc_root,
+                &host_records,
                 started_at,
                 &owners_by_inode,
                 &mut warnings,
             );
-        observations.extend(unix_observations);
+
         for (inode, owners) in unix_owners.drain() {
             owners_by_inode.entry(inode).or_default().extend(owners);
         }
 
+        if let Some(expected) = host_namespace {
+            let is_stable =
+                super::namespace::read_namespace(&self.reader, &self.proc_root.join("self/ns/net"))
+                    == Some(expected)
+                    && host_records.iter().all(|record| {
+                        super::namespace::read_namespace(
+                            &self.reader,
+                            &self.proc_root.join(record.pid().to_string()).join("ns/net"),
+                        ) == Some(expected)
+                    });
+            if !is_stable {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::PermissionDenied,
+                    self.proc_root.join("self/ns/net"),
+                    "host namespace identity changed during collection; socket evidence discarded",
+                ));
+                inet_listeners.clear();
+                inet_connections.clear();
+                unix_listeners.clear();
+                unix_connections.clear();
+                owners_by_inode.clear();
+                tcp_observations.clear();
+                unix_observations.clear();
+            }
+        }
+        observations.extend(tcp_observations);
+        observations.extend(unix_observations);
+        let namespaces = super::namespace::collect(
+            &self.reader,
+            &self.proc_root,
+            &records,
+            host_namespace,
+            started_at,
+            &mut observations,
+            &mut warnings,
+        );
+        let mut owners = owners_by_inode
+            .values()
+            .flatten()
+            .map(|owner| (None, owner))
+            .chain(namespaces.iter().flat_map(|namespace| {
+                namespace
+                    .owners
+                    .values()
+                    .flatten()
+                    .map(move |owner| (Some(namespace.namespace), owner))
+            }))
+            .collect::<Vec<_>>();
+        owners.sort_by_key(|(namespace, owner)| (*namespace, owner.pid, owner.fd, owner.inode));
+        owners.dedup_by_key(|(namespace, owner)| (*namespace, owner.pid, owner.fd, owner.inode));
+        for (namespace, owner) in owners {
+            let mut metadata = ObservationMetadata::new();
+            metadata.insert_u32("fd", owner.fd);
+            metadata.insert_str("inode", &owner.inode.to_string());
+            metadata.insert_bool("fdinfo_verified", owner.is_fdinfo_verified);
+            if let Some(namespace) = namespace {
+                metadata.insert_str("network_namespace", &namespace.to_string());
+            }
+            observations.push(RawObservation {
+                source: ObservationSource::Proc,
+                kind: ObservationKind::ProcessSocketFdSeen,
+                collector: CollectorName::new(COLLECTOR_NAME),
+                subject: Some(RawIdentity::Process { pid: owner.pid }),
+                object: None,
+                timestamp: started_at,
+                raw_ref: Some(RawEvidenceRef::new(&owner.fd_path)),
+                confidence_hint: ConfidenceHint::High,
+                metadata,
+            });
+        }
         Ok(ProcessBatch {
             observations,
             records,
-            tcp_listeners,
-            tcp_connections,
+            inet_listeners,
+            inet_connections,
             unix_listeners,
             unix_connections,
             owners_by_inode,
             warnings,
+            namespaces,
             started_at,
             ended_at: TimestampNs::now(),
         })
     }
 }
 
-type TcpSocketCollectResult = (
-    Vec<TcpSocketRecord>,
-    Vec<TcpConnectionRecord>,
+type InetSocketCollectResult = (
+    Vec<InetSocketRecord>,
+    Vec<InetConnectionRecord>,
     HashMap<u64, Vec<SocketOwner>>,
     Vec<RawObservation>,
 );
 
-fn collect_tcp_sockets<R: ProcReader>(
+pub(super) fn collect_inet_sockets<R: ProcReader>(
     reader: &R,
     proc_root: &Path,
+    table_root: &Path,
     records: &[ProcessRecord],
     started_at: TimestampNs,
     warnings: &mut Vec<ProcessWarning>,
-) -> TcpSocketCollectResult {
+) -> InetSocketCollectResult {
     let mut listeners = Vec::new();
     let mut connections = Vec::new();
-    for table in [TcpTableKind::Tcp, TcpTableKind::Tcp6] {
-        let Some(content) = read_tcp_table_content(reader, proc_root, table, warnings) else {
+    for table in [
+        InetTableKind::Tcp,
+        InetTableKind::Tcp6,
+        InetTableKind::Udp,
+        InetTableKind::Udp6,
+    ] {
+        let Some(content) = read_inet_table_content(reader, table_root, table, warnings) else {
             continue;
         };
-        let parsed = parse_tcp_table(table, &content);
+        let parsed = parse_inet_table(table, &content);
         listeners.extend(parsed.listeners);
         connections.extend(parsed.connections);
         for issue in parsed.warnings {
             warnings.push(ProcessWarning::new(
-                ProcessWarningKind::TcpTableMalformed,
-                proc_root.join("net").join(table.net_file_name()),
+                if table.protocol() == twin_core::TransportProtocol::Tcp {
+                    ProcessWarningKind::TcpTableMalformed
+                } else {
+                    ProcessWarningKind::UdpTableMalformed
+                },
+                table_root.join("net").join(table.net_file_name()),
                 format!("line {}: {}", issue.line, issue.detail),
             ));
         }
@@ -211,6 +356,7 @@ fn collect_tcp_sockets<R: ProcReader>(
             reader,
             proc_root,
             record.pid(),
+            record.start_ticks(),
             warnings,
         ));
     }
@@ -223,7 +369,7 @@ fn collect_tcp_sockets<R: ProcReader>(
         if !mapped {
             warnings.push(ProcessWarning::new(
                 ProcessWarningKind::SocketUnmapped,
-                proc_root.join("net").join(listener.table.net_file_name()),
+                table_root.join("net").join(listener.table.net_file_name()),
                 format!(
                     "inode {} listening on {}:{}",
                     listener.inode, listener.local_ip, listener.local_port
@@ -241,7 +387,9 @@ fn collect_tcp_sockets<R: ProcReader>(
         if owners.is_empty() {
             warnings.push(ProcessWarning::new(
                 ProcessWarningKind::ActiveSocketUnmapped,
-                proc_root.join("net").join(connection.table.net_file_name()),
+                table_root
+                    .join("net")
+                    .join(connection.table.net_file_name()),
                 format!(
                     "inode {} established to {}:{}",
                     connection.inode, connection.remote_ip, connection.remote_port
@@ -256,9 +404,10 @@ fn collect_tcp_sockets<R: ProcReader>(
     (listeners, connections, owner_map, observations)
 }
 
-fn collect_unix_sockets<R: ProcReader>(
+pub(super) fn collect_unix_sockets<R: ProcReader>(
     reader: &R,
     proc_root: &Path,
+    table_root: &Path,
     records: &[ProcessRecord],
     started_at: TimestampNs,
     existing_owners: &HashMap<u64, Vec<SocketOwner>>,
@@ -266,7 +415,7 @@ fn collect_unix_sockets<R: ProcReader>(
 ) -> UnixSocketCollectOutput {
     let mut listeners = Vec::new();
     let mut connections = Vec::new();
-    let Some(content) = read_unix_table_content(reader, proc_root, warnings) else {
+    let Some(content) = read_unix_table_content(reader, table_root, warnings) else {
         return (listeners, connections, Vec::new(), HashMap::new());
     };
     let parsed = parse_unix_table(&content);
@@ -275,7 +424,7 @@ fn collect_unix_sockets<R: ProcReader>(
     for issue in parsed.warnings {
         warnings.push(ProcessWarning::new(
             ProcessWarningKind::UnixTableMalformed,
-            proc_root.join("net").join("unix"),
+            table_root.join("net").join("unix"),
             format!("line {}: {}", issue.line, issue.detail),
         ));
     }
@@ -292,6 +441,7 @@ fn collect_unix_sockets<R: ProcReader>(
                 reader,
                 proc_root,
                 record.pid(),
+                record.start_ticks(),
                 warnings,
             ));
         }
@@ -313,7 +463,7 @@ fn collect_unix_sockets<R: ProcReader>(
         if owners.is_empty() {
             warnings.push(ProcessWarning::new(
                 ProcessWarningKind::UnixSocketUnmapped,
-                proc_root.join("net").join("unix"),
+                table_root.join("net").join("unix"),
                 format!("inode {} listening on {}", listener.inode, listener.path),
             ));
         }
@@ -330,7 +480,7 @@ fn collect_unix_sockets<R: ProcReader>(
         if owners.is_empty() {
             warnings.push(ProcessWarning::new(
                 ProcessWarningKind::UnixConnectionUnmapped,
-                proc_root.join("net").join("unix"),
+                table_root.join("net").join("unix"),
                 format!(
                     "inode {} connected on {}",
                     connection.inode,
@@ -418,18 +568,16 @@ fn raw_observation_for_unix_connection(
 }
 
 fn raw_observation_for_connection(
-    connection: &TcpConnectionRecord,
+    connection: &InetConnectionRecord,
     owners: &[SocketOwner],
     timestamp: TimestampNs,
 ) -> RawObservation {
-    let table_name = match connection.table {
-        TcpTableKind::Tcp => "tcp",
-        TcpTableKind::Tcp6 => "tcp6",
-    };
+    let table_name = connection.table.net_file_name();
+    let is_udp = connection.table.protocol() == twin_core::TransportProtocol::Udp;
     let raw_ref = RawEvidenceRef::new(format!("/proc/net/{table_name}:{}", connection.raw_line));
     let mut meta = ObservationMetadata::new();
     meta.insert_str("inode", &connection.inode.to_string());
-    meta.insert_str("state", "established");
+    meta.insert_str("state", if is_udp { "connected" } else { "established" });
     meta.insert_str("table", table_name);
     meta.insert_str("local_ip", &connection.local_ip);
     meta.insert_u32("local_port", connection.local_port as u32);
@@ -442,12 +590,27 @@ fn raw_observation_for_connection(
     meta.insert_str_array("owner_pids", &owner_pids);
     meta.insert_str_array("owner_fds", &owner_fds);
     RawObservation {
-        source: ObservationSource::ProcNetTcp,
-        kind: ObservationKind::TcpConnectionSeen,
+        source: if is_udp {
+            ObservationSource::ProcNetUdp
+        } else {
+            ObservationSource::ProcNetTcp
+        },
+        kind: if is_udp {
+            ObservationKind::UdpConnectionSeen
+        } else {
+            ObservationKind::TcpConnectionSeen
+        },
         collector: CollectorName::new(COLLECTOR_NAME),
-        subject: Some(RawIdentity::TcpEndpoint {
-            ip: connection.remote_ip.clone(),
-            port: connection.remote_port,
+        subject: Some(if is_udp {
+            RawIdentity::UdpEndpoint {
+                ip: connection.remote_ip.clone(),
+                port: connection.remote_port,
+            }
+        } else {
+            RawIdentity::TcpEndpoint {
+                ip: connection.remote_ip.clone(),
+                port: connection.remote_port,
+            }
         }),
         object: None,
         timestamp,
@@ -458,18 +621,16 @@ fn raw_observation_for_connection(
 }
 
 fn raw_observation_for_listener(
-    listener: &TcpSocketRecord,
+    listener: &InetSocketRecord,
     owners: &[SocketOwner],
     timestamp: TimestampNs,
 ) -> RawObservation {
-    let table_name = match listener.table {
-        TcpTableKind::Tcp => "tcp",
-        TcpTableKind::Tcp6 => "tcp6",
-    };
+    let table_name = listener.table.net_file_name();
+    let is_udp = listener.table.protocol() == twin_core::TransportProtocol::Udp;
     let raw_ref = RawEvidenceRef::new(format!("/proc/net/{table_name}:{}", listener.raw_line));
     let mut meta = ObservationMetadata::new();
     meta.insert_str("inode", &listener.inode.to_string());
-    meta.insert_str("state", "listen");
+    meta.insert_str("state", if is_udp { "bound" } else { "listen" });
     meta.insert_str("table", table_name);
     meta.insert_str("local_ip", &listener.local_ip);
     meta.insert_u32("local_port", listener.local_port as u32);
@@ -480,12 +641,27 @@ fn raw_observation_for_listener(
     meta.insert_str_array("owner_pids", &owner_pids);
     meta.insert_str_array("owner_fds", &owner_fds);
     RawObservation {
-        source: ObservationSource::ProcNetTcp,
-        kind: ObservationKind::TcpSocketSeen,
+        source: if is_udp {
+            ObservationSource::ProcNetUdp
+        } else {
+            ObservationSource::ProcNetTcp
+        },
+        kind: if is_udp {
+            ObservationKind::UdpSocketSeen
+        } else {
+            ObservationKind::TcpSocketSeen
+        },
         collector: CollectorName::new(COLLECTOR_NAME),
-        subject: Some(RawIdentity::TcpEndpoint {
-            ip: listener.local_ip.clone(),
-            port: listener.local_port,
+        subject: Some(if is_udp {
+            RawIdentity::UdpEndpoint {
+                ip: listener.local_ip.clone(),
+                port: listener.local_port,
+            }
+        } else {
+            RawIdentity::TcpEndpoint {
+                ip: listener.local_ip.clone(),
+                port: listener.local_port,
+            }
         }),
         object: None,
         timestamp,
@@ -505,6 +681,15 @@ fn raw_observations_for_record(
 
     let mut seen_meta = ObservationMetadata::new();
     seen_meta.insert_u32("pid", record.pid());
+    if let Some(start_ticks) = record.start_ticks() {
+        seen_meta.insert_u64("start_ticks", start_ticks);
+    }
+    if let Some(namespace) = record.network_namespace() {
+        seen_meta.insert_str("network_namespace", &namespace.to_string());
+    }
+    if let Some(boot_id) = record.boot_id() {
+        seen_meta.insert_str("boot_id", boot_id);
+    }
     if let Some(comm) = record.comm() {
         seen_meta.insert_str("comm", comm);
     }

@@ -1,14 +1,18 @@
 mod capabilities;
+mod clock;
 mod decode;
 mod error;
 mod load;
 mod rate_limit;
 mod tcp;
+mod trace_format;
 
 pub use capabilities::{
     assess, host_facts, read_facts, EbpfCheck, EbpfFacts, EbpfProbePaths, EbpfReport,
 };
-pub use decode::{decode_exec, encode_exec, exec_to_raw, EbpfExec, EXEC_EVENT_LEN};
+pub use decode::{
+    decode_exec, encode_exec, exec_to_raw, EbpfExec, EXEC_EVENT_LEN, EXEC_LIVE_EVENT_LEN,
+};
 pub use error::EbpfError;
 pub use load::{
     attach, attach_from_bytes, attach_tcp, attach_tcp_from_bytes, ExecSession, TcpSession,
@@ -20,5 +24,6 @@ pub use rate_limit::{
 pub use tcp::{
     decode_accept, decode_bind, decode_connect, decode_tcp_event, encode_accept, encode_bind,
     encode_connect, format_endpoint, tcp_to_raw, TcpAccept, TcpBind, TcpConnect, TcpEvent,
-    TCP_ACCEPT_LEN, TCP_BIND_LEN, TCP_CONNECT_LEN,
+    TcpEventKind, TCP_ACCEPT_LEN, TCP_ACCEPT_LIVE_LEN, TCP_BIND_LEN, TCP_BIND_LIVE_LEN,
+    TCP_CONNECT_LEN, TCP_CONNECT_LIVE_LEN,
 };

@@ -1,5 +1,8 @@
 [workspace]
 members = [
+    "crates/twin-fixtures",
+    "crates/twin-package",
+    "crates/twin-safety",
     "crates/twin-cli",
     "crates/twin-app",
     "crates/twin-core",
@@ -21,6 +24,8 @@ version = "0.1.0"
 license = "MIT"
 
 [workspace.dependencies]
+twin-fixtures = { path = "crates/twin-fixtures" }
+twin-package = { path = "crates/twin-package" }
 twin-core = { path = "crates/twin-core" }
 twin-store = { path = "crates/twin-store" }
 twin-app = { path = "crates/twin-app" }

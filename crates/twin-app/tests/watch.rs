@@ -58,7 +58,7 @@ fn injected_exec_is_observed_and_ticks_stop() {
             interval: Duration::ZERO,
             duration: None,
             max_ticks: Some(1),
-            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(4421, 4400, "curl", 9, 1)]),
+            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(4421, 4400, 1000, "curl", 9, 1)]),
         },
         &proc_root,
         &AtomicBool::new(false),
@@ -71,6 +71,15 @@ fn injected_exec_is_observed_and_ticks_stop() {
     assert_eq!(rec.execs[0].node_id, "process:pid:4421");
     assert_eq!(rec.execs[0].comm, "curl");
     assert!(result.warnings.is_empty());
+    let store = twin_store::Store::open(&home.layout.db_file()).expect("store");
+    let events = store
+        .list_observations_by_kind("ebpf_exec_observed")
+        .expect("events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0].subject_node_id.as_deref(),
+        Some("process:pid:4421")
+    );
 }
 
 #[test]
@@ -130,7 +139,7 @@ fn stop_flag_ends_the_loop_before_a_tick() {
             interval: Duration::from_secs(30),
             duration: None,
             max_ticks: Some(5),
-            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(1, 0, "sleep", 1, 1)]),
+            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(1, 0, 1000, "sleep", 1, 1)]),
         },
         &proc_root,
         &stop,
@@ -225,4 +234,129 @@ fn doctor_ebpf_names_the_failing_check() {
     assert!(ebpf.btf.ok);
     assert!(ebpf.capabilities.ok);
     assert!(ebpf.exec_tracing.ok);
+}
+
+#[test]
+fn sustained_polling_keeps_a_bounded_tick_window_and_reports_collector_timings() {
+    let _guard = support::lock_scan_env();
+    support::clear_scan_env();
+    let (home, proc_root) = layout_and_proc();
+    struct Counter(u32);
+    impl WatchSink for Counter {
+        fn on_start(&mut self, _: u64) {}
+        fn on_tick(&mut self, tick: &WatchTick) {
+            self.0 += 1;
+            assert!(tick.collector_timings_ms.contains_key("process"));
+        }
+        fn on_exec(&mut self, _: &WatchExecEvent) {}
+        fn on_tcp(&mut self, _: &twin_app::WatchTcpEvent) {}
+        fn on_warning(&mut self, _: &str) {}
+    }
+    let mut sink = Counter(0);
+    let result = watch_in(
+        &home.layout,
+        WatchRun {
+            config_override: None,
+            interval: Duration::ZERO,
+            duration: None,
+            max_ticks: Some(260),
+            ebpf: WatchEbpf::Off,
+        },
+        &proc_root,
+        &AtomicBool::new(false),
+        &mut sink,
+    )
+    .unwrap();
+    assert_eq!(sink.0, 260);
+    assert_eq!(result.ticks_completed, 260);
+    assert_eq!(result.ticks.len(), 256);
+    assert!(!result.ticks[0].baseline);
+    assert!(result
+        .ticks
+        .last()
+        .unwrap()
+        .collector_timings_ms
+        .contains_key("scan_total"));
+}
+
+#[test]
+fn exec_retains_birth_identity_and_stales_previous_runtime_relationships() {
+    let _guard = support::lock_scan_env();
+    support::clear_scan_env();
+    let (home, proc_root) = layout_and_proc();
+    let mut fields = vec!["0"; 50];
+    fields[0] = "S";
+    fields[1] = "1";
+    fields[19] = "100";
+    support::write_proc_fixture(
+        &proc_root,
+        42,
+        &format!("42 (worker) {}", fields.join(" ")),
+        "Uid:\t1000\t1000\t1000\t1000\n",
+        b"worker\0",
+        None,
+    );
+    std::fs::create_dir_all(proc_root.join("42/fd")).unwrap();
+    for table in ["tcp", "tcp6", "udp", "udp6"] {
+        support::write_tcp_table(&proc_root, table, "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n");
+    }
+    support::write_unix_table(
+        &proc_root,
+        "Num RefCount Protocol Flags Type St Inode Path\n",
+    );
+    let mut store = twin_store::Store::open(&home.layout.db_file()).unwrap();
+    let mut ingest = twin_app::TcpIngestor::new(twin_ebpf::TcpRateLimits::session());
+    ingest
+        .push(
+            &mut store,
+            &twin_ebpf::TcpEvent::Connect(twin_ebpf::TcpConnect::new(
+                42,
+                9,
+                "127.0.0.1".parse().unwrap(),
+                "192.0.2.1".parse().unwrap(),
+                443,
+                1,
+            )),
+        )
+        .unwrap();
+    let mut bytes = twin_ebpf::encode_exec(&EbpfExec::new(
+        42,
+        1,
+        1000,
+        "worker",
+        9,
+        twin_core::TimestampNs::now().as_i64() as u64,
+    ))
+    .to_vec();
+    bytes.extend_from_slice(&2u64.to_le_bytes());
+    bytes.extend_from_slice(&100u64.to_le_bytes());
+    let event = twin_ebpf::decode_exec(&bytes).unwrap();
+    let mut rec = Rec {
+        ticks: vec![],
+        execs: vec![],
+        warnings: vec![],
+    };
+    watch_in(
+        &home.layout,
+        WatchRun {
+            config_override: None,
+            interval: Duration::ZERO,
+            duration: None,
+            max_ticks: Some(1),
+            ebpf: WatchEbpf::Injected(vec![event]),
+        },
+        &proc_root,
+        &AtomicBool::new(false),
+        &mut rec,
+    )
+    .unwrap();
+    let node = store.get_node("process:pid:42").unwrap().unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&node.metadata_json).unwrap();
+    assert_eq!(metadata["start_ticks"], 100);
+    assert!(metadata["last_exec_ns"].as_i64().unwrap() > 1);
+    let edge = store
+        .get_edge("process:pid:42|connects_to|port:tcp:192.0.2.1:443")
+        .unwrap()
+        .unwrap();
+    assert_eq!(edge.state, "stale");
 }

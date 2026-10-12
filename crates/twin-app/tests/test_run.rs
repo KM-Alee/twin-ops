@@ -152,3 +152,185 @@ checks:
         .unwrap_or("")
         .contains("socket table observed"));
 }
+
+struct FixtureDns {
+    answers: twin_collectors::dns::DnsAnswers,
+    expected: std::collections::BTreeSet<String>,
+}
+
+impl twin_collectors::dns::DnsReader for FixtureDns {
+    fn resolve(
+        &self,
+        hosts: &std::collections::BTreeSet<String>,
+    ) -> twin_collectors::dns::DnsAnswers {
+        assert_eq!(hosts, &self.expected);
+        self.answers.clone()
+    }
+}
+
+#[test]
+fn outbound_dns_matches_both_address_families_and_udp_with_sourced_inference() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use twin_core::TransportProtocol;
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    let seen = TimestampNs::new(1);
+    let process = NodeId::process(42);
+    store
+        .upsert_node_typed(&GraphNode::process(42, "api", seen, None))
+        .expect("process");
+    for (protocol, ip, port) in [
+        (TransportProtocol::Tcp, "10.0.0.8", 443),
+        (TransportProtocol::Udp, "2001:db8::8", 443),
+    ] {
+        let target = NodeId::inet_port(protocol, ip, port).expect("id");
+        store
+            .upsert_node_typed(&GraphNode::inet_port(protocol, ip, port, seen, None).expect("node"))
+            .expect("port");
+        store
+            .upsert_edge_typed(&GraphEdge::observed_process_connects_to(
+                &process, &target, seen, None,
+            ))
+            .expect("edge");
+    }
+    store
+        .insert_collector_run(&twin_store::CollectorRunRow {
+            id: None,
+            collector: twin_collectors::COLLECTOR_NAME.into(),
+            started_at_ns: 1,
+            ended_at_ns: TimestampNs::now().as_i64(),
+            status: "success".into(),
+            observation_count: 2,
+            warning_count: 0,
+            error_message: None,
+            metadata_json: "{}".into(),
+        })
+        .unwrap();
+    drop(store);
+    let path = home.layout.db_file().with_extension("yaml");
+    std::fs::write(
+        &path,
+        r#"
+version: 1
+name: dns
+checks:
+  - name: api
+    assert:
+      outbound_endpoints:
+        allowed: ['API.Example.:443', '127.0.0.1:5432']
+        fail_on_unknown: true
+  - name: duplicate hostname
+    assert:
+      outbound_endpoints:
+        allowed: ['api.example:443']
+        fail_on_unknown: true
+"#,
+    )
+    .expect("suite");
+    let reader = FixtureDns {
+        expected: BTreeSet::from(["api.example".into()]),
+        answers: BTreeMap::from([(
+            "api.example".into(),
+            Ok(vec![
+                "10.0.0.8".parse().unwrap(),
+                "2001:db8::8".parse().unwrap(),
+            ]),
+        )]),
+    };
+    let report = twin_app::run_file_with_dns(&home.layout, &path, &reader).expect("run");
+    assert_eq!(report.passed, 2);
+    assert_eq!(report.failed, 0);
+    let evidence = report.checks[0].evidence.as_deref().unwrap();
+    for text in [
+        "10.0.0.8:443",
+        "[2001:db8::8]:443",
+        "timestamp_ns=",
+        "inferred",
+        "historical hostname ownership unknown",
+    ] {
+        assert!(evidence.contains(text), "{evidence}");
+    }
+    let stored = Store::open(&home.layout.db_file())
+        .unwrap()
+        .list_test_runs()
+        .unwrap();
+    assert!(stored[0]
+        .report_json
+        .contains("historical hostname ownership unknown"));
+}
+
+#[test]
+fn outbound_dns_failure_never_passes_even_without_observed_endpoints() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use twin_collectors::dns::DnsError;
+    for error in [
+        DnsError::Timeout,
+        DnsError::Unavailable,
+        DnsError::Limit,
+        DnsError::Empty,
+    ] {
+        let home = support::IsolatedHome::new();
+        init_in(&home.layout, InitRequest::default()).unwrap();
+        let path = home.layout.db_file().with_extension("yaml");
+        std::fs::write(
+            &path,
+            r#"
+version: 1
+name: dns
+checks:
+  - name: strict
+    assert:
+      outbound_endpoints:
+        allowed: ['missing.example:443']
+        fail_on_unknown: true
+  - name: advisory
+    assert:
+      outbound_endpoints:
+        allowed: ['missing.example:443']
+"#,
+        )
+        .unwrap();
+        let reader = FixtureDns {
+            expected: BTreeSet::from(["missing.example".into()]),
+            answers: BTreeMap::from([("missing.example".into(), Err(error))]),
+        };
+        let report = twin_app::run_file_with_dns(&home.layout, &path, &reader).unwrap();
+        assert_eq!((report.passed, report.warned, report.failed), (0, 1, 1));
+        assert_eq!(report.checks[0].status, CheckStatus::Fail);
+        assert_eq!(report.checks[1].status, CheckStatus::Warn);
+        assert!(report.checks[0]
+            .detail
+            .as_ref()
+            .unwrap()
+            .contains(&error.to_string()));
+    }
+}
+
+#[test]
+fn malformed_dns_entries_are_not_queried_or_copied_into_reports() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).unwrap();
+    let path = home.layout.db_file().with_extension("yaml");
+    std::fs::write(
+        &path,
+        r#"
+version: 1
+name: invalid
+checks:
+  - name: outbound
+    assert:
+      outbound_endpoints:
+        allowed: ['https://user:SECRET@api.example:443', 'api.example:99999']
+        fail_on_unknown: true
+"#,
+    )
+    .unwrap();
+    let reader = FixtureDns {
+        expected: Default::default(),
+        answers: Default::default(),
+    };
+    let report = twin_app::run_file_with_dns(&home.layout, &path, &reader).unwrap();
+    assert_eq!(report.failed, 1);
+    assert!(!serde_json::to_string(&report).unwrap().contains("SECRET"));
+}

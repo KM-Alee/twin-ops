@@ -17,6 +17,20 @@ pub struct WorkloadView {
     pub namespace: String,
     pub name: String,
     pub owners: Vec<OwnerRef>,
+    pub rollout: Option<DeploymentRollout>,
+    pub desired_replicas: Option<u32>,
+    pub ready_replicas: Option<u32>,
+    pub generation: Option<u64>,
+    pub observed_generation: Option<u64>,
+    pub readiness_known: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct DeploymentRollout {
+    pub desired_replicas: u32,
+    pub is_recreate: bool,
+    pub max_unavailable: u32,
+    pub max_surge: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +79,9 @@ pub struct EventView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ClusterView {
+    pub source_identity: Option<String>,
+    pub resource_uids: BTreeMap<String, String>,
+    pub endpoints_complete: bool,
     pub namespaces: Vec<String>,
     pub pods: Vec<PodView>,
     pub deployments: Vec<WorkloadView>,

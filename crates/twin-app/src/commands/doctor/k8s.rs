@@ -5,9 +5,9 @@ use crate::model::DoctorK8s;
 pub(crate) fn host() -> DoctorK8s {
     let check = kubeconfig_check();
     let detail = if check.present {
-        "kubeconfig found. Live cluster reads are not built; set TWIN_K8S_FIXTURE to scan list documents. Read-only get/list only."
+        "kubeconfig found. twin k8s scan reads the cluster with bounded get/list requests; --fixture DIR selects list documents. External credential commands are disabled."
     } else {
-        "kubeconfig not found. Set TWIN_K8S_FIXTURE to scan list documents. Read-only get/list only."
+        "kubeconfig not found. In-cluster credentials or twin k8s scan --fixture DIR can provide coverage. Read-only get/list only."
     };
     DoctorK8s {
         kubeconfig_present: check.present,

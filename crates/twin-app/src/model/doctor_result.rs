@@ -27,11 +27,20 @@ pub struct DoctorK8s {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DoctorContainerd {
+    pub socket_path: String,
+    pub listed: bool,
+    pub namespace_count: Option<usize>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DoctorContainers {
     pub socket_present: bool,
     pub socket_path: String,
     pub listed: bool,
     pub container_count: Option<usize>,
+    pub containerd: Option<DoctorContainerd>,
     pub detail: String,
 }
 
@@ -57,6 +66,7 @@ pub struct DoctorCore {
     pub cli_ok: bool,
     pub config_found: bool,
     pub config_path: Option<PathBuf>,
+    pub config_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

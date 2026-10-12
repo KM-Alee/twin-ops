@@ -55,6 +55,7 @@ impl Store {
             3 => migration::MIGRATION_003,
             4 => migration::MIGRATION_004,
             5 => migration::MIGRATION_005,
+            6 => migration::MIGRATION_006,
             _ => {
                 return Err(StoreError::Migration {
                     version,
@@ -65,7 +66,15 @@ impl Store {
             }
         };
 
-        self.conn
+        let transaction = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|source| StoreError::Migration { version, source })?;
+        if version == 6 {
+            super::legacy_arguments::remove_legacy_arguments(&transaction)
+                .map_err(|source| StoreError::Migration { version, source })?;
+        }
+        transaction
             .execute_batch(sql)
             .map_err(|source| StoreError::Migration { version, source })?;
 
@@ -74,13 +83,16 @@ impl Store {
             .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
 
-        self.conn
+        transaction
             .execute(
                 "INSERT INTO schema_migrations (version, applied_at_ns) VALUES (?1, ?2)",
                 rusqlite::params![version, applied_at_ns],
             )
             .map_err(|source| StoreError::Migration { version, source })?;
 
+        transaction
+            .commit()
+            .map_err(|source| StoreError::Migration { version, source })?;
         Ok(())
     }
 }

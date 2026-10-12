@@ -40,3 +40,7 @@ cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
+
+## 2026-10-08 follow-up: Conventional service directories
+
+Added conventional nginx/Apache/httpd logs and MySQL/MariaDB/Redis/containerd/RabbitMQ state directories. Edges require existing service/path observations and remain inferences. Fixture tests verify added edges and PostgreSQL config association without changing file bytes.

@@ -1,3 +1,7 @@
+// Integration-test support module: shared by multiple test binaries, and each
+// binary uses only a subset of these fixtures.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
@@ -66,20 +70,8 @@ pub fn write_proc_fixture_with_cgroup(
     exe: Option<&Path>,
     cgroup: Option<&str>,
 ) {
-    let dir = base.join(pid.to_string());
-    std::fs::create_dir_all(&dir).expect("pid dir");
-    std::fs::write(dir.join("stat"), stat).expect("stat");
-    std::fs::write(dir.join("status"), status).expect("status");
-    std::fs::write(dir.join("cmdline"), cmdline).expect("cmdline");
-    if let Some(content) = cgroup {
-        std::fs::write(dir.join("cgroup"), content).expect("cgroup");
-    }
-    if let Some(target) = exe {
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target, dir.join("exe")).expect("exe symlink");
-        #[cfg(not(unix))]
-        let _ = target;
-    }
+    twin_fixtures::write_proc_fixture_with_cgroup(base, pid, stat, status, cmdline, exe, cgroup)
+        .expect("proc fixture");
 }
 
 pub fn write_slice5_fixture(proc_root: &Path) {

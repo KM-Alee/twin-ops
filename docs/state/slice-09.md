@@ -62,3 +62,7 @@ _(nothing)_
 - [x] `cargo fmt --check` passes
 - [x] `cargo test --workspace` passes
 - [x] `cargo clippy --workspace -- -D warnings` passes
+
+## 2026-10-08 follow-up: Default transitive service impact
+
+Service impact now traverses runtime dependency chains even without `--paths`; the flag controls detailed chain rendering. Traversal includes service depends_on, connects_to, and proxies_to relationships, with bounded depth and cycle handling. Port impact adds upstream caller chains. Tests: impact_paths.

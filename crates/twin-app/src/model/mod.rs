@@ -15,8 +15,8 @@ mod what_changed_result;
 pub use coverage::{CoverageReport, CoverageUnknown};
 pub use diff_result::{DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult};
 pub use doctor_result::{
-    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorK8s,
-    DoctorPermissions, DoctorResult, PermissionMode,
+    DoctorContainerd, DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck,
+    DoctorK8s, DoctorPermissions, DoctorResult, PermissionMode,
 };
 pub use emulation_result::{
     EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationOverlaySummary,
@@ -42,3 +42,9 @@ pub use watch_result::{WatchExecEvent, WatchResult, WatchTcpEvent, WatchTick};
 pub use what_changed_result::{
     WhatChangedEdge, WhatChangedEdgeDelta, WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult,
 };
+
+mod why_result;
+pub use why_result::{WhyObservation, WhyProofChain, WhyRelationship, WhyResult};
+
+mod operational_change;
+pub use operational_change::OperationalChange;

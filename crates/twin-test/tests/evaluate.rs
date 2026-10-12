@@ -20,6 +20,7 @@ fn facts() -> GraphFacts {
             to: "service:postgresql.service".to_string(),
             kind: "depends_on".to_string(),
             evidence: EvidenceLabel::Weak,
+            supporting_observations: 1,
             stale: false,
         }],
         ..GraphFacts::default()
@@ -104,12 +105,15 @@ checks:
         endpoints: vec![EndpointFact {
             endpoint: "telemetry.example.com:443".to_string(),
             evidence: "eBPF observed service:api.service connecting 42 times".to_string(),
+            from: "service:api.service".into(),
+            stale: false,
         }],
         disks: vec![DiskFact {
             mount: "/".to_string(),
             used_percent: 90,
         }],
         unknowns: vec![UnknownFact {
+            source: None,
             kind: "unmapped_sockets".to_string(),
             detail: "3 sockets could not be mapped".to_string(),
         }],
@@ -119,6 +123,7 @@ checks:
             risk: RiskLevel::High,
             evidence_label: "strong".to_string(),
             evidence: vec!["eBPF connect observed".to_string()],
+            supporting_observations: 1,
         }],
         ..GraphFacts::default()
     };

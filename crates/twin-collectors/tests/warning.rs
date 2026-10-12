@@ -7,8 +7,6 @@ fn warning_keys_are_stable() {
         "vanished_processes"
     );
     assert_eq!(ProcessWarningKind::Vanished.detail_key(), "vanished");
-    assert!(ProcessWarningKind::Vanished.includes_json_detail());
-    assert!(!ProcessWarningKind::ExeUnreadable.includes_json_detail());
     assert_eq!(
         ProcessWarningKind::from_aggregate_key("exe_unreadable"),
         Some(ProcessWarningKind::ExeUnreadable)
@@ -16,12 +14,21 @@ fn warning_keys_are_stable() {
 }
 
 #[test]
-fn bulk_coverage_gaps_omit_per_pid_json_details() {
-    assert!(!ProcessWarningKind::ExeUnreadable.includes_json_detail());
-    assert!(!ProcessWarningKind::PermissionDenied.includes_json_detail());
-    assert!(!ProcessWarningKind::CgroupMissing.includes_json_detail());
-    assert!(!ProcessWarningKind::CgroupPermissionDenied.includes_json_detail());
-    assert!(ProcessWarningKind::Vanished.includes_json_detail());
-    assert!(ProcessWarningKind::Malformed.includes_json_detail());
-    assert!(ProcessWarningKind::CgroupMalformed.includes_json_detail());
+fn bulk_coverage_gap_detail_keys_remain_distinguishable() {
+    assert_eq!(
+        ProcessWarningKind::ExeUnreadable.detail_key(),
+        "exe_unreadable"
+    );
+    assert_eq!(
+        ProcessWarningKind::PermissionDenied.detail_key(),
+        "permission_denied"
+    );
+    assert_eq!(
+        ProcessWarningKind::CgroupMissing.detail_key(),
+        "cgroup_missing"
+    );
+    assert_eq!(
+        ProcessWarningKind::CgroupPermissionDenied.detail_key(),
+        "cgroup_permission_denied"
+    );
 }

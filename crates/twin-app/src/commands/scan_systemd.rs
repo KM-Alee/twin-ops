@@ -68,7 +68,13 @@ pub(crate) fn persist_systemd_in_scan(
             let node = GraphNode::service(unit, scan_time, existing.as_ref());
             super::scan_history::upsert_node(store, history, &node)?;
         }
-        let Some(primary) = obs_ids.iter().find_map(|id| obs_by_id.get(id)) else {
+        let Some(primary) = obs_ids
+            .iter()
+            .filter_map(|id| obs_by_id.get(id))
+            .max_by_key(|obs| {
+                obs.metadata().get("key").and_then(|value| value.as_str()) == Some("Requires")
+            })
+        else {
             continue;
         };
         let unit_path = primary

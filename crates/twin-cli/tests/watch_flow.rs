@@ -49,7 +49,7 @@ fn injected_exec_prints_and_stops_on_ticks() {
             interval: Duration::ZERO,
             duration: None,
             max_ticks: Some(1),
-            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(4421, 1, "curl", 3, 1)]),
+            ebpf: WatchEbpf::Injected(vec![EbpfExec::new(4421, 1, 1000, "curl", 3, 1)]),
         },
         &proc_root,
         &AtomicBool::new(false),
@@ -113,6 +113,7 @@ fn injected_tcp_prints_beside_the_tick_and_stops() {
     );
 }
 
+#[test]
 fn unavailable_ebpf_warning_keeps_polling_ticks() {
     let temp = tempfile::tempdir().expect("temp");
     let layout = TwinLayout::isolated(temp.path());

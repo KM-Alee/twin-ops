@@ -27,7 +27,7 @@ pub const DIRECT_DEPENDENTS_RUNTIME: &str = "direct dependents (runtime)";
 pub const IMPACT_PATHS: &str = "impact paths";
 pub const CONFIGURED_DEPENDENTS: &str = "configured dependents (inactive)";
 pub const EMULATION_SCORING_NOTE_DIRECT: &str =
-    "emulation uses direct-only scoring; twin impact applies broader thresholds";
+    "emulation includes bounded dependency traversal; use --paths to show full chains";
 pub const EMULATION_SCORING_NOTE_WITH_PATHS: &str =
     "emulation scoring includes transitive path evidence; twin impact applies broader risk thresholds";
 

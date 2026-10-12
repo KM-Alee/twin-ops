@@ -1,5 +1,10 @@
-use twin_core::{EdgeKind, GraphEdge, GraphMetadata, GraphNode, NodeId, NodeKind};
-use twin_emulate::{DeleteK8sPodInput, EmulationNode, ReadyService, RolloutK8sDeploymentInput};
+use twin_core::{
+    EdgeKind, EvidenceRecency, GraphEdge, GraphMetadata, GraphNode, NodeId, NodeKind, NodeState,
+    TimestampNs,
+};
+use twin_emulate::{
+    DeleteK8sPodInput, EmulationNode, ReadyService, RolloutK8sDeploymentInput, RolloutPolicy,
+};
 use twin_store::{Store, StoreError};
 
 use crate::error::{AppError, K8sCmdError};
@@ -199,13 +204,21 @@ pub(crate) fn delete_pod_input(store: &Store, pod: &NodeId) -> Result<DeleteK8sP
     let pods = [pod.clone()];
     let services = k8s_store(services_for_pods(store, &pods))?;
     let mut ready_services = Vec::new();
+    let (mut coverage_gaps, recency, source) = kubernetes_evidence(store, &node)?;
     for service_id in services {
         let Some(service) = store
             .get_node_typed(&service_id)
             .map_err(K8sCmdError::Store)?
         else {
+            coverage_gaps.push("selected service observation is missing".into());
             continue;
         };
+        if !readiness_known(service.metadata()) || service.state() != NodeState::Active {
+            coverage_gaps.push(format!(
+                "{} ready endpoint coverage is unknown",
+                service.id()
+            ));
+        }
         ready_services.push(ReadyService {
             id: service.id().clone(),
             label: service.label().to_string(),
@@ -224,6 +237,9 @@ pub(crate) fn delete_pod_input(store: &Store, pod: &NodeId) -> Result<DeleteK8sP
         pod_name,
         pod_in_graph: true,
         services: ready_services,
+        coverage_gaps,
+        recency,
+        source,
     })
 }
 
@@ -239,11 +255,36 @@ pub(crate) fn rollout_input(
         .into());
     }
     let pods = owned_pod_ids(store, deployment).map_err(K8sCmdError::Store)?;
+    let services = services_for_pods(store, &pods).map_err(K8sCmdError::Store)?;
+    let mut ready_services = Vec::new();
+    let (mut coverage_gaps, recency, source) = kubernetes_evidence(store, &node)?;
+    for id in services {
+        let Some(service) = store.get_node_typed(&id).map_err(K8sCmdError::Store)? else {
+            coverage_gaps.push("selected service observation is missing".into());
+            continue;
+        };
+        if !readiness_known(service.metadata()) || service.state() != NodeState::Active {
+            coverage_gaps.push(format!(
+                "{} ready endpoint coverage is unknown",
+                service.id()
+            ));
+        }
+        ready_services.push(ReadyService {
+            id,
+            label: service.label().into(),
+            ready_pods: ready_pods(service.metadata()),
+        });
+    }
     let mut emulation_pods = Vec::new();
     for pod_id in pods {
-        let label = store
-            .get_node_typed(&pod_id)
-            .map_err(K8sCmdError::Store)?
+        let pod = store.get_node_typed(&pod_id).map_err(K8sCmdError::Store)?;
+        if pod
+            .as_ref()
+            .is_none_or(|pod| pod.state() != NodeState::Active)
+        {
+            coverage_gaps.push(format!("{pod_id} observation is missing or inactive"));
+        }
+        let label = pod
             .map(|pod| pod.label().to_string())
             .unwrap_or_else(|| short_id(&pod_id));
         emulation_pods.push(EmulationNode { id: pod_id, label });
@@ -255,6 +296,76 @@ pub(crate) fn rollout_input(
         },
         deployment_in_graph: true,
         pods: emulation_pods,
+        policy: rollout_policy(node.metadata()),
+        services: ready_services,
+        coverage_gaps,
+        recency,
+        source,
+    })
+}
+
+fn kubernetes_evidence(
+    store: &Store,
+    node: &GraphNode,
+) -> Result<(Vec<String>, EvidenceRecency, String), AppError> {
+    let run = store
+        .latest_collector_run("k8s")
+        .map_err(K8sCmdError::Store)?;
+    let mut gaps = Vec::new();
+    if run.as_ref().is_none_or(|run| run.status != "success") {
+        gaps.push("latest Kubernetes read was missing or incomplete".into());
+    }
+    if node.state() != NodeState::Active {
+        gaps.push(format!("{} observation is not active", node.id()));
+    }
+    let recency = run
+        .as_ref()
+        .map(|run| {
+            EvidenceRecency::from_timestamps(
+                run.ended_at_ns.min(node.last_seen().as_i64()),
+                TimestampNs::now().as_i64(),
+            )
+        })
+        .unwrap_or(EvidenceRecency::Unknown);
+    let source = run
+        .map(|run| {
+            format!(
+                "collector_run:k8s:{}",
+                run.id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unknown".into())
+            )
+        })
+        .unwrap_or_else(|| "no retained Kubernetes read".into());
+    Ok((gaps, recency, source))
+}
+
+fn readiness_known(metadata: &GraphMetadata) -> bool {
+    serde_json::from_str::<serde_json::Value>(metadata.as_str())
+        .ok()
+        .and_then(|value| {
+            value
+                .get("ready_pods_known")
+                .and_then(|value| value.as_bool())
+        })
+        == Some(true)
+}
+
+fn rollout_policy(metadata: &GraphMetadata) -> Option<RolloutPolicy> {
+    let value: serde_json::Value = serde_json::from_str(metadata.as_str()).ok()?;
+    let policy = value.get("rollout")?;
+    let desired_replicas = u32::try_from(policy.get("desired_replicas")?.as_u64()?).ok()?;
+    let is_recreate = policy.get("is_recreate")?.as_bool()?;
+    let max_unavailable = u32::try_from(policy.get("max_unavailable")?.as_u64()?).ok()?;
+    let max_surge = u32::try_from(policy.get("max_surge")?.as_u64()?).ok()?;
+    if !is_recreate && desired_replicas > 0 && max_unavailable == 0 && max_surge == 0 {
+        return None;
+    }
+    Some(RolloutPolicy {
+        desired_replicas,
+        is_recreate,
+        max_unavailable: max_unavailable.min(desired_replicas),
+        max_surge,
     })
 }
 
@@ -466,7 +577,7 @@ fn open_store(
     layout: &TwinLayout,
     config_override: Option<&std::path::Path>,
 ) -> Result<Store, AppError> {
-    let _ = layout.config_file(config_override);
+    crate::config_io::load(layout, config_override)?;
     let db_path = layout.db_file();
     if !db_path.exists() {
         return Err(K8sCmdError::DatabaseNotInitialized.into());

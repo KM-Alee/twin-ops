@@ -34,3 +34,15 @@ pub use snapshot_id::{parse_graph_ref, validate_snapshot_name, GraphRef, Snapsho
 pub use unknown_kind::UnknownKind;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+mod package_source;
+pub use package_source::PackageSource;
+
+mod transport_protocol;
+pub use transport_protocol::TransportProtocol;
+
+mod change_category;
+pub use change_category::ChangeCategory;
+
+mod network_namespace_id;
+pub use network_namespace_id::NetworkNamespaceId;

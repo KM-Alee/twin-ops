@@ -5,13 +5,42 @@ use crate::vocab::{ConfidenceHint, ObservationKind, ObservationSource};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RawIdentity {
-    Host { hostname: String },
-    Process { pid: u32 },
-    Service { unit: String },
-    TcpEndpoint { ip: String, port: u16 },
-    UnixSocket { path: String },
-    File { path: String },
-    Cgroup { path: String },
+    Host {
+        hostname: String,
+    },
+    Process {
+        pid: u32,
+    },
+    Service {
+        unit: String,
+    },
+    TcpEndpoint {
+        ip: String,
+        port: u16,
+    },
+    UdpEndpoint {
+        ip: String,
+        port: u16,
+    },
+    UnixSocket {
+        path: String,
+    },
+    NamespacedEndpoint {
+        namespace: twin_core::NetworkNamespaceId,
+        protocol: twin_core::TransportProtocol,
+        ip: String,
+        port: u16,
+    },
+    NamespacedUnixSocket {
+        namespace: twin_core::NetworkNamespaceId,
+        path: String,
+    },
+    File {
+        path: String,
+    },
+    Cgroup {
+        path: String,
+    },
 }
 
 impl RawIdentity {
@@ -20,8 +49,10 @@ impl RawIdentity {
             Self::Host { .. } => NodeKind::Host,
             Self::Process { .. } => NodeKind::Process,
             Self::Service { .. } => NodeKind::Service,
-            Self::TcpEndpoint { .. } => NodeKind::Port,
-            Self::UnixSocket { .. } => NodeKind::UnixSocket,
+            Self::TcpEndpoint { .. }
+            | Self::UdpEndpoint { .. }
+            | Self::NamespacedEndpoint { .. } => NodeKind::Port,
+            Self::UnixSocket { .. } | Self::NamespacedUnixSocket { .. } => NodeKind::UnixSocket,
             Self::File { .. } => NodeKind::File,
             Self::Cgroup { .. } => NodeKind::Cgroup,
         }

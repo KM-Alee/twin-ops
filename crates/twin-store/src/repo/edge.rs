@@ -21,6 +21,26 @@ pub struct EdgeRow {
 }
 
 impl Store {
+    pub fn reset_edge_incarnation(
+        &mut self,
+        id: &twin_core::EdgeId,
+        started_at: twin_core::TimestampNs,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "DELETE FROM edge_observations WHERE edge_id = ?1",
+                params![id.as_str()],
+            )
+            .map_err(|source| StoreError::Upsert { source })?;
+        self.conn
+            .execute(
+                "UPDATE edges SET first_seen_ns = ?2, evidence_count = 0 WHERE id = ?1",
+                params![id.as_str(), started_at.as_i64()],
+            )
+            .map_err(|source| StoreError::Upsert { source })?;
+        Ok(())
+    }
+
     pub fn upsert_edge(&mut self, edge: &EdgeRow) -> Result<(), StoreError> {
         self.conn
             .execute(

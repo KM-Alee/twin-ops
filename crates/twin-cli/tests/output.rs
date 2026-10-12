@@ -50,6 +50,7 @@ fn doctor_render_sections() {
             cli_ok: true,
             config_found: false,
             config_path: Some(PathBuf::from("/tmp/config.toml")),
+            config_error: None,
         },
         database: DoctorDatabase {
             initialized: false,
@@ -285,12 +286,61 @@ fn graph_list_render_stable() {
 }
 
 #[test]
+fn graph_list_render_names_every_supported_kind() {
+    let cases = [
+        (
+            NodeKind::File,
+            "File list",
+            "file:/etc/nginx/nginx.conf",
+            "/etc/nginx/nginx.conf",
+        ),
+        (
+            NodeKind::UnixSocket,
+            "Unix socket list",
+            "unix:/run/dbus/system_bus_socket",
+            "/run/dbus/system_bus_socket",
+        ),
+        (
+            NodeKind::Cgroup,
+            "Cgroup list",
+            "cgroup:/system.slice/nginx.service",
+            "/system.slice/nginx.service",
+        ),
+        (NodeKind::Mount, "Mount list", "mount:/var", "/var"),
+        (
+            NodeKind::Directory,
+            "Directory list",
+            "directory:/var/lib/postgresql",
+            "/var/lib/postgresql",
+        ),
+    ];
+    for (kind, title, id, label) in cases {
+        let result = GraphResult::List(GraphListResult {
+            kind,
+            nodes: vec![twin_app::GraphNodeSummary {
+                id: id.to_string(),
+                label: label.to_string(),
+            }],
+            parent_edges: vec![],
+        });
+        let text = output::graph::render(&result);
+        assert!(
+            !text.contains("Unsupported list kind"),
+            "{kind} rendered a stub: {text}"
+        );
+        assert!(text.contains(title), "missing title {title}: {text}");
+        assert!(text.contains(id), "missing node {id}: {text}");
+    }
+}
+
+#[test]
 fn doctor_render_scan_quality_degraded() {
     let result = DoctorResult {
         core: DoctorCore {
             cli_ok: true,
             config_found: true,
             config_path: Some(PathBuf::from("/tmp/config.toml")),
+            config_error: None,
         },
         database: DoctorDatabase {
             initialized: true,
@@ -328,6 +378,7 @@ fn doctor_render_ephemeral_capture_recommendation() {
             cli_ok: true,
             config_found: true,
             config_path: None,
+            config_error: None,
         },
         database: DoctorDatabase {
             initialized: true,
@@ -525,6 +576,44 @@ fn emulate_fill_disk_render_names_risk_and_affected_services() {
 }
 
 #[test]
+fn emulate_fill_disk_evidence_flag_explains_score_and_mount_unknown() {
+    let mut result = sample_emulation_result();
+    result.action = "fill-disk".to_string();
+    result.target = "mount:/var".to_string();
+    result.target_label = "/var".to_string();
+    result.risk.level = twin_core::RiskLevel::High;
+    result.evidence_strength.score = 15;
+    result.evidence_strength.label = "weak".to_string();
+    result.evidence_reasons = vec!["mount is not in the graph".to_string()];
+    result.persistent_impacts = vec![EmulationImpact {
+        id: "service:postgresql.service".to_string(),
+        label: "postgresql.service".to_string(),
+        statement: "postgresql.service uses /var/lib/postgresql".to_string(),
+        path: String::new(),
+        evidence: vec!["postgresql.service uses /var/lib/postgresql".to_string()],
+    }];
+    result.evidence_lines = vec!["postgresql.service uses /var/lib/postgresql".to_string()];
+    result.unknowns = vec![ImpactUnknown {
+        kind: "missing_evidence".to_string(),
+        detail: "target mount is not in the graph; run `twin scan` first".to_string(),
+        source: None,
+        weakens_evidence: true,
+    }];
+    let plain = output::emulate::render(&result);
+    assert!(!plain.contains("evidence score"));
+    assert!(!plain.contains("weakens evidence"));
+
+    result.show_evidence = true;
+    let text = output::emulate::render(&result);
+    assert!(text.contains("evidence score"));
+    assert!(text.contains("15/100, weak"));
+    assert!(text.contains("mount is not in the graph"));
+    assert!(text.contains("weakens evidence"));
+    assert!(text.contains("target mount is not in the graph; run `twin scan` first"));
+    assert!(text.contains("postgresql.service uses /var/lib/postgresql"));
+}
+
+#[test]
 fn graph_container_render_shows_image_port_and_mount() {
     let result = GraphResult::container(
         GraphNodeSummary {
@@ -587,6 +676,68 @@ fn emulate_container_restart_render_states_nothing_was_restarted() {
     assert!(text.contains("Nothing was restarted."));
 }
 
+fn container_restart_result() -> EmulationResult {
+    let mut result = sample_emulation_result();
+    result.target = "container:redis".to_string();
+    result.target_label = "redis".to_string();
+    result.risk.level = twin_core::RiskLevel::High;
+    result.evidence_strength.score = 80;
+    result.evidence_strength.label = "strong".to_string();
+    result.evidence_reasons = vec!["published port relationships in the current graph".to_string()];
+    result.transient_impacts = vec![EmulationImpact {
+        id: "service:api.service".to_string(),
+        label: "api.service".to_string(),
+        statement: "service:api.service connects to redis port".to_string(),
+        path: "service:api.service connects_to port:tcp:0.0.0.0:6379".to_string(),
+        evidence: vec![
+            "graph edge service:api.service|connects_to|port:tcp:0.0.0.0:6379".to_string(),
+        ],
+    }];
+    result
+}
+
+#[test]
+fn emulate_container_restart_evidence_flag_lists_port_evidence() {
+    let mut result = container_restart_result();
+    let plain = output::emulate::render(&result);
+    assert!(!plain.contains("evidence score"));
+    assert!(!plain.contains("graph edge"));
+
+    result.show_evidence = true;
+    let text = output::emulate::render(&result);
+    assert!(text.contains("evidence score"));
+    assert!(text.contains("80/100, strong"));
+    assert!(text.contains("published port relationships in the current graph"));
+    assert!(text.contains("api.service: service:api.service connects_to port:tcp:0.0.0.0:6379"));
+    assert!(text
+        .contains("api.service: graph edge service:api.service|connects_to|port:tcp:0.0.0.0:6379"));
+}
+
+#[test]
+fn emulate_container_restart_paths_render_when_requested() {
+    let mut result = container_restart_result();
+    let plain = output::emulate::render(&result);
+    assert!(!plain.contains("impact paths"));
+
+    result.paths_requested = true;
+    result.impact_paths = vec![EmulationImpactPathView {
+        terminal_id: "service:worker.service".to_string(),
+        terminal_label: "worker.service".to_string(),
+        depth: 1,
+        path_chain: "service:worker.service -> service:api.service".to_string(),
+        evidence: vec!["Observed: active connection".to_string()],
+        is_cycle_capped: false,
+        is_depth_capped: false,
+        cycle_note: None,
+    }];
+    let text = output::emulate::render(&result);
+    assert!(text.contains("impact paths"));
+    assert!(text.contains("worker.service"));
+    assert!(text.contains("service:worker.service -> service:api.service"));
+    assert!(text.contains("Observed: active connection"));
+    assert!(text.contains("Nothing was restarted."));
+}
+
 #[test]
 fn doctor_containers_render_when_docker_is_absent() {
     let mut result = sample_doctor_result();
@@ -595,11 +746,19 @@ fn doctor_containers_render_when_docker_is_absent() {
         socket_path: "/var/run/docker.sock".to_string(),
         listed: false,
         container_count: None,
+        containerd: Some(twin_app::DoctorContainerd {
+            socket_path: "/run/containerd/containerd.sock".to_string(),
+            listed: true,
+            namespace_count: Some(2),
+            detail: "read-only namespace list".to_string(),
+        }),
         detail: "socket not found; docker inspect was not attempted".to_string(),
     });
     let text = output::doctor::render(&result);
     assert!(text.contains("containers"));
     assert!(text.contains("/var/run/docker.sock"));
+    assert!(text.contains("/run/containerd/containerd.sock"));
+    assert!(text.contains("2 namespaces listed"));
     assert!(text.contains("socket not found"));
     assert!(text.contains("warn"));
 }
@@ -1162,7 +1321,7 @@ fn emulate_restart_output_has_overlay_transient_impact_and_safety_statement() {
     assert!(text.contains("transient impact"));
     assert!(text.contains("No action was performed."));
     assert!(text.contains("django.service"));
-    assert!(text.contains("direct-only scoring"));
+    assert!(text.contains("bounded dependency traversal"));
     assert!(text.contains("path"));
     assert!(text.contains("evidence"));
 }
@@ -1327,6 +1486,19 @@ fn emulate_restart_output_renders_depth_and_cycle_cap_notes() {
 fn what_changed_output_has_new_disappeared_changed_sections() {
     use twin_app::{WhatChangedNode, WhatChangedNodeDelta, WhatChangedResult};
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![twin_app::OperationalChange {
+            category: twin_core::ChangeCategory::ConfigChanged,
+            entity: "file:/etc/api.conf".parse().expect("ID"),
+            recorded_at_ns: 2,
+            class: twin_core::EdgeClass::Observed,
+            observation: "content_hash old -> new".into(),
+            source: "node_history:42".into(),
+            evidence_strength: twin_core::score_evidence(twin_core::EvidenceFactors::none())
+                .strength,
+        }],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1361,6 +1533,11 @@ fn what_changed_output_has_new_disappeared_changed_sections() {
         &result,
         output::what_changed::WhatChangedRenderOptions::concise(),
     );
+    assert!(text.contains("operational changes"));
+    assert!(text.contains("changed configs"));
+    assert!(text.contains("observed: content_hash old -> new"));
+    assert!(text.contains("node_history:42"));
+    assert!(text.contains("1970-01-01T00:00:00.000Z"));
     assert!(text.contains("twin what-changed"));
     assert!(text.contains("summary"));
     assert!(text.contains("1 new"));
@@ -1418,6 +1595,10 @@ fn diff_output_shows_direction_and_grouped_changes() {
 fn what_changed_json_is_structured() {
     use twin_app::{WhatChangedNode, WhatChangedResult};
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1448,6 +1629,10 @@ fn what_changed_json_is_structured() {
 fn what_changed_renders_readable_edges() {
     use twin_app::{WhatChangedEdge, WhatChangedResult};
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1500,6 +1685,10 @@ fn what_changed_hides_declared_depends_on_noise() {
         });
     }
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1536,6 +1725,10 @@ fn what_changed_truncates_large_sections() {
         })
         .collect();
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1568,6 +1761,10 @@ fn what_changed_truncates_large_sections() {
 fn what_changed_verbose_shows_hidden_edges() {
     use twin_app::{WhatChangedEdge, WhatChangedResult};
     let result = WhatChangedResult {
+        target: None,
+        omitted_operational_changes: 0,
+        category_filter: vec![],
+        operational_changes: vec![],
         since_ns: 1,
         since_label: "10m".to_string(),
         generated_at_ns: 2,
@@ -1830,6 +2027,7 @@ fn sample_doctor_result() -> DoctorResult {
             cli_ok: true,
             config_found: true,
             config_path: Some(PathBuf::from("/tmp/config.toml")),
+            config_error: None,
         },
         database: DoctorDatabase {
             initialized: true,
@@ -1849,4 +2047,92 @@ fn sample_doctor_result() -> DoctorResult {
         containers: None,
         k8s: None,
     }
+}
+
+#[test]
+fn graph_exports_use_safe_identifiers_and_escape_labels() {
+    use twin_app::{GraphNodeSummary, GraphParentEdge, GraphResult};
+    use twin_cli::cli::args::GraphFormat;
+    let graph = GraphResult::list(
+        twin_core::NodeKind::Process,
+        vec![
+            GraphNodeSummary {
+                id: "process:pid:1".into(),
+                label: "a\"\\b".into(),
+            },
+            GraphNodeSummary {
+                id: "process:pid:2".into(),
+                label: "[x]<y>".into(),
+            },
+        ],
+        vec![GraphParentEdge {
+            parent_id: "process:pid:1".into(),
+            child_id: "process:pid:2".into(),
+            child_label: "child".into(),
+        }],
+    );
+    let dot = output::graph_export::render(&graph, GraphFormat::Dot);
+    assert!(dot.starts_with("digraph twin {"));
+    assert!(dot.contains("n0 -> n1"));
+    assert!(dot.contains("a\\\"\\\\b"));
+    let mermaid = output::graph_export::render(&graph, GraphFormat::Mermaid);
+    assert!(mermaid.starts_with("flowchart LR"));
+    assert!(mermaid.contains("n0 -->|parent_of| n1"));
+    assert!(mermaid.contains("#91;x#93;#60;y#62;"));
+}
+
+#[test]
+fn why_renderer_separates_inference_and_observation_sources() {
+    let result = twin_app::WhyResult {
+        proof_chains: vec![],
+        target: "service:api.service".into(),
+        label: "api".into(),
+        unknowns: vec![],
+        relationships: vec![twin_app::WhyRelationship {
+            id: "service:api.service|owns|process:pid:42".into(),
+            from: "service:api.service".into(),
+            to: "process:pid:42".into(),
+            kind: "owns".into(),
+            class: "inferred".into(),
+            evidence_score: 45,
+            evidence_strength: "moderate".into(),
+            unknowns: vec![],
+            observations: vec![twin_app::WhyObservation {
+                id: "observation-id".into(),
+                source: "proc".into(),
+                kind: "process_belongs_to_cgroup".into(),
+                timestamp_ns: 100,
+                raw_ref: Some("/proc/42/cgroup".into()),
+                facts: vec!["pid=42".into()],
+            }],
+        }],
+    };
+    let text = output::why::render(&result);
+    for expected in [
+        "twin why",
+        "(inferred)",
+        "moderate (45/100)",
+        "observation-id",
+        "/proc/42/cgroup",
+        "└──",
+    ] {
+        assert!(text.contains(expected), "{expected}\n{text}");
+    }
+}
+
+#[test]
+fn container_restart_default_view_lists_transitive_overlay_effects() {
+    let mut result = container_restart_result();
+    result
+        .overlay
+        .unavailable_nodes
+        .push(twin_app::EmulationOverlayNode {
+            id: "service:frontend.service".to_string(),
+            label: "frontend.service".to_string(),
+            reason: "runtime dependency chain reaches the restarted container".to_string(),
+        });
+    let text = output::emulate::render(&result);
+    assert!(text.contains("dependency chain impact"));
+    assert!(text.contains("service:frontend.service"));
+    assert!(!text.contains("impact paths"));
 }

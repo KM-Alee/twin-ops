@@ -22,7 +22,7 @@ fn diff_at(
     request: &DiffRequest,
     db_path: &std::path::Path,
 ) -> Result<DiffResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(TemporalError::DatabaseNotInitialized.into());
     }
@@ -31,16 +31,10 @@ fn diff_at(
         return Err(TemporalError::DatabaseNotInitialized.into());
     }
 
-    let left_ref =
-        parse_graph_ref(&request.left).map_err(|source| TemporalError::InvalidGraphRef {
-            value: request.left.clone(),
-            source,
-        })?;
-    let right_ref =
-        parse_graph_ref(&request.right).map_err(|source| TemporalError::InvalidGraphRef {
-            value: request.right.clone(),
-            source,
-        })?;
+    let left_ref = parse_graph_ref(&request.left)
+        .map_err(|source| TemporalError::InvalidGraphRef { source })?;
+    let right_ref = parse_graph_ref(&request.right)
+        .map_err(|source| TemporalError::InvalidGraphRef { source })?;
 
     let left_nodes = load_nodes(&store, &left_ref)?;
     let right_nodes = load_nodes(&store, &right_ref)?;
@@ -175,7 +169,7 @@ fn diff_edge(row: &EdgeRow) -> DiffEdge {
     }
 }
 
-fn node_change_summary(before: &NodeRow, after: &NodeRow) -> Option<String> {
+pub(crate) fn node_change_summary(before: &NodeRow, after: &NodeRow) -> Option<String> {
     let mut parts = Vec::new();
     if before.label != after.label {
         parts.push(format!("label {} -> {}", before.label, after.label));
@@ -184,7 +178,40 @@ fn node_change_summary(before: &NodeRow, after: &NodeRow) -> Option<String> {
         parts.push(format!("state {} -> {}", before.state, after.state));
     }
     if before.metadata_json != after.metadata_json {
-        parts.push("metadata changed".to_string());
+        let before_meta: serde_json::Value =
+            serde_json::from_str(&before.metadata_json).unwrap_or_default();
+        let after_meta: serde_json::Value =
+            serde_json::from_str(&after.metadata_json).unwrap_or_default();
+        let mut recognized = false;
+        for (key, label) in [
+            ("version", "package version"),
+            ("content_hash", "config content fingerprint"),
+            ("active_state", "service active state"),
+            ("sub_state", "service substate"),
+            ("invocation_id", "service invocation"),
+            ("ready", "pod readiness"),
+            ("ready_pods", "service ready endpoints"),
+        ] {
+            if before_meta.get(key) != after_meta.get(key) {
+                let value = |meta: &serde_json::Value| {
+                    meta.get(key)
+                        .map(|value| match value {
+                            serde_json::Value::String(value) => value.clone(),
+                            other => other.to_string(),
+                        })
+                        .unwrap_or_else(|| "unknown".into())
+                };
+                parts.push(format!(
+                    "{label} {} -> {}",
+                    value(&before_meta),
+                    value(&after_meta)
+                ));
+                recognized = true;
+            }
+        }
+        if !recognized {
+            parts.push("metadata changed".into());
+        }
     }
     if parts.is_empty() {
         None
@@ -193,7 +220,7 @@ fn node_change_summary(before: &NodeRow, after: &NodeRow) -> Option<String> {
     }
 }
 
-fn edge_change_summary(before: &EdgeRow, after: &EdgeRow) -> Option<String> {
+pub(crate) fn edge_change_summary(before: &EdgeRow, after: &EdgeRow) -> Option<String> {
     let mut parts = Vec::new();
     if before.state != after.state {
         parts.push(format!("state {} -> {}", before.state, after.state));

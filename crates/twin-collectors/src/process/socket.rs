@@ -2,16 +2,27 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TcpTableKind {
+pub enum InetTableKind {
     Tcp,
     Tcp6,
+    Udp,
+    Udp6,
 }
 
-impl TcpTableKind {
+impl InetTableKind {
+    pub fn protocol(self) -> twin_core::TransportProtocol {
+        match self {
+            Self::Tcp | Self::Tcp6 => twin_core::TransportProtocol::Tcp,
+            Self::Udp | Self::Udp6 => twin_core::TransportProtocol::Udp,
+        }
+    }
+
     pub fn net_file_name(self) -> &'static str {
         match self {
             Self::Tcp => "tcp",
             Self::Tcp6 => "tcp6",
+            Self::Udp => "udp",
+            Self::Udp6 => "udp6",
         }
     }
 }
@@ -20,12 +31,13 @@ impl TcpTableKind {
 pub enum SocketState {
     Listen,
     Established,
+    Bound,
     Other(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TcpSocketRecord {
-    pub table: TcpTableKind,
+pub struct InetSocketRecord {
+    pub table: InetTableKind,
     pub local_ip: String,
     pub local_port: u16,
     pub state: SocketState,
@@ -34,8 +46,8 @@ pub struct TcpSocketRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TcpConnectionRecord {
-    pub table: TcpTableKind,
+pub struct InetConnectionRecord {
+    pub table: InetTableKind,
     pub local_ip: String,
     pub local_port: u16,
     pub remote_ip: String,
@@ -51,24 +63,25 @@ pub struct SocketOwner {
     pub fd: u32,
     pub inode: u64,
     pub fd_path: String,
+    pub is_fdinfo_verified: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseTcpWarning {
-    pub table: TcpTableKind,
+pub struct ParseInetWarning {
+    pub table: InetTableKind,
     pub line: usize,
     pub detail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TcpTableParse {
-    pub listeners: Vec<TcpSocketRecord>,
-    pub connections: Vec<TcpConnectionRecord>,
-    pub warnings: Vec<ParseTcpWarning>,
+pub struct InetTableParse {
+    pub listeners: Vec<InetSocketRecord>,
+    pub connections: Vec<InetConnectionRecord>,
+    pub warnings: Vec<ParseInetWarning>,
 }
 
-pub fn parse_tcp_table(table: TcpTableKind, content: &str) -> TcpTableParse {
-    let mut result = TcpTableParse::default();
+pub fn parse_inet_table(table: InetTableKind, content: &str) -> InetTableParse {
+    let mut result = InetTableParse::default();
     for (idx, line) in content.lines().enumerate() {
         if idx == 0 {
             continue;
@@ -78,11 +91,11 @@ pub fn parse_tcp_table(table: TcpTableKind, content: &str) -> TcpTableParse {
         if trimmed.is_empty() {
             continue;
         }
-        match parse_tcp_line(table, trimmed, line_no) {
-            Ok(Some(TcpParsedRow::Listener(record))) => result.listeners.push(record),
-            Ok(Some(TcpParsedRow::Connection(record))) => result.connections.push(record),
+        match parse_inet_line(table, trimmed, line_no) {
+            Ok(Some(InetParsedRow::Listener(record))) => result.listeners.push(record),
+            Ok(Some(InetParsedRow::Connection(record))) => result.connections.push(record),
             Ok(None) => {}
-            Err(detail) => result.warnings.push(ParseTcpWarning {
+            Err(detail) => result.warnings.push(ParseInetWarning {
                 table,
                 line: line_no,
                 detail,
@@ -92,16 +105,16 @@ pub fn parse_tcp_table(table: TcpTableKind, content: &str) -> TcpTableParse {
     result
 }
 
-enum TcpParsedRow {
-    Listener(TcpSocketRecord),
-    Connection(TcpConnectionRecord),
+enum InetParsedRow {
+    Listener(InetSocketRecord),
+    Connection(InetConnectionRecord),
 }
 
-fn parse_tcp_line(
-    table: TcpTableKind,
+fn parse_inet_line(
+    table: InetTableKind,
     line: &str,
     raw_line: usize,
-) -> Result<Option<TcpParsedRow>, String> {
+) -> Result<Option<InetParsedRow>, String> {
     let mut fields = line.split_whitespace();
     let _sl = fields.next().ok_or_else(|| "missing sl".to_string())?;
     let local = fields
@@ -123,23 +136,33 @@ fn parse_tcp_line(
     let inode = inode_str
         .parse::<u64>()
         .map_err(|e| format!("invalid inode: {e}"))?;
-    let state = parse_state(state_hex)?;
+    let state = if table.protocol() == twin_core::TransportProtocol::Udp {
+        match state_hex {
+            "07" => SocketState::Bound,
+            "01" => SocketState::Established,
+            _ => return Ok(None),
+        }
+    } else {
+        parse_state(state_hex)?
+    };
     let (local_ip, local_port) = parse_endpoint(table, local)?;
     match state {
-        SocketState::Listen => Ok(Some(TcpParsedRow::Listener(TcpSocketRecord {
-            table,
-            local_ip,
-            local_port,
-            state,
-            inode,
-            raw_line,
-        }))),
+        SocketState::Listen | SocketState::Bound => {
+            Ok(Some(InetParsedRow::Listener(InetSocketRecord {
+                table,
+                local_ip,
+                local_port,
+                state,
+                inode,
+                raw_line,
+            })))
+        }
         SocketState::Established => {
             if is_empty_remote(table, remote) {
                 return Ok(None);
             }
             let (remote_ip, remote_port) = parse_endpoint(table, remote)?;
-            Ok(Some(TcpParsedRow::Connection(TcpConnectionRecord {
+            Ok(Some(InetParsedRow::Connection(InetConnectionRecord {
                 table,
                 local_ip,
                 local_port,
@@ -163,22 +186,22 @@ fn parse_state(hex: &str) -> Result<SocketState, String> {
     }
 }
 
-fn parse_endpoint(table: TcpTableKind, endpoint: &str) -> Result<(String, u16), String> {
+fn parse_endpoint(table: InetTableKind, endpoint: &str) -> Result<(String, u16), String> {
     let (ip_hex, port_hex) = endpoint
         .split_once(':')
         .ok_or_else(|| "invalid address:port".to_string())?;
     let port = u16::from_str_radix(port_hex, 16).map_err(|e| format!("invalid port: {e}"))?;
     let ip = match table {
-        TcpTableKind::Tcp => parse_ipv4_hex(ip_hex)?,
-        TcpTableKind::Tcp6 => parse_ipv6_hex(ip_hex)?,
+        InetTableKind::Tcp | InetTableKind::Udp => parse_ipv4_hex(ip_hex)?,
+        InetTableKind::Tcp6 | InetTableKind::Udp6 => parse_ipv6_hex(ip_hex)?,
     };
     Ok((ip, port))
 }
 
-fn is_empty_remote(table: TcpTableKind, remote: &str) -> bool {
+fn is_empty_remote(table: InetTableKind, remote: &str) -> bool {
     match table {
-        TcpTableKind::Tcp => remote == "00000000:0000",
-        TcpTableKind::Tcp6 => {
+        InetTableKind::Tcp | InetTableKind::Udp => remote == "00000000:0000",
+        InetTableKind::Tcp6 | InetTableKind::Udp6 => {
             remote == "00000000000000000000000000000000:0000"
                 || remote.starts_with("00000000000000000000000000000000:")
         }
@@ -186,7 +209,7 @@ fn is_empty_remote(table: TcpTableKind, remote: &str) -> bool {
 }
 
 fn parse_ipv4_hex(hex: &str) -> Result<String, String> {
-    if hex.len() != 8 {
+    if hex.len() != 8 || !hex.is_ascii() {
         return Err(format!("expected 8 hex digits for IPv4, got {}", hex.len()));
     }
     let mut octets = [0u8; 4];
@@ -199,7 +222,7 @@ fn parse_ipv4_hex(hex: &str) -> Result<String, String> {
 }
 
 fn parse_ipv6_hex(hex: &str) -> Result<String, String> {
-    if hex.len() != 32 {
+    if hex.len() != 32 || !hex.is_ascii() {
         return Err(format!(
             "expected 32 hex digits for IPv6, got {}",
             hex.len()
@@ -242,7 +265,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 12345 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp, &content);
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         assert_eq!(parsed.listeners.len(), 1);
         assert_eq!(parsed.connections.len(), 0);
@@ -257,7 +280,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 0100007F:C3CA 0100007F:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 456 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp, &content);
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         assert_eq!(parsed.listeners.len(), 0);
         assert_eq!(parsed.connections.len(), 1);
@@ -275,7 +298,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 00000000:0050 00000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 99 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp, &content);
         assert_eq!(parsed.listeners[0].local_ip, "0.0.0.0");
         assert_eq!(parsed.listeners[0].local_port, 80);
     }
@@ -285,7 +308,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 0100007F:1538 0100007F:0050 02 00000000:00000000 00000000:00000000  00000000       0        0 1 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp, &content);
         assert!(parsed.listeners.is_empty());
         assert!(parsed.connections.is_empty());
     }
@@ -293,7 +316,7 @@ mod tests {
     #[test]
     fn malformed_row_is_warning_not_panic() {
         let content = format!("{TCP_HEADER}\n   0: badaddr 00000000:0000 0A");
-        let parsed = parse_tcp_table(TcpTableKind::Tcp, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp, &content);
         assert!(parsed.listeners.is_empty());
         assert_eq!(parsed.warnings.len(), 1);
     }
@@ -303,7 +326,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 00000000000000000000000001000000:1538 00000000000000000000000000000000:0000 0A 00000000:00000000 00000000:00000000  00000000       0        0 54321 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp6, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp6, &content);
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         assert_eq!(parsed.listeners.len(), 1);
         assert_eq!(parsed.listeners[0].local_ip, "::1");
@@ -315,7 +338,7 @@ mod tests {
         let content = format!(
             "{TCP_HEADER}\n   0: 00000000000000000000000001000000:C453 00000000000000000000000001000000:1538 01 00000000:00000000 00000000:00000000  00000000       0        0 789 1 0000000000000000 100 0 0 10 0"
         );
-        let parsed = parse_tcp_table(TcpTableKind::Tcp6, &content);
+        let parsed = parse_inet_table(InetTableKind::Tcp6, &content);
         assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
         assert_eq!(parsed.connections.len(), 1);
         assert_eq!(parsed.connections[0].remote_ip, "::1");

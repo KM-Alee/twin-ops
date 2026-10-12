@@ -25,21 +25,20 @@ pub fn emulate_restart_service(input: RestartServiceInput) -> EmulationDomainRep
         &input.unknowns,
         input.path_scoring.as_ref(),
     );
-    let path_evidence: Vec<_> = if input.paths_requested {
-        input
-            .impact_paths
-            .iter()
-            .flat_map(|path| path.evidence.iter())
-            .cloned()
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let path_evidence: Vec<_> = input
+        .impact_paths
+        .iter()
+        .flat_map(|path| path.evidence.iter())
+        .cloned()
+        .collect();
+    let mut adjustments =
+        adjustments_from(input.permission_gaps, input.dropped_ebpf, input.recency);
+    adjustments.conflicting = input.has_conflicting_evidence;
     let evidence = score_restart_evidence(
         &input.runtime_dependents,
         &input.unknowns,
         &path_evidence,
-        adjustments_from(input.permission_gaps, input.dropped_ebpf, input.recency),
+        adjustments,
     );
 
     let transient_impacts = input
@@ -143,13 +142,39 @@ fn build_overlay(input: &RestartServiceInput) -> GraphOverlay {
         };
         interrupted_relationships.push(InterruptedRelationship {
             edge_id: step.edge_id.clone(),
-            from: dependent.id.clone(),
-            to: target_id.clone(),
-            kind: EdgeKind::DependsOn,
+            from: step.from_id.clone(),
+            to: step.to_id.clone(),
+            kind: step.edge_kind,
             reason: runtime_interrupted_reason(&dependent.label, &target_label),
         });
     }
 
+    for path in &input.impact_paths {
+        for step in &path.steps {
+            if step.from_id != target_id && seen_nodes.insert(step.from_id.to_string()) {
+                node_overrides.push(NodeOverlay {
+                    node_id: step.from_id.clone(),
+                    state: OverlayNodeState::TemporarilyUnavailable,
+                    reason: format!(
+                        "{} may be unavailable through its runtime dependency chain",
+                        step.from_label
+                    ),
+                });
+            }
+            if !interrupted_relationships
+                .iter()
+                .any(|relationship| relationship.edge_id == step.edge_id)
+            {
+                interrupted_relationships.push(InterruptedRelationship {
+                    edge_id: step.edge_id.clone(),
+                    from: step.from_id.clone(),
+                    to: step.to_id.clone(),
+                    kind: step.edge_kind,
+                    reason: runtime_interrupted_reason(&step.from_label, &step.to_label),
+                });
+            }
+        }
+    }
     node_overrides.sort_by(|a, b| a.node_id.as_str().cmp(b.node_id.as_str()));
     interrupted_relationships.sort_by(|a, b| a.edge_id.as_str().cmp(b.edge_id.as_str()));
 

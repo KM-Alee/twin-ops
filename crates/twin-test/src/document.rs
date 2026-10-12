@@ -12,6 +12,7 @@ pub struct TestDocument {
     pub name: String,
     pub checks: Vec<TestCheck>,
     pub default_min_evidence: Option<EvidenceLabel>,
+    pub fail_on_unknown: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -28,6 +29,24 @@ pub enum CheckKind {
     Node(NodeId),
     Port(NodeId),
     Service(NodeId),
+    ServiceState {
+        service: NodeId,
+        active_state: String,
+    },
+    Listener {
+        port: NodeId,
+        owned_by: NodeId,
+    },
+    ContainerHealth {
+        container: NodeId,
+        running: bool,
+        healthy: bool,
+    },
+    K8sReady {
+        deployment: NodeId,
+        min_ready: Option<u32>,
+        routed_service: Option<NodeId>,
+    },
     Dependency {
         from: NodeId,
         to: NodeId,
@@ -41,6 +60,7 @@ pub enum CheckKind {
     Outbound {
         allowed: Vec<String>,
         fail_on_unknown: bool,
+        from: Option<NodeId>,
     },
     Disk {
         mount: String,
@@ -104,10 +124,16 @@ fn compile(raw: RawDocument, path: &Path) -> Result<TestDocument, TestError> {
     if raw.checks.is_empty() {
         return Err(invalid(path, "checks must not be empty"));
     }
-    let default_min_evidence = match raw.defaults {
-        Some(defaults) => Some(parse_label(path, &defaults.min_evidence)?),
-        None => None,
-    };
+    let fail_on_unknown = raw
+        .defaults
+        .as_ref()
+        .is_some_and(|defaults| defaults.fail_on_unknown);
+    let default_min_evidence = raw
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.min_evidence.as_deref())
+        .map(|label| parse_label(path, label))
+        .transpose()?;
     let mut checks = Vec::new();
     let mut seen = Vec::new();
     for check in raw.checks {
@@ -128,6 +154,7 @@ fn compile(raw: RawDocument, path: &Path) -> Result<TestDocument, TestError> {
         name: name.to_string(),
         checks,
         default_min_evidence,
+        fail_on_unknown,
     })
 }
 
@@ -209,6 +236,9 @@ fn compile_assert(path: &Path, name: &str, assert: RawAssert) -> Result<TestChec
         assert.node.is_some(),
         assert.port.is_some(),
         assert.service.is_some(),
+        assert.listener.is_some(),
+        assert.container.is_some(),
+        assert.k8s_ready.is_some(),
         assert.dependency.is_some(),
         assert.outbound_endpoints.is_some(),
         assert.disk.is_some(),
@@ -226,6 +256,9 @@ fn compile_assert(path: &Path, name: &str, assert: RawAssert) -> Result<TestChec
         ));
     }
     let exists = assert.exists.unwrap_or(true);
+    if assert.active_state.is_some() && assert.service.is_none() {
+        return Err(invalid(path, "active_state requires service"));
+    }
     if assert.dependency.is_none() && assert.min_evidence.is_some() {
         return Err(invalid(
             path,
@@ -245,7 +278,80 @@ fn compile_assert(path: &Path, name: &str, assert: RawAssert) -> Result<TestChec
     } else if let Some(id) = assert.service {
         let id = parse_id(path, name, &id)?;
         require_kind(path, name, &id, NodeKind::Service, "service")?;
-        CheckKind::Service(id)
+        if let Some(active_state) = assert.active_state {
+            if !matches!(
+                active_state.as_str(),
+                "active"
+                    | "inactive"
+                    | "failed"
+                    | "activating"
+                    | "deactivating"
+                    | "reloading"
+                    | "maintenance"
+                    | "refreshing"
+            ) {
+                return Err(invalid(path, "unsupported service active_state"));
+            }
+            if !exists {
+                return Err(invalid(
+                    path,
+                    "active_state cannot be combined with exists: false",
+                ));
+            }
+            CheckKind::ServiceState {
+                service: id,
+                active_state,
+            }
+        } else {
+            CheckKind::Service(id)
+        }
+    } else if let Some(listener) = assert.listener {
+        let port = parse_id(path, name, &listener.port)?;
+        require_kind(path, name, &port, NodeKind::Port, "listener port")?;
+        let owned_by = parse_id(path, name, &listener.owned_by)?;
+        if !matches!(
+            owned_by.kind(),
+            Some(NodeKind::Service | NodeKind::Process | NodeKind::Container)
+        ) {
+            return Err(invalid(
+                path,
+                "listener owner must be service, process, or container",
+            ));
+        }
+        CheckKind::Listener { port, owned_by }
+    } else if let Some(container) = assert.container {
+        if !exists {
+            return Err(invalid(path, "container health cannot use exists: false"));
+        }
+        let id = parse_id(path, name, &container.id)?;
+        require_kind(path, name, &id, NodeKind::Container, "container")?;
+        CheckKind::ContainerHealth {
+            container: id,
+            running: container.running,
+            healthy: container.healthy,
+        }
+    } else if let Some(ready) = assert.k8s_ready {
+        if !exists {
+            return Err(invalid(
+                path,
+                "Kubernetes readiness cannot use exists: false",
+            ));
+        }
+        let id = parse_id(path, name, &ready.deployment)?;
+        require_kind(path, name, &id, NodeKind::K8sDeployment, "deployment")?;
+        let routed_service = ready
+            .routed_service
+            .as_deref()
+            .map(|value| parse_id(path, name, value))
+            .transpose()?;
+        if let Some(service) = &routed_service {
+            require_kind(path, name, service, NodeKind::K8sService, "routed_service")?;
+        }
+        CheckKind::K8sReady {
+            deployment: id,
+            min_ready: ready.min_ready,
+            routed_service,
+        }
     } else if let Some(dependency) = assert.dependency {
         CheckKind::Dependency {
             from: parse_id(path, name, &dependency.from)?,
@@ -261,6 +367,11 @@ fn compile_assert(path: &Path, name: &str, assert: RawAssert) -> Result<TestChec
         CheckKind::Outbound {
             allowed: outbound.allowed,
             fail_on_unknown: outbound.fail_on_unknown,
+            from: outbound
+                .from
+                .as_deref()
+                .map(|id| parse_id(path, name, id))
+                .transpose()?,
         }
     } else if let Some(disk) = assert.disk {
         let mount = disk.mount.trim();
@@ -368,7 +479,10 @@ struct RawDocument {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawDefaults {
-    min_evidence: String,
+    #[serde(default)]
+    min_evidence: Option<String>,
+    #[serde(default)]
+    fail_on_unknown: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -392,6 +506,14 @@ struct RawAssert {
     port: Option<String>,
     #[serde(default)]
     service: Option<String>,
+    #[serde(default)]
+    active_state: Option<String>,
+    #[serde(default)]
+    listener: Option<RawListener>,
+    #[serde(default)]
+    container: Option<RawContainerHealth>,
+    #[serde(default)]
+    k8s_ready: Option<RawK8sReady>,
     #[serde(default)]
     dependency: Option<RawDependency>,
     #[serde(default)]
@@ -423,7 +545,16 @@ struct RawExpect {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawListener {
+    port: String,
+    owned_by: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawOutbound {
+    #[serde(default)]
+    from: Option<String>,
     allowed: Vec<String>,
     #[serde(default)]
     fail_on_unknown: bool,
@@ -450,4 +581,28 @@ struct RawUnknowns {
 struct RawDependency {
     from: String,
     to: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawContainerHealth {
+    id: String,
+    #[serde(default = "true_value")]
+    running: bool,
+    #[serde(default)]
+    healthy: bool,
+}
+
+fn true_value() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawK8sReady {
+    deployment: String,
+    #[serde(default)]
+    min_ready: Option<u32>,
+    #[serde(default)]
+    routed_service: Option<String>,
 }

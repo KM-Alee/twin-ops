@@ -24,6 +24,7 @@ fn doctor_with(ebpf: DoctorEbpf) -> DoctorResult {
             cli_ok: true,
             config_found: true,
             config_path: Some(PathBuf::from("/tmp/config.toml")),
+            config_error: None,
         },
         database: DoctorDatabase {
             initialized: true,
@@ -116,6 +117,7 @@ fn watch_exec_line_and_tick_summary() {
     assert_eq!(exec, "[exec] process:pid:4421 curl");
 
     let quiet = output::watch::render_tick(&WatchTick {
+        collector_timings_ms: Default::default(),
         at_ns: 0,
         baseline: false,
         processes: 2,
@@ -131,6 +133,7 @@ fn watch_exec_line_and_tick_summary() {
     assert_eq!(quiet, "[00:00:00] no significant changes");
 
     let changed = output::watch::render_tick(&WatchTick {
+        collector_timings_ms: Default::default(),
         at_ns: 0,
         baseline: false,
         processes: 3,

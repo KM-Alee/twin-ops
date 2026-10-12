@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::Serialize;
 use twin_core::{EvidenceLabel, RiskLevel};
 
@@ -36,6 +38,28 @@ pub struct TestRunReport {
     pub passed: u32,
     pub warned: u32,
     pub failed: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<EvaluationContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<BaselineComparison>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EvaluationContext {
+    pub evaluated_at_ns: i64,
+    pub graph_observed_at_ns: Option<i64>,
+    pub snapshot: Option<String>,
+    pub max_age_seconds: Option<u64>,
+    pub live_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BaselineComparison {
+    pub snapshot: String,
+    pub newly_failing: Vec<String>,
+    pub newly_uncertain: Vec<String>,
+    pub recovered: Vec<String>,
+    pub checks: Vec<CheckResult>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +74,7 @@ pub struct EdgeFact {
     pub to: String,
     pub kind: String,
     pub evidence: EvidenceLabel,
+    pub supporting_observations: usize,
     pub stale: bool,
 }
 
@@ -57,6 +82,8 @@ pub struct EdgeFact {
 pub struct EndpointFact {
     pub endpoint: String,
     pub evidence: String,
+    pub from: String,
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +94,7 @@ pub struct DiskFact {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownFact {
+    pub source: Option<crate::coverage::FactSource>,
     pub kind: String,
     pub detail: String,
 }
@@ -78,11 +106,23 @@ pub struct EmulationFact {
     pub risk: RiskLevel,
     pub evidence_label: String,
     pub evidence: Vec<String>,
+    pub supporting_observations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceFact {
+    pub id: String,
+    pub active_state: Option<String>,
+    pub stale: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct GraphFacts {
     pub nodes: Vec<NodeFact>,
+    pub services: Vec<ServiceFact>,
+    pub containers: Vec<crate::health::ContainerFact>,
+    pub workloads: Vec<crate::health::K8sReadyFact>,
+    pub routing: Vec<crate::health::RoutingFact>,
     pub edges: Vec<EdgeFact>,
     pub endpoints: Vec<EndpointFact>,
     pub disks: Vec<DiskFact>,
@@ -112,14 +152,49 @@ pub fn evaluate(document: &TestDocument, facts: &GraphFacts) -> TestRunReport {
         passed,
         warned,
         failed,
+        context: None,
+        baseline: None,
     }
 }
 
 fn evaluate_check(document: &TestDocument, check: &TestCheck, facts: &GraphFacts) -> CheckResult {
-    match &check.kind {
+    let mut result = match &check.kind {
         CheckKind::Node(id) | CheckKind::Port(id) | CheckKind::Service(id) => {
             node_result(&check.name, id.as_str(), check.exists, facts)
         }
+        CheckKind::ServiceState {
+            service,
+            active_state,
+        } => service_state_result(&check.name, service.as_str(), active_state, facts),
+        CheckKind::Listener { port, owned_by } => listener_result(
+            &check.name,
+            port.as_str(),
+            owned_by.as_str(),
+            check.exists,
+            facts,
+        ),
+        CheckKind::ContainerHealth {
+            container,
+            running,
+            healthy,
+        } => crate::health::container_result(
+            &check.name,
+            container.as_str(),
+            *running,
+            *healthy,
+            facts,
+        ),
+        CheckKind::K8sReady {
+            deployment,
+            min_ready,
+            routed_service,
+        } => crate::health::k8s_result(
+            &check.name,
+            deployment.as_str(),
+            *min_ready,
+            routed_service.as_ref().map(|id| id.as_str()),
+            facts,
+        ),
         CheckKind::Dependency { from, to } => dependency_result(
             &check.name,
             from.as_str(),
@@ -144,7 +219,14 @@ fn evaluate_check(document: &TestDocument, check: &TestCheck, facts: &GraphFacts
         CheckKind::Outbound {
             allowed,
             fail_on_unknown,
-        } => outbound_result(&check.name, allowed, *fail_on_unknown, facts),
+            from,
+        } => outbound_result(
+            &check.name,
+            allowed,
+            *fail_on_unknown,
+            from.as_ref().map(|id| id.as_str()),
+            facts,
+        ),
         CheckKind::Disk {
             mount,
             max_used_percent,
@@ -152,7 +234,17 @@ fn evaluate_check(document: &TestDocument, check: &TestCheck, facts: &GraphFacts
         CheckKind::Unknowns { max_count, forbid } => {
             unknowns_result(&check.name, *max_count, forbid, facts)
         }
+    };
+    if document.fail_on_unknown
+        && result.status == CheckStatus::Warn
+        && result
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.starts_with("Unknown:"))
+    {
+        result.status = CheckStatus::Fail;
     }
+    result
 }
 
 fn node_result(name: &str, id: &str, exists: bool, facts: &GraphFacts) -> CheckResult {
@@ -170,6 +262,11 @@ fn node_result(name: &str, id: &str, exists: bool, facts: &GraphFacts) -> CheckR
             CheckStatus::Fail,
             Some(format!("{id} is not in the graph")),
             None,
+        ),
+        None if crate::coverage::has_node_gaps(facts, id) => unknown(
+            name,
+            "absence cannot be established with incomplete coverage",
+            facts,
         ),
         None => pass(name),
     }
@@ -196,6 +293,14 @@ fn dependency_result(
                 CheckStatus::Fail,
                 Some(format!("no dependency from {from} to {to}")),
                 None,
+            )
+        } else if crate::coverage::has_node_gaps(facts, from)
+            || crate::coverage::has_node_gaps(facts, to)
+        {
+            unknown(
+                name,
+                "dependency absence cannot be established with incomplete coverage",
+                facts,
             )
         } else {
             pass(name)
@@ -227,6 +332,13 @@ fn dependency_result(
                 Some(format!("evidence is {}", best.evidence)),
             );
         }
+    }
+    if best.supporting_observations == 0 {
+        return unknown(
+            name,
+            "dependency supporting observations are not retained",
+            facts,
+        );
     }
     if best.stale {
         return outcome(
@@ -267,7 +379,7 @@ fn emulate_result(
     };
     let risk_line = format!("Risk: {}", fact.risk.to_string().to_ascii_uppercase());
     let evidence = emulation_evidence(fact);
-    if require_evidence && evidence.is_none() {
+    if require_evidence && fact.supporting_observations == 0 {
         return outcome(
             name,
             CheckStatus::Fail,
@@ -305,14 +417,44 @@ fn outbound_result(
     name: &str,
     allowed: &[String],
     fail_on_unknown: bool,
+    from: Option<&str>,
     facts: &GraphFacts,
 ) -> CheckResult {
+    if let Some(from) = from {
+        if !facts
+            .nodes
+            .iter()
+            .any(|node| node.id == from && !node.stale)
+        {
+            let mut result = unknown(name, "outbound workload is missing or stale", facts);
+            if fail_on_unknown {
+                result.status = CheckStatus::Fail;
+            }
+            return result;
+        }
+    }
     let unexpected: Vec<&EndpointFact> = facts
         .endpoints
         .iter()
-        .filter(|fact| !allowed.iter().any(|item| item == &fact.endpoint))
+        .filter(|fact| from.is_none_or(|from| from == fact.from))
+        .filter(|fact| {
+            !allowed
+                .iter()
+                .any(|item| endpoint_matches(item, &fact.endpoint))
+        })
         .collect();
     if unexpected.is_empty() {
+        let stale = facts
+            .endpoints
+            .iter()
+            .any(|fact| from.is_none_or(|from| from == fact.from) && fact.stale);
+        if stale || crate::coverage::has_network_gaps(facts, from) {
+            let mut result = unknown(name, "outbound coverage is incomplete or stale", facts);
+            if fail_on_unknown {
+                result.status = CheckStatus::Fail;
+            }
+            return result;
+        }
         return pass(name);
     }
     let listed = unexpected
@@ -322,8 +464,10 @@ fn outbound_result(
         .join(", ");
     let evidence = unexpected
         .iter()
-        .map(|fact| fact.evidence.as_str())
+        .flat_map(|fact| fact.evidence.split("; "))
         .filter(|line| !line.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect::<Vec<_>>()
         .join("; ");
     let status = if fail_on_unknown {
@@ -430,11 +574,11 @@ fn unknowns_result(
     pass(name)
 }
 
-fn pass(name: &str) -> CheckResult {
+pub(crate) fn pass(name: &str) -> CheckResult {
     outcome(name, CheckStatus::Pass, None, None)
 }
 
-fn outcome(
+pub(crate) fn outcome(
     name: &str,
     status: CheckStatus,
     detail: Option<String>,
@@ -464,5 +608,108 @@ fn evidence_rank(label: EvidenceLabel) -> u8 {
         EvidenceLabel::Moderate => 1,
         EvidenceLabel::Strong => 2,
         EvidenceLabel::VeryStrong => 3,
+    }
+}
+
+fn endpoint_matches(allowed: &str, endpoint: &str) -> bool {
+    if allowed.starts_with("tcp:") || allowed.starts_with("udp:") {
+        allowed == endpoint
+    } else {
+        allowed
+            == endpoint
+                .strip_prefix("tcp:")
+                .or_else(|| endpoint.strip_prefix("udp:"))
+                .unwrap_or(endpoint)
+    }
+}
+
+pub(crate) fn unknown(name: &str, detail: &str, facts: &GraphFacts) -> CheckResult {
+    outcome(
+        name,
+        CheckStatus::Warn,
+        Some(format!("Unknown: {detail}")),
+        Some(
+            facts
+                .unknowns
+                .iter()
+                .map(|fact| fact.detail.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ),
+    )
+}
+
+fn service_state_result(name: &str, id: &str, expected: &str, facts: &GraphFacts) -> CheckResult {
+    match facts.services.iter().find(|fact| fact.id == id) {
+        Some(fact) if !fact.stale && fact.active_state.as_deref() == Some(expected) => outcome(
+            name,
+            CheckStatus::Pass,
+            None,
+            Some(format!(
+                "systemd runtime state observed: {id} active_state={expected}"
+            )),
+        ),
+        Some(fact) if fact.stale || fact.active_state.is_none() => {
+            unknown(name, "service runtime state is unavailable or stale", facts)
+        }
+        Some(fact) => outcome(
+            name,
+            CheckStatus::Fail,
+            Some(format!(
+                "{id} active_state is {}, expected {expected}",
+                fact.active_state.as_deref().unwrap_or("unknown")
+            )),
+            None,
+        ),
+        None => unknown(name, "service runtime state is not observed", facts),
+    }
+}
+
+fn listener_result(
+    name: &str,
+    port: &str,
+    owner: &str,
+    exists: bool,
+    facts: &GraphFacts,
+) -> CheckResult {
+    let matches = facts
+        .edges
+        .iter()
+        .filter(|edge| edge.from == owner && edge.to == port && edge.kind == "listens_on")
+        .collect::<Vec<_>>();
+    if matches
+        .iter()
+        .any(|edge| !edge.stale && edge.supporting_observations > 0)
+    {
+        return if exists {
+            let best = matches
+                .iter()
+                .filter(|edge| !edge.stale && edge.supporting_observations > 0)
+                .max_by_key(|edge| evidence_rank(edge.evidence));
+            outcome(name,CheckStatus::Pass,None,best.map(|edge| format!("socket ownership observed: {owner} listens on {port}; {} supporting observations; evidence {}",edge.supporting_observations,edge.evidence)))
+        } else {
+            outcome(
+                name,
+                CheckStatus::Fail,
+                Some(format!("{owner} listens on {port}")),
+                None,
+            )
+        };
+    }
+    if !matches.is_empty()
+        || crate::coverage::has_node_gaps(facts, port)
+        || crate::coverage::has_node_gaps(facts, owner)
+    {
+        return unknown(name, "listener ownership is unavailable or stale", facts);
+    }
+    if exists {
+        outcome(
+            name,
+            CheckStatus::Fail,
+            Some(format!("no observed listener {port} owned by {owner}")),
+            None,
+        )
+    } else {
+        pass(name)
     }
 }

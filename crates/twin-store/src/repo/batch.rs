@@ -3,12 +3,41 @@ use std::collections::HashMap;
 use rusqlite::{params, Row};
 
 use crate::error::StoreError;
-use crate::repo::{NodeRow, ObservationRow};
+use crate::repo::{EdgeRow, NodeRow, ObservationRow};
 use crate::store::Store;
 
 const BATCH_CHUNK: usize = 500;
 
 impl Store {
+    pub fn list_active_edges_to_nodes(
+        &self,
+        node_ids: &[&str],
+    ) -> Result<HashMap<String, Vec<EdgeRow>>, StoreError> {
+        let mut ids = node_ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut edges: HashMap<String, Vec<EdgeRow>> = HashMap::new();
+        for chunk in ids.chunks(BATCH_CHUNK) {
+            let placeholders = vec!["?"; chunk.len()].join(",");
+            let sql = format!("SELECT id, from_node_id, to_node_id, kind, class, state, evidence_score, evidence_label, evidence_count, first_seen_ns, last_seen_ns, metadata_json FROM edges WHERE state = 'active' AND to_node_id IN ({placeholders}) ORDER BY id");
+            let mut statement = self
+                .conn
+                .prepare(&sql)
+                .map_err(|source| StoreError::Query { source })?;
+            let rows = statement
+                .query_map(
+                    rusqlite::params_from_iter(chunk.iter()),
+                    super::edge::row_from_edge,
+                )
+                .map_err(|source| StoreError::Query { source })?;
+            for row in rows {
+                let edge = row.map_err(|source| StoreError::Query { source })?;
+                edges.entry(edge.to_node_id.clone()).or_default().push(edge);
+            }
+        }
+        Ok(edges)
+    }
+
     pub fn count_nodes_by_kind(&self, kind: &str) -> Result<i64, StoreError> {
         self.conn
             .query_row(

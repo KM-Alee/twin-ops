@@ -49,7 +49,10 @@ pub(crate) fn persist_socket_activation_in_scan(
                     scan_time,
                     existing,
                     unit_path,
-                )
+                ).with_metadata(twin_core::GraphMetadata::from_json(serde_json::json!({
+                    "source": obs.source().to_string(), "socket_activation": true,
+                    "unit_path": unit_path, "accept": obs.metadata().get("accept").and_then(|value| value.as_bool()),
+                }).to_string()))
             },
         )?;
         if seen_service_depends.insert((socket_id.clone(), service_id.clone())) {
@@ -93,6 +96,8 @@ fn upsert_service_unit_node(
 fn service_unit_metadata(unit: &str, existing: Option<&GraphNode>) -> GraphMetadata {
     let unit_type = if unit.ends_with(".socket") {
         "socket"
+    } else if unit.ends_with("@.service") {
+        "service_template"
     } else {
         "service"
     };

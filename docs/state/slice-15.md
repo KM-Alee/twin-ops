@@ -20,7 +20,7 @@
   - when that process already has a service `OWNS` edge, service `CONNECTS_TO` the listener service if an existing `LISTENS_ON` matches the remote port (same wildcard candidates as the socket-table path), otherwise the remote port
 - Evidence stays on the existing labels. Two or more stored eBPF connects → `EvidenceStrength::very_strong`. One eBPF connect, or a socket-table connection with no eBPF connects → `strong`. A config-only dependency → `moderate`. An `ebpf_tcp` dropped-event observation steps an eBPF claim down one label (`very_strong` → `strong`). Socket-table edges with no eBPF connects stay `strong`.
 - `twin graph <service> --evidence` adds a runtime dependency section in text and JSON. Without `--evidence` that section is omitted.
-- Impact and emulate read an incoming service `CONNECTS_TO` edge in the existing direct-dependent evidence section and print the eBPF reason. Path walking and overlay actions are unchanged.
+- Impact and emulate read an incoming service `CONNECTS_TO` edge in the existing direct-dependent evidence section and print the eBPF reason. Service CONNECTS_TO now participates in bounded transitive path walking and restart overlays.
 - `twin watch --ebpf --events tcp` prints `[tcp] process:pid:… connect|accept|bind <endpoint>` beside tick summaries. `--events exec` is unchanged. `--ebpf` with no `--events` still means exec. Any other name is `WatchError::UnsupportedEvent`. Attach failure warns and the polling loop continues. `TcpSession` drops its tracepoint link on every exit path, including Ctrl+C and errors.
 - `twin doctor --ebpf` adds a tcp tracing check (`inet_sock_set_state` present). Exec readiness does not require it. `twin doctor` without `--ebpf` does not add the eBPF section.
 - Aya 0.13.1 remains the only loader. `attach_tcp` returns `EbpfError::Unavailable` until `attach_tcp_from_bytes` is given an object. Verifier rejection stays `EbpfError::Verifier`. No `EbpfBackend`, no feature flag, no libbpf, no `aya-ebpf` workspace member.
@@ -76,3 +76,27 @@ cargo clippy --workspace -- -D warnings
 ```
 
 All passed on implementation completion (383 tests). No root, `CAP_BPF`, or `bpf-linker`.
+
+## 2026-10-08 follow-up: eBPF history and transitive reasoning
+
+TCP ingestion routes process/port nodes and connect edges through ScanHistorySession without finalizing unrelated host rows. History queries now expose eBPF-only changes. Service CONNECTS_TO participates in default bounded transitive traversal and hypothetical restart overlays. Tests: ebpf_tcp, impact_paths, watch. Per-event-type and per-cgroup limits and bundled probes remain unimplemented.
+
+## Additional 2026-10-08 follow-up
+
+TCP limits now include per-cgroup and per-event-kind dimensions alongside PID, endpoint, and global session counters. Rejected events do not spend other budgets. Scans record cgroup-v2 filesystem identities; admitted events join them to existing cgroup/service ownership and retain observation links/history. Tests cover matching and unknown IDs. Live probe producers are still absent.
+
+## 2026-10-09 completeness integration verification
+
+The host-scan/eBPF lifecycle regression now supplies readable empty FD and TCP/UDP/Unix tables before asserting that a previously observed endpoint is Gone. Missing tables or vanished FD directories represent incomplete coverage and cannot establish removal. The test still proves that retained eBPF edges survive while their source process is observed and that a later event reactivates the endpoint. All seven app eBPF integration tests pass; the complete twin-emulate and twin-ebpf suites pass in `/tmp/twin-depth-emulate-ebpf.log`.
+
+## 2026-10-09 real TCP connect producer
+
+Implemented a bundled TCP connect producer attached to `sys_enter_connect`, `sys_exit_connect`, `sched_process_exit` and `inet_sock_set_state`. Thread-exit cleanup prevents dangling syscall markers from contaminating reused thread IDs. SYN_SENT inside a traced connect syscall captures initiator PID/cgroup, leader start ticks, actual socket namespace and bounded IPv4/IPv6 endpoints. Socket-pointer correlation carries that origin until ESTABLISHED; completion can occur in softirq without attributing the connection to the current completion task. This supports nonblocking completion, suppresses failed attempts and removes closed origins. Pending/origin maps are bounded to 16384 entries; map/ring/read failures increment kernel coverage-drop counters.
+
+The live connect ABI extends the 56-byte fixture prefix to 72 bytes, adding socket namespace inode at 56 and start ticks at 64. Decoding validates namespace identity. App ingestion preserves host aliases only when namespace identity matches the scanner, otherwise uses canonical namespace endpoints. Service listener joins stay in the same namespace. Old-generation events cannot overwrite reused PIDs or borrow current ownership; rejected events count toward coverage losses. Existing process metadata is preserved. Kernel losses combine with admission-limit losses and remain scoped to TCP independently of exec losses.
+
+Default exec/TCP attachment now loads the tracked bundled object. Before TCP attachment, tracepoint offsets/sizes are checked against the compiled context ABI. Doctor's live TCP capability assessment additionally requires connect syscall tracepoints. LLVM artifact rebuild/check instructions and ordinary unprivileged object verification are shared with slice 14. Runtime attachment/verifier success is not claimed on the current host (CapEff=0 and unreadable tracepoint formats).
+
+Remaining producer scope: accept and bind have fixture decoders/admission/storage coverage but are not emitted by these live probes. Safe syscall-result/socket ownership producers are still required before claiming live accept/bind coverage. Connections already established before attachment, kernel-originated connects and sessions beginning before the enter hook are not reconstructed; polling is the separate source for existing sockets. Namespace inode reuse without an observed absence remains an identity limit.
+
+PID namespace safety: a private configured map carries the scanner's namespace device/inode to the read-only `bpf_get_ns_current_pid_tgid` helper. Live event TGIDs use scanner-visible PID aliases; tasks outside that namespace cannot borrow matching numeric aliases. Pending syscall keys remain private global thread identifiers. PPID is emitted only where initial-namespace translation is known; unsupported parent translation is explicitly `ppid_known=false`, never a guessed parent. No namespace transition or host mutation is performed.

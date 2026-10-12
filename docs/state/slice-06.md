@@ -19,7 +19,7 @@ twin graph service:postgresql.service
 ### Collectors (`twin-collectors`)
 
 - **`process/socket.rs`** (pure parser)
-  - `parse_tcp_table` for `/proc/net/tcp` and `/proc/net/tcp6`
+  - `parse_inet_table` for `/proc/net/tcp` and `/proc/net/tcp6`
   - IPv4 address byte-reversal; IPv6 per 32-bit word reversal
   - LISTEN-only materialization (`st == 0A`); non-LISTEN rows skipped
   - `parse_socket_fd_target` for `socket:[inode]` symlinks
@@ -28,19 +28,19 @@ twin graph service:postgresql.service
 
 - **`process/procfs.rs`**
   - `ProcReader::read_dir` required (no default stub); `read_dir_paths` for `StdProcReader`
-  - `read_tcp_table_content` — missing `tcp` warns `TcpTableMissing`; missing `tcp6` silent
+  - `read_inet_table_content` — missing `tcp` warns `TcpTableMissing`; missing `tcp6` silent
   - `read_fd_socket_owners` — walks `/proc/<pid>/fd`, permission/vanished/malformed warnings
 
 - **`process/collector.rs`**
   - Same `ProcessCollector` pass as slice 5: after process records, collects TCP listeners + FD owners
-  - `ProcessBatch`: `tcp_listeners`, `owners_by_inode`, accessors
+  - `ProcessBatch`: `inet_listeners`, `owners_by_inode`, accessors
   - `TcpSocketSeen` raw observations (`ProcNetTcp`, subject `TcpEndpoint`, metadata: inode, table, local_ip/port, mapped, owner_pids, owner_fds)
   - `SocketUnmapped` warning per listener inode with no FD owner (port still observed)
 
 - **`process/warning.rs`**
   - New kinds: `TcpTableMissing`, `TcpTableMalformed`, `FdPermissionDenied`, `FdMalformed`, `FdVanished`, `SocketUnmapped`
 
-- **Exports** (`lib.rs` / `process/mod.rs`): `TcpSocketRecord`, `TcpTableKind`, `SocketOwner`, `parse_tcp_table`, `parse_socket_fd_target`
+- **Exports** (`lib.rs` / `process/mod.rs`): `InetSocketRecord`, `InetTableKind`, `SocketOwner`, `parse_inet_table`, `parse_socket_fd_target`
 
 - **Tests** (`tests/socket.rs`, `tests/support/mod.rs`): `write_tcp_table`, `write_socket_fd`; full collect with inode join; unmapped listener warning
 
@@ -156,3 +156,30 @@ Last verified: workspace tests passing (171 tests), clippy clean, fmt clean.
 ## In progress / blocked
 
 _(nothing)_
+
+## 2026-10-08 follow-up: Graph views and exports
+
+Graph listing supports active/stale/gone state, label substring, and positive limit. Image and cgroup targets expose incoming/outgoing neighborhoods. DOT/Mermaid exports use stored neighborhood relationships, deterministic generated vertex IDs, and escaped labels. `--at` reads retained history without a refresh. UDP and additional fdinfo joins remain unimplemented.
+
+## Additional 2026-10-08 follow-up
+
+Port shorthand :PORT now resolves a unique active TCP endpoint. Missing matches fail clearly; multiple addresses return a deterministic list of canonical IDs. CLI rejects invalid ports before refreshing. Malformed non-ASCII proc hex addresses return warnings instead of reaching unsafe string boundaries. Tests: scan_graph port shorthand and collectors socket regression.
+
+## Socket follow-up — 2026-10-08
+
+Status: implemented and fixture-tested. The shared parser types are now `InetTableKind`, `InetSocketRecord`, `InetConnectionRecord`, and `InetTableParse`, exported by twin-collectors. `ProcessBatch` exposes `inet_listeners`/`inet_connections`. TCP wrappers remain on core IDs/graph constructors for existing callers; `TransportProtocol` and `inet_port` constructors add canonical `port:udp:IP:PORT` and bracketed IPv6 IDs.
+
+- UDP/UDP6 state 07 is a bound socket; state 01 is a connected peer. Inode ownership is observed, service ownership and local service dependencies remain inferred. Bound sockets provide no evidence of sent datagrams or remote peers.
+- UDP observations use proc_net_udp and udp_socket_seen/udp_connection_seen. Scan counters distinguish TCP from UDP; terminal output and stored collector metadata include both.
+- Matching never crosses transport protocols. Graph/impact readers include connected UDP evidence and keep unmapped counts keyed by canonical protocol-specific node ID.
+- Missing/malformed UDP tables appear in coverage and warnings. UDP graph rows/edges are preserved on unavailable reads; complete empty reads finalize them. No network packets are sent.
+- FD ownership emits ProcessSocketFdSeen with PID, FD, inode, path and fdinfo_verified. A present fdinfo directory enables inode cross-checks. Reuse, malformed inode fields, and vanished fdinfo reject ownership; permissions retain symlink evidence with fdinfo_verified=false. No fdinfo file contents are stored.
+- Regressions: twin-collectors/tests/socket.rs covers IPv4/IPv6 UDP, malformed Unicode, ownership normalization, descriptor reuse/malformed/vanished files. twin-app/tests/scan_graph.rs covers graph/impact evidence, concurrent TCP+UDP on the same endpoint, outage preservation and disappearance. CLI output tests cover the default container dependency-chain summary.
+
+Limits: proc tables cover the current network namespace. Unconnected UDP request/reply traffic is not attributed to peers; observing DNS names or datagram traffic requires a future tracing producer.
+
+## 2026-10-09 namespace topology review
+
+Process socket collection reads unique observed network namespaces through `/proc/PID/net` without `setns` or host changes. Namespace socket ownership joins only descriptors from processes in that namespace; identical endpoint addresses and inode numbers in different namespaces remain separate. Scanner namespace endpoints retain existing host IDs; other internet endpoints carry `:netns:INODE`, and Unix endpoints use `unix:netns:INODE:PATH`. Namespace identities are reread after collection; changed/vanished identities discard the socket sample and record a coverage gap. Table warning and evidence references identify the actual PID namespace source. FD observations include namespace identity.
+
+Wildcard listeners support inferred local dependencies only for loopback or concrete local addresses observed in the same namespace, never arbitrary remote internet peers. Namespaced edges retain the normal relation-specific inference metadata and observation links; Unix sockets do not acquire TCP metadata. Missing namespace/table evidence preserves uncertainty rather than asserting disappearance. Fixture verification: `twin-app/tests/network_namespaces.rs` covers duplicate endpoints/inodes, lost identity, host/Unix separation and remote wildcard rejection; `twin-collectors/tests/network_namespaces.rs` covers host/non-host identity changes and vanishing identities. Known boot changes reset endpoint and runtime-edge incarnation boundaries while retaining canonical aliases, close prior runtime edges, and remove previous-incarnation evidence links. Unknown boot reads produce coverage gaps and boot_identity_known=false; the last known boot is retained solely to detect a later boundary. Reappearing gone endpoints reset their lifetime. Namespace inode reuse without an observed absence within the same boot remains a kernel identity limit; these endpoint IDs are not permanent workload identities. Completely missing identities suppress all guessed host ownership and record coverage gaps. Scan counts include namespaced endpoints, relationships, sockets and namespace-scoped inode totals.

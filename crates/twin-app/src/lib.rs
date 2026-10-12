@@ -10,8 +10,8 @@ pub use error::{
 };
 pub use model::{
     CoverageReport, DiffEdge, DiffEdgeChange, DiffNode, DiffNodeChange, DiffResult,
-    DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck, DoctorK8s,
-    DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
+    DoctorContainerd, DoctorContainers, DoctorCore, DoctorDatabase, DoctorEbpf, DoctorEbpfCheck,
+    DoctorK8s, DoctorPermissions, DoctorResult, EmulationImpact, EmulationImpactPathView,
     EmulationOverlayNode, EmulationOverlaySummary, EmulationResult, EvidenceStrengthView,
     GraphContainerPort, GraphContainerResult, GraphDirectoryResult, GraphEdgeSummary,
     GraphEvidenceLine, GraphFileResult, GraphLibraryResult, GraphListResult, GraphMountResult,
@@ -113,6 +113,8 @@ pub fn read_config(
 
 #[derive(Debug, Clone)]
 pub struct ScanRequest {
+    pub containerd_fixture: Option<PathBuf>,
+    pub docker_fixture: Option<PathBuf>,
     pub config_override: Option<PathBuf>,
     pub samples: u32,
     pub interval_secs: u64,
@@ -122,6 +124,8 @@ impl Default for ScanRequest {
     fn default() -> Self {
         Self {
             config_override: None,
+            docker_fixture: None,
+            containerd_fixture: None,
             samples: 1,
             interval_secs: 2,
         }
@@ -149,8 +153,22 @@ pub fn scan_in(
     commands::scan::run(layout, &request, proc_root)
 }
 
+pub fn scan_in_with_dns(
+    layout: &TwinLayout,
+    request: ScanRequest,
+    proc_root: &Path,
+    dns: &impl twin_collectors::dns::DnsReader,
+) -> Result<ScanResult, AppError> {
+    commands::scan::run_with_dns(layout, &request, proc_root, dns)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct GraphRequest {
+    pub raw_neighborhood: bool,
+    pub at: Option<twin_core::TimestampNs>,
+    pub limit: Option<usize>,
+    pub label: Option<String>,
+    pub state: Option<twin_core::NodeState>,
     pub config_override: Option<PathBuf>,
     pub kind: Option<NodeKind>,
     pub target: Option<NodeId>,
@@ -284,6 +302,7 @@ pub fn emulate_in(
 
 #[derive(Debug, Clone, Default)]
 pub struct K8sScanRequest {
+    pub fixture: Option<PathBuf>,
     pub config_override: Option<PathBuf>,
 }
 
@@ -296,6 +315,7 @@ pub struct K8sTargetRequest {
 pub fn k8s_scan(request: K8sScanRequest) -> Result<K8sScanResult, AppError> {
     commands::k8s::scan_home(commands::k8s::K8sScanRequest {
         config_override: request.config_override,
+        fixture: request.fixture,
     })
 }
 
@@ -306,6 +326,7 @@ pub fn k8s_scan_in(
     commands::k8s::scan(
         layout,
         &commands::k8s::K8sScanRequest {
+            fixture: request.fixture,
             config_override: request.config_override,
         },
     )
@@ -356,6 +377,10 @@ pub struct WhatChangedRequest {
     pub config_override: Option<PathBuf>,
     pub since: String,
     pub verbose: bool,
+    pub target_query: Option<String>,
+    pub categories: Vec<twin_core::ChangeCategory>,
+    pub limit: usize,
+    pub max_depth: u16,
 }
 
 pub fn what_changed(request: WhatChangedRequest) -> Result<WhatChangedResult, AppError> {
@@ -418,9 +443,15 @@ pub fn diff_in(layout: &TwinLayout, request: DiffRequest) -> Result<DiffResult, 
 }
 
 pub use commands::ebpf_tcp::{connect_evidence_strength, TcpIngestor};
-pub use commands::test_cmd::{init_file, lint_file, run_file, TestInitOutcome, TestInitRequest};
+pub use commands::test_cmd::{
+    init_file, lint_file, list_test_runs_in, parse_max_age_seconds, run_file, run_file_with_dns,
+    run_file_with_options, TestInitOutcome, TestInitRequest, TestRunOptions, TestRunSummary,
+};
 pub use commands::watch::{WatchCommand, WatchEbpf, WatchRun, WatchSink};
-pub use twin_test::{CheckKind, CheckResult, CheckStatus, TestCheck, TestDocument, TestRunReport};
+pub use twin_test::{
+    BaselineComparison, CheckKind, CheckResult, CheckStatus, EvaluationContext, TestCheck,
+    TestDocument, TestRunReport,
+};
 
 pub fn parse_watch(command: &WatchCommand) -> Result<WatchRun, AppError> {
     commands::watch::prepare(command)
@@ -446,3 +477,67 @@ pub fn watch_in<S: WatchSink>(
 ) -> Result<WatchResult, AppError> {
     commands::watch::run(layout, run, proc_root, stop, sink)
 }
+
+pub fn validate_graph_kind(kind: twin_core::NodeKind) -> Result<(), AppError> {
+    if commands::graph::LISTABLE_KINDS.contains(&kind) {
+        Ok(())
+    } else {
+        Err(AppError::UnsupportedGraphKind {
+            kind: kind.to_string(),
+        })
+    }
+}
+
+pub use commands::emulate::validate_request as validate_emulate_request;
+
+pub use commands::parse_graph_time;
+
+pub use commands::why::request as why_request;
+pub use commands::why::run_home as why;
+pub use commands::why::WhyRequest;
+pub use model::{WhyObservation, WhyProofChain, WhyRelationship, WhyResult};
+pub fn why_in(layout: &TwinLayout, request: WhyRequest) -> Result<WhyResult, AppError> {
+    commands::why::run(layout, &request)
+}
+
+pub use commands::resolve_port::parse_port_query;
+
+pub use model::OperationalChange;
+
+pub use commands::k8s::{K8sLogsRequest, K8sWatchRequest, K8sWatchResult};
+pub use twin_k8s::{LogSignal, LogSignalCount, PodLogRequest, PodLogSummary};
+pub fn k8s_watch(request: K8sWatchRequest) -> Result<K8sWatchResult, AppError> {
+    commands::k8s::watch_home(request)
+}
+pub fn k8s_watch_in(
+    layout: &TwinLayout,
+    request: &K8sWatchRequest,
+) -> Result<K8sWatchResult, AppError> {
+    commands::k8s::watch(layout, request)
+}
+pub fn k8s_logs(request: K8sLogsRequest) -> Result<PodLogSummary, AppError> {
+    commands::k8s::logs_home(request)
+}
+pub fn k8s_logs_in(
+    layout: &TwinLayout,
+    request: &K8sLogsRequest,
+) -> Result<PodLogSummary, AppError> {
+    commands::k8s::logs(layout, request)
+}
+
+pub fn k8s_watch_configured_in(
+    layout: &TwinLayout,
+    request: &K8sWatchRequest,
+    config: twin_k8s::ClientConfig,
+) -> Result<K8sWatchResult, AppError> {
+    commands::k8s::watch_configured(layout, request, Some(config))
+}
+pub fn k8s_logs_configured_in(
+    layout: &TwinLayout,
+    request: &K8sLogsRequest,
+    config: twin_k8s::ClientConfig,
+) -> Result<PodLogSummary, AppError> {
+    commands::k8s::logs_configured(layout, request, Some(config))
+}
+
+pub use twin_k8s::{WatchNotice as K8sWatchNotice, WatchSummary as K8sWatchSummary};

@@ -8,6 +8,7 @@ pub struct CoverageReport {
     pub unavailable_collectors: Vec<String>,
     pub ebpf_available: bool,
     pub docker_available: bool,
+    pub containerd_available: bool,
     pub kubernetes_available: bool,
 }
 

@@ -1,6 +1,6 @@
 use twin_app::{SnapshotCreateResult, SnapshotListResult};
 
-use crate::output::format::{Lines, Status};
+use crate::output::format::{format_age, Lines, Status};
 
 pub fn render_create(result: &SnapshotCreateResult) -> String {
     let mut out = Lines::new();
@@ -37,22 +37,4 @@ pub fn render_list(result: &SnapshotListResult) -> String {
         );
     }
     out.into_string()
-}
-
-fn format_age(created_at_ns: i64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(created_at_ns);
-    let secs = ((now - created_at_ns).max(0) / 1_000_000_000) as u64;
-    if secs < 60 {
-        return format!("{secs}s ago");
-    }
-    if secs < 3600 {
-        return format!("{}m ago", secs / 60);
-    }
-    if secs < 86_400 {
-        return format!("{}h ago", secs / 3600);
-    }
-    format!("{}d ago", secs / 86_400)
 }

@@ -151,3 +151,41 @@ fn relative_fill_path_is_rejected() {
     let message = err.to_string();
     assert!(message.contains("relative"), "{message}");
 }
+
+#[test]
+fn common_service_directories_and_postgres_configs_are_mapped() {
+    let _env = lock_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).unwrap();
+    let proc = home.layout.data_dir.join("proc");
+    std::fs::create_dir_all(&proc).unwrap();
+    for (pid, name, unit) in [
+        (81, "nginx", "nginx.service"),
+        (82, "mysql", "mysql.service"),
+        (83, "postgres", "postgresql.service"),
+    ] {
+        write_service(&proc, pid, name, unit);
+    }
+    std::fs::write(proc.join("mounts"), "/dev/sda1 / ext4 rw 0 0\n").unwrap();
+    let host = home.layout.data_dir.join("host");
+    for path in ["var/log/nginx", "var/lib/mysql", "etc/postgresql/16/main"] {
+        std::fs::create_dir_all(host.join(path)).unwrap();
+    }
+    let config = host.join("etc/postgresql/16/main/postgresql.conf");
+    std::fs::write(&config, "listen_addresses = 'localhost'\n").unwrap();
+    set_host_root(&host);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).unwrap();
+    clear_scan_env();
+    let store = Store::open(&home.layout.db_file()).unwrap();
+    for id in [
+        "service:nginx.service|logs_to|directory:/var/log/nginx",
+        "service:mysql.service|uses|directory:/var/lib/mysql",
+        "service:postgresql.service|configured_by|file:/etc/postgresql/16/main/postgresql.conf",
+    ] {
+        assert!(store.get_edge(id).unwrap().is_some(), "missing {id}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(config).unwrap(),
+        "listen_addresses = 'localhost'\n"
+    );
+}

@@ -22,6 +22,10 @@ fn mapped_library_path(line: &str) -> Option<String> {
         return None;
     }
     let path = path.strip_suffix(" (deleted)").unwrap_or(path);
+    let name = path.rsplit('/').next()?;
+    if !name.ends_with(".so") && !name.contains(".so.") {
+        return None;
+    }
     let canonical = lexical_canonical(path);
     if canonical.starts_with('/') {
         Some(canonical)
@@ -67,13 +71,7 @@ this is not a maps line
 7f900-7fa00 r-xp 00000000 08:01 3 relative.so
 ";
         let paths = parse_mapped_libraries(text);
-        assert_eq!(
-            paths,
-            vec![
-                "/usr/sbin/nginx".to_string(),
-                "/usr/lib/libssl.so.3".to_string(),
-            ]
-        );
+        assert_eq!(paths, vec!["/usr/lib/libssl.so.3".to_string(),]);
     }
 
     #[test]

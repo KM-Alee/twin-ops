@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 dirs = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -14,6 +15,7 @@ twin-collectors = { workspace = true }
 twin-core = { workspace = true }
 twin-observation = { workspace = true }
 twin-store = { workspace = true }
+twin-package = { workspace = true }
 twin-emulate = { workspace = true }
 twin-ebpf = { workspace = true }
 twin-container = { workspace = true }
@@ -24,5 +26,7 @@ uuid = { workspace = true }
 libc = "0.2"
 
 [dev-dependencies]
+rusqlite = { workspace = true }
+twin-fixtures = { workspace = true }
 tempfile = { workspace = true }
 twin-ebpf = { workspace = true }

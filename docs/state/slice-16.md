@@ -77,3 +77,23 @@ cargo clippy --workspace -- -D warnings
 ```
 
 All passed on implementation completion (401 tests). No root, `CAP_BPF`, or `bpf-linker`.
+
+## 2026-10-08 follow-up: Coverage and evidence explanations
+
+Docker/Kubernetes availability comes from latest collector read status rather than socket/config existence. Failed Kubernetes reads record unavailable status without finalizing graph rows. Process warning details persist and surface as sourced impact unknowns without double penalizing aggregate coverage. `twin why TARGET` reads stored adjacent relationships, separates observed/inferred, reports source/kind/time/reference/observation IDs, uses the core evidence score, and identifies pruned evidence. It does not refresh or write. Conflicting-evidence detection remains unimplemented.
+
+## Additional 2026-10-08 follow-up
+
+Competing active service-ownership claims for one process set the shared evidence formula’s conflicting factor. why reports the ambiguity explicitly; impact and service-restart evidence also receive this adjustment through supporting process observations. Risk remains independently scored. A why regression proves that confidence decreases when a second owner appears.
+
+Default container restart terminal output now includes the transitive dependency-chain overlay summary even without --paths. output.rs tests lock in that section. --paths retains detailed evidence paths.
+
+## 2026-10-08 bounded stored evidence chains
+
+`why` now expands explicit dependency/configuration/endpoint/listener/ownership/library/container/Kubernetes links up to four hops, bounded to 64 relationships and 32 traversed nodes. Up to 16 acyclic supporting paths are displayed. A chain preserves actual edge direction through per-link relationship descriptions, while traversal can run in either direction. An observed config reference plus an inferred ownership link is labeled inferred; no chain is presented as proof of causation. Each link retains its own shared core evidence assessment instead of inventing a second chain scoring formula.
+
+Observation display includes at most the newest eight retained rows per relationship and reports omitted counts; scoring still considers all retained evidence. Explicit limits produce partial-explanation unknowns. Allowlisted safe observation facts and RFC3339 UTC timestamps replace identifier-only explanations; arbitrary metadata and string-valued raw `line` content are never printed. A fixture proves the complete nginx service → config file → backend endpoint ← listener process ← backend service chain and rejects arbitrary/secret metadata. Existing deterministic/read-only and conflicting-ownership regressions remain.
+
+## 2026-10-09 wall-clock freshness regression
+
+A stored `why` regression seeds an observation and its latest proc collector run two hours in the past. The relationship must report old evidence despite the scan and observation sharing a timestamp. This locks in elapsed wall-clock age rather than freshness relative to a frozen last scan.

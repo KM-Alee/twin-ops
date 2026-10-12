@@ -1,4 +1,4 @@
-use rusqlite::{params, Row};
+use rusqlite::{params, OptionalExtension, Row};
 
 use twin_core::ChangeKind;
 
@@ -158,54 +158,99 @@ impl Store {
         collect_rows(rows)
     }
 
+    pub fn node_history_before(&self, row: &NodeHistoryRow) -> Result<Option<NodeRow>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT node_id, kind, label, state, first_seen_ns, last_seen_ns,
+                    valid_from_ns, valid_to_ns, metadata_json
+             FROM node_history WHERE node_id = ?1
+               AND (recorded_at_ns < ?2 OR (recorded_at_ns = ?2 AND id < ?3))
+             ORDER BY recorded_at_ns DESC, id DESC LIMIT 1",
+                params![row.node_id, row.recorded_at_ns, row.id],
+                row_from_node,
+            )
+            .optional()
+            .map_err(|source| StoreError::Query { source })
+    }
+
+    pub fn edge_history_before(&self, row: &EdgeHistoryRow) -> Result<Option<EdgeRow>, StoreError> {
+        self.conn
+            .query_row(
+                "SELECT edge_id, from_node_id, to_node_id, kind, class, state,
+                    evidence_score, evidence_label, evidence_count,
+                    first_seen_ns, last_seen_ns, metadata_json
+             FROM edge_history WHERE edge_id = ?1
+               AND (recorded_at_ns < ?2 OR (recorded_at_ns = ?2 AND id < ?3))
+             ORDER BY recorded_at_ns DESC, id DESC LIMIT 1",
+                params![row.edge_id, row.recorded_at_ns, row.id],
+                row_from_edge,
+            )
+            .optional()
+            .map_err(|source| StoreError::Query { source })
+    }
+
     pub fn list_current_nodes(&self) -> Result<Vec<NodeRow>, StoreError> {
+        self.list_live_nodes(false)
+    }
+
+    pub fn list_unfinalized_nodes(&self) -> Result<Vec<NodeRow>, StoreError> {
+        self.list_live_nodes(true)
+    }
+
+    fn list_live_nodes(&self, include_stale: bool) -> Result<Vec<NodeRow>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, kind, label, state, first_seen_ns, last_seen_ns,
                         valid_from_ns, valid_to_ns, metadata_json
-                 FROM nodes WHERE state = 'active' ORDER BY id",
+                 FROM nodes WHERE state = 'active' OR (?1 AND state = 'stale') ORDER BY id",
             )
             .map_err(|source| StoreError::Query { source })?;
         let rows = stmt
-            .query_map([], row_from_node)
+            .query_map([include_stale], row_from_node)
             .map_err(|source| StoreError::Query { source })?;
         collect_rows(rows)
     }
 
     pub fn list_current_edges(&self) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_live_edges(false)
+    }
+
+    pub fn list_unfinalized_edges(&self) -> Result<Vec<EdgeRow>, StoreError> {
+        self.list_live_edges(true)
+    }
+
+    fn list_live_edges(&self, include_stale: bool) -> Result<Vec<EdgeRow>, StoreError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, from_node_id, to_node_id, kind, class, state,
                         evidence_score, evidence_label, evidence_count,
                         first_seen_ns, last_seen_ns, metadata_json
-                 FROM edges WHERE state = 'active' ORDER BY id",
+                 FROM edges WHERE state = 'active' OR (?1 AND state = 'stale') ORDER BY id",
             )
             .map_err(|source| StoreError::Query { source })?;
         let rows = stmt
-            .query_map([], row_from_edge)
+            .query_map([include_stale], row_from_edge)
             .map_err(|source| StoreError::Query { source })?;
         collect_rows(rows)
     }
 
-    pub fn mark_nodes_missing_since(
+    pub fn mark_nodes_missing(
         &mut self,
-        seen_ids: &[String],
+        missing_ids: &[String],
         recorded_at_ns: i64,
         prefer_stale: bool,
         collector_run_id: Option<i64>,
     ) -> Result<usize, StoreError> {
-        let active = self.list_active_node_ids()?;
-        let seen: std::collections::HashSet<&str> = seen_ids.iter().map(String::as_str).collect();
         let mut count = 0usize;
-        for id in active {
-            if seen.contains(id.as_str()) {
-                continue;
-            }
-            let Some(mut row) = self.get_node(&id)? else {
+        for id in missing_ids {
+            let Some(mut row) = self.get_node(id)? else {
                 continue;
             };
+            if row.state != "active" && (row.state != "stale" || prefer_stale) {
+                continue;
+            }
             let change_kind = if prefer_stale {
                 ChangeKind::Stale
             } else {
@@ -224,23 +269,21 @@ impl Store {
         Ok(count)
     }
 
-    pub fn mark_edges_missing_since(
+    pub fn mark_edges_missing(
         &mut self,
-        seen_ids: &[String],
+        missing_ids: &[String],
         recorded_at_ns: i64,
         prefer_stale: bool,
         collector_run_id: Option<i64>,
     ) -> Result<usize, StoreError> {
-        let active = self.list_active_edge_ids()?;
-        let seen: std::collections::HashSet<&str> = seen_ids.iter().map(String::as_str).collect();
         let mut count = 0usize;
-        for id in active {
-            if seen.contains(id.as_str()) {
-                continue;
-            }
-            let Some(mut row) = self.get_edge(&id)? else {
+        for id in missing_ids {
+            let Some(mut row) = self.get_edge(id)? else {
                 continue;
             };
+            if row.state != "active" && (row.state != "stale" || prefer_stale) {
+                continue;
+            }
             let change_kind = if prefer_stale {
                 ChangeKind::Stale
             } else {
@@ -256,28 +299,6 @@ impl Store {
             count += 1;
         }
         Ok(count)
-    }
-
-    fn list_active_node_ids(&self) -> Result<Vec<String>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM nodes WHERE state = 'active' ORDER BY id")
-            .map_err(|source| StoreError::Query { source })?;
-        let rows = stmt
-            .query_map([], |row| row.get(0))
-            .map_err(|source| StoreError::Query { source })?;
-        collect_rows(rows)
-    }
-
-    fn list_active_edge_ids(&self) -> Result<Vec<String>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id FROM edges WHERE state = 'active' ORDER BY id")
-            .map_err(|source| StoreError::Query { source })?;
-        let rows = stmt
-            .query_map([], |row| row.get(0))
-            .map_err(|source| StoreError::Query { source })?;
-        collect_rows(rows)
     }
 }
 
@@ -318,4 +339,39 @@ fn row_from_edge_history(row: &Row<'_>) -> Result<EdgeHistoryRow, rusqlite::Erro
         recorded_at_ns: row.get(14)?,
         collector_run_id: row.get(15)?,
     })
+}
+
+impl From<&NodeHistoryRow> for NodeRow {
+    fn from(row: &NodeHistoryRow) -> Self {
+        Self {
+            id: row.node_id.clone(),
+            kind: row.kind.clone(),
+            label: row.label.clone(),
+            state: row.state.clone(),
+            first_seen_ns: row.first_seen_ns,
+            last_seen_ns: row.last_seen_ns,
+            valid_from_ns: row.valid_from_ns,
+            valid_to_ns: row.valid_to_ns,
+            metadata_json: row.metadata_json.clone(),
+        }
+    }
+}
+
+impl From<&EdgeHistoryRow> for EdgeRow {
+    fn from(row: &EdgeHistoryRow) -> Self {
+        Self {
+            id: row.edge_id.clone(),
+            from_node_id: row.from_node_id.clone(),
+            to_node_id: row.to_node_id.clone(),
+            kind: row.kind.clone(),
+            class: row.class.clone(),
+            state: row.state.clone(),
+            evidence_score: row.evidence_score,
+            evidence_label: row.evidence_label.clone(),
+            evidence_count: row.evidence_count,
+            first_seen_ns: row.first_seen_ns,
+            last_seen_ns: row.last_seen_ns,
+            metadata_json: row.metadata_json.clone(),
+        }
+    }
 }

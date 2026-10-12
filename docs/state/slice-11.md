@@ -50,3 +50,17 @@
 
 - `twin impact postgresql.service --paths` → clean error (service not in graph on this host)
 - `twin scan` + `twin impact nginx.service --paths --max-depth 2` → renders `impact paths` section (empty when no dependents), risk/evidence/unknowns intact, read-only
+
+## 2026-10-08 follow-up: Transitive overlays and criticality
+
+Restart-service overlays mark transitive runtime dependents temporarily unavailable and preserve actual relationship kinds. Base graph rows remain unchanged. Default output summarizes chain impact; --paths prints full chains. Risk criticality hints derive from observed persistent-storage uses edges rather than service names. Port-target chains traverse upstream services. Tests: impact_paths, restart_service, CLI output. Container default traversal still needs parity.
+
+## Additional 2026-10-08 follow-up
+
+Container restart now performs bounded transitive analysis by default and marks direct and transitive affected services unavailable in the hypothetical overlay. The base graph remains unchanged. Detailed paths remain controlled by --paths. Tests: containers and restart_container.
+
+## 2026-10-08 reasoning audit fixes
+
+Complete paths are retained when a leaf is exactly at `--max-depth`; only unexplored incoming relationships mark a path depth-capped. Restart overlays therefore retain those affected nodes. Transitive counts include intermediate service nodes, exclude the target and all direct dependents, and deduplicate converging paths. Regression fixtures cover the exact-depth leaf, the restart overlay, intermediate nodes and a service reachable both directly and transitively. Existing cycle/depth-cap fixtures remain.
+
+Focused verification: impact_paths integration tests (10) and evidence_scoring integration tests (3) pass in `/tmp/twin-path-systemd.log`; strict selected all-targets Clippy passes in `/tmp/twin-reasoning-clippy.log`.

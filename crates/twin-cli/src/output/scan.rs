@@ -68,8 +68,18 @@ pub fn render(result: &ScanResult) -> String {
     );
     out.tree_leaf(
         false,
+        "UDP bound sockets",
+        &result.udp_listener_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
+        "UDP connected sockets",
+        &result.udp_connection_count.to_string(),
+    );
+    out.tree_leaf(
+        false,
         "active-connections",
-        &result.tcp_connection_count.to_string(),
+        &(result.tcp_connection_count + result.udp_connection_count).to_string(),
     );
     out.tree_leaf(
         false,
@@ -197,6 +207,15 @@ pub fn render(result: &ScanResult) -> String {
         },
     );
     out.tree_leaf(
+        false,
+        "containerd",
+        if coverage.containerd_available {
+            "available"
+        } else {
+            "unavailable"
+        },
+    );
+    out.tree_leaf(
         true,
         "Kubernetes",
         if coverage.kubernetes_available {
@@ -248,6 +267,12 @@ fn warning_parts(kind: &str, count: usize) -> (&'static str, String) {
         return (
             "package manager",
             format!("{count} package manager unsupported"),
+        );
+    }
+    if kind == "package_manager_malformed" {
+        return (
+            "package manager",
+            format!("{count} package database entr(ies) malformed"),
         );
     }
     if kind == "docker_unavailable" {

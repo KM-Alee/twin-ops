@@ -1,12 +1,12 @@
 # Code layout and testing conventions
 
-This document describes the **implemented** workspace structure after slice 1. It is the source of truth for module boundaries, dependency injection, and how tests are organized. Slice plans (`docs/plan-slices.md`, `docs/imp-plan/`) and the full target layout in `docs/tech-document.md` may list crates not built yet.
+This document describes the **implemented** workspace structure in the current workspace. It is the source of truth for module boundaries, dependency injection, and how tests are organized. Slice plans (`docs/plan-slices.md`, `docs/imp-plan/`) and the full target layout in `docs/tech-document.md` may list crates not built yet.
 
 ---
 
-## Workspace (slice 1)
+## Workspace
 
-Four crates, dependency direction inward:
+Original foundation (additional implemented crates listed below), dependency direction inward:
 
 ```text
 twin-core  →  (no internal twin deps)
@@ -15,7 +15,7 @@ twin-app   →  twin-core, twin-store
 twin-cli   →  twin-app  (+ lib target for output tests)
 ```
 
-No `twin-output` in slice 1. Human and JSON rendering live in `twin-cli/src/output/`. Extract `twin-output` when multiple commands need DOT/Mermaid and shared formatters.
+Human, JSON, DOT, and Mermaid rendering live in `twin-cli/src/output/`. The implemented workspace also contains twin-observation, twin-collectors, twin-ebpf, twin-container, twin-k8s, twin-config, twin-emulate, twin-test, twin-safety, twin-package, and twin-fixtures. The safety crate hosts cross-workspace source checks; it has no runtime business logic. Graph/rules/output logic remains in owning app/CLI modules; extract only for concrete coupling or reuse.
 
 ---
 
@@ -67,7 +67,7 @@ src/
     layout.rs       # TwinLayout::isolated, ensure_dirs, config_file, …
     xdg.rs          # TwinLayout::from_xdg
   config_io/
-    mod.rs          # read, sync_default_template
+    mod.rs          # read, load, sync_default_template
   commands/
     mod.rs
     init.rs
@@ -168,7 +168,7 @@ fn second_run_is_idempotent() {
 }
 ```
 
-Later slices add `twin-fixtures` for fake `/proc`, systemd, K8s, etc. Slice 1 does not include that crate.
+`twin-fixtures` currently shares the RPM header fixture; proc/systemd/K8s fixtures still live in owning crate test support.
 
 ---
 
@@ -192,3 +192,31 @@ When a command or subsystem grows past a single file:
 4. Pass dependencies (`TwinLayout`, adapters, graph handles) into functions — do not add test-only branches in production paths.
 
 Target workspace (all crates) remains documented in `docs/tech-document.md` §4.1; this file tracks what is **shipped** until more slices land.
+
+## Follow-up module locations
+
+- `twin-app/src/commands/why.rs` and `model/why_result.rs`: stored evidence explanations.
+- `twin-store/src/repo/graph_at.rs`, `history.rs`, `retention.rs`: retained history reconstruction, predecessor lookup, source-aware pruning.
+- `twin-cli/src/output/graph_export.rs` and `why.rs`: graph export and explanation rendering.
+- `twin-safety/tests/read_only.rs`: scans every production source crate.
+- `twin-app/tests/config_commands.rs`: config validation and configured retention.
+
+`clap_complete` generates completion scripts directly from the CLI definition. `chrono` with only std parses RFC3339 history timestamps. Neither dependency adds host mutation capabilities.
+
+## Additional implemented adapters and fixtures
+
+- `twin-k8s/src/live.rs`: bounded kube-rs get/list reads; `parse.rs` projects both fixture and live inputs to safe ClusterView fields.
+- `twin-app/src/commands/ebpf_cgroup.rs`: read-only cgroup-v2 identity mapping and evidence-linked event attribution.
+- `twin-app/src/commands/nginx_includes.rs`: bounded include/path expansion and config reads.
+- `twin-app/src/commands/resolve_port.rs`: unambiguous TCP port shorthand.
+- `twin-app/src/commands/evidence/conflicts.rs`: competing active ownership claims.
+- `twin-package/src/rpm.rs`: immutable SQLite RPM header/file/version reads; `wal_snapshot.rs` handles private committed WAL replay and metadata stability; `ndb.rs` validates NDB slots/blobs; `bdb.rs` reads bounded standalone hash buckets/overflow chains; `error.rs` owns typed failures.
+- `twin-fixtures/src/lib.rs` and `rpm_bdb.rs`: shared RPM header/NDB/BDB byte fixtures used by twin-package and twin-app tests.
+
+Dependencies added for actual functionality: kube/k8s-openapi/Tokio (live Kubernetes), existing workspace rusqlite/thiserror (RPM reads). No kube/runtime/WS/OAuth features are enabled. The safety tests check mutation method calls while allowing inspection and rejection of credential-command configuration fields.
+
+The process socket module exports protocol-neutral Inet* parser types; twin-core/transport_protocol.rs owns TCP/UDP transport identity.
+
+`commands/operational_changes.rs` summarizes retained domain transitions; `model/operational_change.rs` carries sourced results. Core ChangeCategory is the typed category vocabulary.
+
+`twin-fixtures/src/procfs.rs` owns the shared fake-proc writer, used by app/CLI/collector test-support wrappers. Store::get_edge_typed is the typed single-edge read boundary. Systemd file collection receives concrete runtime/proc instances through collect_with_instances; template fallback does not invent running instances. `tools/watch_soak.py` runs live read-only polling with isolated temporary XDG state and records RSS/timing statistics.

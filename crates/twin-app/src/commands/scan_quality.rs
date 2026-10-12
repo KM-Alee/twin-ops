@@ -36,7 +36,8 @@ pub fn assess_scan_quality(store: &Store) -> Result<ScanQualityAssessment, ScanE
                 .get("samples_total")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(1) as u32;
-            tcp_connection_count = meta_usize(&meta, "tcp_connection_count");
+            tcp_connection_count = meta_usize(&meta, "tcp_connection_count")
+                + meta_usize(&meta, "udp_connection_count");
         } else if run.warning_count > 0 {
             reasons.push(format!(
                 "{} collector warnings in latest process scan",
@@ -55,7 +56,7 @@ pub fn assess_scan_quality(store: &Store) -> Result<ScanQualityAssessment, ScanE
     }
     if active_unmapped > 0 {
         reasons.push(format!(
-            "{active_unmapped} active TCP sockets could not be mapped to a process"
+            "{active_unmapped} active network sockets could not be mapped to a process"
         ));
     }
     if unix_socket_unmapped > 0 {
@@ -90,11 +91,24 @@ pub fn assess_scan_quality(store: &Store) -> Result<ScanQualityAssessment, ScanE
 
     let unmapped_total =
         socket_unmapped + active_unmapped + unix_socket_unmapped + unix_connection_unmapped;
-    let quality = if fd_hidden >= FD_DEGRADED_THRESHOLD
+    let coverage = super::coverage::load(store)?;
+    let unavailable = !coverage.unavailable_collectors.is_empty();
+    for line in coverage.unknown_lines() {
+        if !reasons.contains(&line.detail) {
+            reasons.push(line.detail);
+        }
+    }
+    let never_scanned = store.latest_collector_run(COLLECTOR_NAME)?.is_none();
+    if never_scanned {
+        reasons.push("process collector has never completed".into());
+    }
+    let quality = if unavailable
+        || never_scanned
+        || fd_hidden >= FD_DEGRADED_THRESHOLD
         || unmapped_total >= SOCKET_UNMAPPED_DEGRADED_THRESHOLD
     {
         ScanQuality::Degraded
-    } else if fd_hidden > 0 || unmapped_total > 0 {
+    } else if coverage.restricted_processes > 0 || fd_hidden > 0 || unmapped_total > 0 {
         ScanQuality::Partial
     } else if reasons.is_empty() {
         ScanQuality::Good
@@ -140,6 +154,7 @@ pub fn warning_metadata_from_process_warnings(
         sample_index: 0,
         samples_total: 1,
         tcp_connection_count: 0,
+        udp_connection_count: 0,
         unmapped_active_socket_count: 0,
         readable_processes: 0,
     })
@@ -150,6 +165,7 @@ pub(crate) struct ProcessCollectorMetadataInput<'a> {
     pub sample_index: u32,
     pub samples_total: u32,
     pub tcp_connection_count: usize,
+    pub udp_connection_count: usize,
     pub unmapped_active_socket_count: usize,
     pub readable_processes: usize,
 }
@@ -164,6 +180,7 @@ pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_
     let mut unix_connection_unmapped = 0usize;
     let mut tcp_table_missing = 0usize;
     let mut unix_table_missing = 0usize;
+    let mut udp_table_unavailable = 0usize;
     for w in input.warnings {
         match w.kind() {
             ProcessWarningKind::PermissionDenied => permission_denied += 1,
@@ -175,10 +192,18 @@ pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_
             ProcessWarningKind::UnixConnectionUnmapped => unix_connection_unmapped += 1,
             ProcessWarningKind::TcpTableMissing => tcp_table_missing += 1,
             ProcessWarningKind::UnixTableMissing => unix_table_missing += 1,
+            ProcessWarningKind::UdpTableMissing | ProcessWarningKind::UdpTableMalformed => {
+                udp_table_unavailable += 1
+            }
             _ => {}
         }
     }
     serde_json::json!({
+        "warning_details": input.warnings.iter().map(|warning| serde_json::json!({
+            "kind": warning.kind().detail_key(),
+            "path": warning.path().display().to_string(),
+            "detail": warning.detail(),
+        })).collect::<Vec<_>>(),
         "permission_denied": permission_denied,
         "fd_permission_denied": fd_permission_denied,
         "cgroup_permission_denied": cgroup_permission_denied,
@@ -188,10 +213,12 @@ pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_
         "unix_connection_unmapped": unix_connection_unmapped,
         "tcp_table_missing": tcp_table_missing,
         "unix_table_missing": unix_table_missing,
+        "udp_table_unavailable": udp_table_unavailable,
         "readable_processes": input.readable_processes,
         "sample_index": input.sample_index,
         "samples_total": input.samples_total,
         "tcp_connection_count": input.tcp_connection_count,
+        "udp_connection_count": input.udp_connection_count,
     })
     .to_string()
 }

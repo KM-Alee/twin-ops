@@ -38,6 +38,51 @@ const KNOWN_SERVICE_PATHS: &[KnownServicePath] = &[
         path: "/var/log/journal",
         logs: true,
     },
+    KnownServicePath {
+        unit: "nginx.service",
+        path: "/var/log/nginx",
+        logs: true,
+    },
+    KnownServicePath {
+        unit: "apache2.service",
+        path: "/var/log/apache2",
+        logs: true,
+    },
+    KnownServicePath {
+        unit: "httpd.service",
+        path: "/var/log/httpd",
+        logs: true,
+    },
+    KnownServicePath {
+        unit: "mysql.service",
+        path: "/var/lib/mysql",
+        logs: false,
+    },
+    KnownServicePath {
+        unit: "mariadb.service",
+        path: "/var/lib/mysql",
+        logs: false,
+    },
+    KnownServicePath {
+        unit: "redis-server.service",
+        path: "/var/lib/redis",
+        logs: false,
+    },
+    KnownServicePath {
+        unit: "redis.service",
+        path: "/var/lib/redis",
+        logs: false,
+    },
+    KnownServicePath {
+        unit: "containerd.service",
+        path: "/var/lib/containerd",
+        logs: false,
+    },
+    KnownServicePath {
+        unit: "rabbitmq-server.service",
+        path: "/var/lib/rabbitmq",
+        logs: false,
+    },
 ];
 
 pub(crate) struct MountServiceUse {
@@ -151,9 +196,30 @@ pub(crate) fn services_on_mount(
     store: &Store,
     mount: &NodeId,
 ) -> Result<Vec<MountServiceUse>, StoreError> {
+    let mount_edges = store
+        .list_active_edges_to(mount.as_str())?
+        .iter()
+        .map(GraphEdge::try_from)
+        .collect::<Result<Vec<_>, _>>()?;
+    let path_ids: Vec<_> = mount_edges
+        .iter()
+        .filter(|edge| edge.kind() == EdgeKind::MountedOn && path_of(edge.from()).is_some())
+        .map(|edge| edge.from().as_str())
+        .collect();
+    let incoming_by_path = store.list_active_edges_to_nodes(&path_ids)?;
+    let mut peer_ids = Vec::new();
+    for row in incoming_by_path.values().flatten() {
+        let edge = GraphEdge::try_from(row)?;
+        if matches!(edge.kind(), EdgeKind::LogsTo | EdgeKind::Uses)
+            && edge.from().kind() == Some(twin_core::NodeKind::Service)
+        {
+            peer_ids.push(edge.from().to_string());
+        }
+    }
+    let peer_refs: Vec<_> = peer_ids.iter().map(String::as_str).collect();
+    let peers = store.get_nodes_typed_by_ids(&peer_refs)?;
     let mut uses = Vec::new();
-    for row in store.list_active_edges_to(mount.as_str())? {
-        let edge = GraphEdge::try_from(&row)?;
+    for edge in mount_edges {
         if edge.kind() != EdgeKind::MountedOn {
             continue;
         }
@@ -161,8 +227,12 @@ pub(crate) fn services_on_mount(
         let Some(path) = path_of(path_node) else {
             continue;
         };
-        for incoming in store.list_active_edges_to(path_node.as_str())? {
-            let use_edge = GraphEdge::try_from(&incoming)?;
+        for incoming in incoming_by_path
+            .get(path_node.as_str())
+            .into_iter()
+            .flatten()
+        {
+            let use_edge = GraphEdge::try_from(incoming)?;
             let logs = match use_edge.kind() {
                 EdgeKind::LogsTo => true,
                 EdgeKind::Uses => false,
@@ -171,7 +241,7 @@ pub(crate) fn services_on_mount(
             if use_edge.from().kind() != Some(twin_core::NodeKind::Service) {
                 continue;
             }
-            let Some(service_node) = store.get_node_typed(use_edge.from())? else {
+            let Some(service_node) = peers.get(use_edge.from().as_str()) else {
                 continue;
             };
             let item = MountServiceUse {

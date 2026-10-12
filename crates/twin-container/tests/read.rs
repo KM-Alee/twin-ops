@@ -73,20 +73,62 @@ fn missing_fixture_and_missing_socket_are_errors() {
 fn live_get_reads_a_unix_socket_response() {
     let dir = tempfile::tempdir().expect("temp");
     let socket = dir.path().join("docker.sock");
-    let listener = UnixListener::bind(&socket).expect("bind");
+    let listener = match UnixListener::bind(&socket) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("runtime capability unavailable: local Unix fixture bind denied; skipping live Docker test");
+            return;
+        }
+        Err(error) => panic!("bind: {error}"),
+    };
     let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept");
-        let mut buf = [0u8; 1024];
-        let _ = stream.read(&mut buf);
-        let body = r#"[{"Id":"abc123redis","Names":["/redis"],"Image":"redis:7"}]"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).expect("write");
+        for (path, body) in [
+            (
+                "/version",
+                r#"{"ApiVersion":"1.56","MinAPIVersion":"1.44"}"#,
+            ),
+            (
+                "/v1.51/containers/json",
+                r#"[{"Id":"abc123redis","Names":["/redis"],"Image":"redis:7"}]"#,
+            ),
+        ] {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = [0u8; 1024];
+            let read = stream.read(&mut buf).expect("read");
+            assert!(std::str::from_utf8(&buf[..read])
+                .expect("request")
+                .starts_with(&format!("GET {path} HTTP/1.1")));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).expect("write");
+        }
     });
     let docker = DockerBackend::open(None, &socket).expect("open live");
     let listed = docker.list_containers().expect("list");
     assert_eq!(listed[0].name, "redis");
     server.join().expect("server");
+}
+
+#[test]
+fn inspect_projects_health_without_retaining_health_logs() {
+    let root = tempfile::TempDir::new().expect("fixture");
+    std::fs::create_dir_all(root.path().join("containers")).expect("containers");
+    std::fs::write(
+        root.path().join("containers/list.json"),
+        r#"[{"Id":"health","Names":["/health"],"Image":"api:1"}]"#,
+    )
+    .expect("list");
+    std::fs::write(root.path().join("containers/health.json"), r#"{"Id":"health","Name":"/health","Config":{"Image":"api:1"},"Image":"sha256:running-artifact","State":{"Running":true,"Health":{"Status":"unhealthy","Log":[{"Output":"PRIVATE_HEALTH_BODY"}]}}}"#).expect("fixture");
+    let docker = DockerBackend::open(
+        Some(root.path()),
+        std::path::Path::new("/unavailable/docker.sock"),
+    )
+    .expect("fixture open");
+    let inspect = docker.inspect_container("health").expect("inspect");
+    assert_eq!(inspect.is_running, Some(true));
+    assert_eq!(inspect.health.as_str(), "unhealthy");
+    assert_eq!(inspect.image_id.as_deref(), Some("sha256:running-artifact"));
+    assert!(!format!("{inspect:?}").contains("PRIVATE_HEALTH_BODY"));
 }

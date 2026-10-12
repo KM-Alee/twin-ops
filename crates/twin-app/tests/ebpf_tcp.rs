@@ -4,9 +4,9 @@ use std::net::Ipv4Addr;
 
 use twin_app::{
     connect_evidence_strength, emulate_in, graph_in, impact_in, init_in, EmulateActionRequest,
-    EmulateRequest, GraphRequest, ImpactRequest, InitRequest, TcpIngestor,
+    EmulateRequest, GraphRequest, ImpactRequest, InitRequest, ScanRequest, TcpIngestor,
 };
-use twin_core::{EvidenceLabel, GraphEdge, GraphNode, NodeId, TimestampNs};
+use twin_core::{EvidenceLabel, GraphEdge, GraphNode, NodeId, NodeState, TimestampNs};
 use twin_ebpf::{TcpAccept, TcpBind, TcpConnect, TcpEvent, TcpRateLimits};
 use twin_observation::ObservationKind;
 use twin_store::Store;
@@ -39,6 +39,7 @@ fn rate_limit_stores_one_dropped_row() {
         per_pid: 1,
         per_endpoint: 8,
         global_limit: 8,
+        ..TcpRateLimits::session()
     });
     let mut stored = 0usize;
     for index in 0..4 {
@@ -79,6 +80,7 @@ fn repeated_connect_infers_service_edge_and_drop_weakens_it() {
             per_pid: 8,
             per_endpoint: 8,
             global_limit: 8,
+            ..TcpRateLimits::session()
         });
         for timestamp in [1, 2] {
             assert!(ingest
@@ -160,6 +162,7 @@ fn repeated_connect_infers_service_edge_and_drop_weakens_it() {
             per_pid: 0,
             per_endpoint: 0,
             global_limit: 0,
+            ..TcpRateLimits::session()
         });
         assert!(ingest
             .push(&mut store, &connect(4421, 9))
@@ -324,4 +327,197 @@ fn seed_django_postgres(store: &mut Store) {
             &postgres, &port, seen, None,
         ))
         .expect("listens");
+}
+
+#[test]
+fn host_scan_keeps_ebpf_evidence_while_source_is_active() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).expect("init");
+    {
+        let mut store = open_store(&home);
+        seed_django_postgres(&mut store);
+        let mut ingest = TcpIngestor::new(TcpRateLimits {
+            per_pid: 8,
+            per_endpoint: 8,
+            global_limit: 8,
+            ..TcpRateLimits::session()
+        });
+        assert!(ingest
+            .push(&mut store, &connect(4421, 1))
+            .expect("push")
+            .is_some());
+    }
+
+    let proc = home.layout.data_dir.join("fixture-proc-ebpf");
+    support::write_proc_fixture(
+        &proc,
+        4421,
+        "4421 (django) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t1000\t1000\t1000\t1000\n",
+        b"/usr/bin/django\0",
+        None,
+    );
+    std::fs::create_dir_all(proc.join("4421/fd")).expect("readable empty fd directory");
+    for table in ["tcp", "tcp6", "udp", "udp6"] {
+        support::write_tcp_table(&proc, table, "sl local_address rem_address st\n");
+    }
+    support::write_unix_table(&proc, "Num RefCount Protocol Flags Type St Inode Path\n");
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("host scan");
+
+    let store = open_store(&home);
+    let edge = store
+        .get_edge("process:pid:4421|connects_to|port:tcp:10.0.0.8:5432")
+        .expect("edge")
+        .expect("connect edge");
+    assert_eq!(
+        edge.state, "active",
+        "stored eBPF evidence must survive a host scan while the process is alive"
+    );
+    let port_id = NodeId::port_tcp("10.0.0.8", 5432).expect("port");
+    let port = store
+        .get_node_typed(&port_id)
+        .expect("node")
+        .expect("port node");
+    assert_eq!(port.state(), NodeState::Gone);
+
+    let mut store = open_store(&home);
+    let mut ingest = TcpIngestor::new(TcpRateLimits {
+        per_pid: 8,
+        per_endpoint: 8,
+        global_limit: 8,
+        ..TcpRateLimits::session()
+    });
+    assert!(ingest
+        .push(&mut store, &connect(4421, 2))
+        .expect("push")
+        .is_some());
+    let port = store
+        .get_node_typed(&port_id)
+        .expect("node")
+        .expect("port node");
+    assert_eq!(
+        port.state(),
+        NodeState::Active,
+        "a new observation reactivates the endpoint"
+    );
+}
+
+#[test]
+fn ebpf_only_connect_records_node_and_edge_history() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).unwrap();
+    let mut store = open_store(&home);
+    let mut ingest = TcpIngestor::new(TcpRateLimits {
+        per_pid: 8,
+        per_endpoint: 8,
+        global_limit: 8,
+        ..TcpRateLimits::session()
+    });
+    ingest.push(&mut store, &connect(4421, 1)).unwrap();
+    ingest.push(&mut store, &connect(4421, 2)).unwrap();
+    let nodes = store.list_node_history_since(0).unwrap();
+    assert_eq!(nodes.len(), 2);
+    assert!(nodes.iter().all(|row| row.change_kind == "new"));
+    let edges = store.list_edge_history_since(0).unwrap();
+    assert_eq!(edges.len(), 2);
+    assert_eq!(edges[0].change_kind, "new");
+    assert_eq!(edges[1].change_kind, "changed");
+    assert_eq!(edges[1].evidence_count, 2);
+}
+
+#[test]
+fn kernel_cgroup_identity_attributes_new_pids_and_preserves_observation_links() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = open_store(&home);
+    let seen = TimestampNs::new(1);
+    let service = NodeId::service("worker.service");
+    let cgroup = NodeId::cgroup("/system.slice/worker.service");
+    store
+        .upsert_node_typed(&GraphNode::service("worker.service", seen, None))
+        .expect("service");
+    store
+        .upsert_node_typed(&GraphNode::identified_cgroup(
+            "/system.slice/worker.service",
+            Some(9),
+            seen,
+            None,
+        ))
+        .expect("cgroup");
+    store
+        .upsert_edge_typed(&GraphEdge::inferred_service_owns_cgroup(
+            &service, &cgroup, seen, None,
+        ))
+        .expect("owner");
+    let mut ingest = TcpIngestor::new(TcpRateLimits::session());
+    ingest.push(&mut store, &connect(501, 2)).expect("connect");
+    for id in [
+        "process:pid:501|in_cgroup|cgroup:/system.slice/worker.service",
+        "service:worker.service|owns|process:pid:501",
+        "service:worker.service|connects_to|port:tcp:10.0.0.8:5432",
+    ] {
+        assert!(store.get_edge(id).expect("edge").is_some(), "{id}");
+        assert!(
+            !store
+                .list_observations_for_edge(id)
+                .expect("links")
+                .is_empty(),
+            "{id}"
+        );
+    }
+    // A missing kernel identity must not borrow a previous PID's service.
+    let event = TcpEvent::Connect(TcpConnect::new(
+        502,
+        99,
+        ipv4([10, 0, 0, 1]),
+        ipv4([10, 0, 0, 8]),
+        5432,
+        3,
+    ));
+    ingest.push(&mut store, &event).expect("unmapped");
+    assert!(store
+        .list_active_edges_to("process:pid:502")
+        .expect("edges")
+        .is_empty());
+}
+
+#[test]
+fn live_event_does_not_join_foreign_namespace_to_host_listener_or_reused_pid() {
+    let home = support::IsolatedHome::new();
+    init_in(&home.layout, InitRequest::default()).unwrap();
+    let mut store = open_store(&home);
+    seed_django_postgres(&mut store);
+    let TcpEvent::Connect(event) = connect(4421, 10) else {
+        unreachable!()
+    };
+    let mut bytes = twin_ebpf::encode_connect(&event).to_vec();
+    bytes.extend_from_slice(&2u64.to_le_bytes());
+    bytes.extend_from_slice(&300u64.to_le_bytes());
+    let event = twin_ebpf::decode_tcp_event(&bytes).unwrap();
+    let mut ingest = TcpIngestor::new(TcpRateLimits::session());
+    assert!(ingest.push(&mut store, &event).unwrap().is_some());
+    assert!(store
+        .get_node("port:tcp:10.0.0.8:5432:netns:2")
+        .unwrap()
+        .is_some());
+    assert!(!store
+        .list_edges_by_kind("connects_to")
+        .unwrap()
+        .iter()
+        .any(|edge| edge.from_node_id == "service:django.service"
+            && edge.to_node_id == "service:postgresql.service"));
+    let process = store.get_node("process:pid:4421").unwrap().unwrap();
+    assert!(process.metadata_json.contains("300"));
+    bytes[64..72].copy_from_slice(&200u64.to_le_bytes());
+    let stale = twin_ebpf::decode_tcp_event(&bytes).unwrap();
+    assert!(ingest.push(&mut store, &stale).unwrap().is_none());
+    assert_eq!(ingest.dropped(), 1);
+    assert_eq!(
+        store
+            .get_node("process:pid:4421")
+            .unwrap()
+            .unwrap()
+            .metadata_json,
+        process.metadata_json
+    );
 }

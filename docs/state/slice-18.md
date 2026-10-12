@@ -46,3 +46,24 @@ cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
+
+
+## 2026-10-08 follow-up: outbound hostname allowlists
+
+The app expands explicit hostname:port allowlist entries using a read-only DnsReader; twin-test performs no network or shell calls. IP literals are canonicalized, IPv6 uses brackets, hostnames are validated/lowercased, and each distinct hostname is queried once for both address families. TCP and UDP connected peers are checked. No connection to the allowlisted service is made. DNS queries use the configured system resolver (which may consult local hosts files or network DNS).
+
+Live resolution uses the existing Tokio dependency, a five-second total deadline and at most 32 unique hosts. The sync entrypoint returns unavailable inside an existing async runtime; the async resolver is available separately. OS getaddrinfo is not cancellable: runtime shutdown does not wait for a timed-out resolver task, which can finish in the background. No repeated lookups are started after the deadline.
+
+Reports preserve the DNS hostname, returned endpoint set, observation timestamp and an explicit inference statement: current DNS cannot prove hostname ownership at the time of a stored connection. Failed/empty/limited lookups and malformed entries cannot silently pass an empty graph; fail_on_unknown selects fail versus warn. Invalid raw endpoint values and resolver error details are never copied into reports. Expanded entries affect only this evaluation and never the stored graph. Tests inject DnsReader fixtures for IPv4/IPv6, UDP, deduplication, failures and secret-safe invalid input; collector tests cover empty queries and nested-runtime graceful degradation.
+
+## 2026-10-08 explicit evaluation context CLI
+
+`test run` exposes `--refresh`, `--max-age DURATION`, `--snapshot NAME`, and `--baseline NAME`. Refresh and snapshot are mutually exclusive. Duration parsing uses the app's shared bounded duration parser. Human reports identify the stored/snapshot graph, observation age, maximum age and separately collected live sources. Baseline comparisons list newly failing, newly uncertain and recovered checks with a correlation-not-causation note. CLI parser and renderer fixtures cover these options and sections; app orchestration owns historical coverage and omitted live-source semantics.
+
+## 2026-10-09 trust and semantic health contracts
+
+App tests now share typed evidence assessment with impact/why and require actual retained observations. Source-scoped missing coverage cannot prove absence. Service active state, owned local listeners, container running/health status and deployment ready/routed counts are implemented with Unknown for stale/incomplete facts. Pod ownership is deduplicated and ambiguous ownership is unknown. Future timestamps cannot establish freshness.
+
+Snapshot checks use captured evidence references and as-of collector coverage, not current-incarnation links or current ownership penalties. Pruned evidence produces Unknown. Disk and emulation checks requiring uncaptured live inputs also report historical Unknown. Baselines retain before-check results plus newly failing/uncertain/recovered names. App fixtures cover age, health, source absence, captured listener proof/reset/pruning and historical emulation. See operational-workflows.md for YAML and command examples.
+
+Final verification: cargo build, cargo test --workspace --no-fail-fast -- --nocapture, cargo clippy --workspace --all-targets -- -D warnings and cargo fmt --check pass. Runner: 633 passing tests across 127 suites; five explicitly runtime-gated server fixtures, 628 fully exercised bodies. Built CLI accepts the documented health YAML and reports Unknown on an unscanned isolated store.

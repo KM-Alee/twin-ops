@@ -64,11 +64,11 @@ fn k8s_graph_and_impact_sections() {
     });
     assert!(graph.contains("k8s:deployment:default/api"));
     assert!(graph.contains("Owns"));
-    assert!(graph.contains("replicaset:default/api-abc"));
-    assert!(graph.contains("pod:default/api-123"));
+    assert!(graph.contains("default/api-abc"));
+    assert!(graph.contains("default/api-123"));
     assert!(graph.contains("Routed by"));
-    assert!(graph.contains("service:default/api"));
-    assert!(graph.contains("ingress:default/api"));
+    assert!(graph.contains("default/api"));
+    assert!(graph.contains("default/api"));
     assert!(graph.contains("└──"));
 
     let impact = output::k8s::render_impact(&K8sImpactResult {
@@ -83,7 +83,8 @@ fn k8s_graph_and_impact_sections() {
     });
     assert!(impact.contains("Selects"));
     assert!(impact.contains("Owned by"));
-    assert!(impact.contains("deployment:default/api"));
+    assert!(impact.contains("default/api"));
+    assert!(!impact.contains("deployment  deployment:"));
 }
 
 #[test]
@@ -121,6 +122,58 @@ fn k8s_emulation_output_states_risk_and_safety() {
     assert!(text.contains("Restart-affected"));
     assert!(text.contains("pod:default/api-123"));
     assert!(text.contains("No deployment was rolled out."));
+}
+
+#[test]
+fn k8s_emulation_evidence_flag_lists_rollout_and_pod_delete_evidence() {
+    let mut rollout = sample_delete();
+    rollout.action = "rollout".to_string();
+    rollout.target = "k8s:deployment:default/api".to_string();
+    rollout.target_label = "deployment:default/api".to_string();
+    rollout.safety_statement = "No deployment was rolled out.".to_string();
+    rollout.evidence_strength.score = 45;
+    rollout.evidence_reasons = vec!["kubernetes ownership edges".to_string()];
+    rollout.restart_impacts = vec![EmulationImpact {
+        id: "k8s:pod:default/api-123".to_string(),
+        label: "api-123".to_string(),
+        statement: "pod:default/api-123 would restart".to_string(),
+        path: "k8s:deployment:default/api owns k8s:pod:default/api-123".to_string(),
+        evidence: vec!["replicaset ownership edges".to_string()],
+    }];
+    let plain = output::emulate::render(&rollout);
+    assert!(!plain.contains("evidence score"));
+    assert!(!plain.contains("replicaset ownership edges"));
+
+    rollout.show_evidence = true;
+    let text = output::emulate::render(&rollout);
+    assert!(text.contains("evidence score"));
+    assert!(text.contains("45/100, moderate"));
+    assert!(text.contains("kubernetes ownership edges"));
+    assert!(text.contains("api-123: k8s:deployment:default/api owns k8s:pod:default/api-123"));
+    assert!(text.contains("api-123: replicaset ownership edges"));
+    assert!(text.contains("No deployment was rolled out."));
+
+    let mut deleted = sample_delete();
+    deleted.evidence_reasons = vec!["kubernetes ownership and selector edges".to_string()];
+    deleted.transient_impacts = vec![EmulationImpact {
+        id: "k8s:service:default/api".to_string(),
+        label: "service:default/api".to_string(),
+        statement: "service still has 1 ready endpoint.".to_string(),
+        path: "k8s:service:default/api selects k8s:pod:default/api-123".to_string(),
+        evidence: vec!["service selector and ready endpoints".to_string()],
+    }];
+    let plain = output::emulate::render(&deleted);
+    assert!(!plain.contains("evidence score"));
+
+    deleted.show_evidence = true;
+    let text = output::emulate::render(&deleted);
+    assert!(text.contains("evidence score"));
+    assert!(text.contains("45/100, moderate"));
+    assert!(text.contains("kubernetes ownership and selector edges"));
+    assert!(text.contains("service:default/api: service selector and ready endpoints"));
+    assert!(text
+        .contains("service:default/api: k8s:service:default/api selects k8s:pod:default/api-123"));
+    assert!(text.contains("No pod was deleted."));
 }
 
 #[test]
@@ -210,6 +263,7 @@ fn sample_doctor() -> twin_app::DoctorResult {
             cli_ok: true,
             config_found: true,
             config_path: None,
+            config_error: None,
         },
         database: twin_app::DoctorDatabase {
             initialized: true,

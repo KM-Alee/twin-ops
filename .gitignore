@@ -131,3 +131,6 @@ yarn.lock
 .terraform/
 *.tfstate
 *.tfstate.*
+
+# Bundled, reproducibly built read-only tracepoint producer.
+!/crates/twin-ebpf/probes/twin.bpf.o

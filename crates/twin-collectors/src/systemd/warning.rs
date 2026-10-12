@@ -7,6 +7,7 @@ pub enum SystemdWarningKind {
     GlobInstanceSkipped,
     MaskedEmpty,
     DbusUnavailable,
+    SocketPropertyUnreadable,
 }
 
 impl SystemdWarningKind {
@@ -17,6 +18,7 @@ impl SystemdWarningKind {
             Self::GlobInstanceSkipped => "systemd_glob_skipped",
             Self::MaskedEmpty => "systemd_masked_empty",
             Self::DbusUnavailable => "systemd_dbus_unavailable",
+            Self::SocketPropertyUnreadable => "systemd_socket_property_unreadable",
         }
     }
 
@@ -27,6 +29,7 @@ impl SystemdWarningKind {
             "systemd_glob_skipped" => Some(Self::GlobInstanceSkipped),
             "systemd_masked_empty" => Some(Self::MaskedEmpty),
             "systemd_dbus_unavailable" => Some(Self::DbusUnavailable),
+            "systemd_socket_property_unreadable" => Some(Self::SocketPropertyUnreadable),
             _ => None,
         }
     }
@@ -37,10 +40,14 @@ impl SystemdWarningKind {
             Self::ParseError => ("systemd", format!("{count} unit files failed to parse")),
             Self::GlobInstanceSkipped => (
                 "systemd",
-                format!("{count} template/instance units skipped"),
+                format!("{count} unresolved glob unit names skipped"),
             ),
             Self::MaskedEmpty => ("systemd", format!("{count} empty unit files skipped")),
             Self::DbusUnavailable => ("systemd", format!("{count} D-Bus unavailable")),
+            Self::SocketPropertyUnreadable => (
+                "systemd",
+                format!("{count} socket Listen properties unreadable or unsupported"),
+            ),
         }
     }
 }

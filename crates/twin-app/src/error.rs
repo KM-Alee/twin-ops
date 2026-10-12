@@ -6,6 +6,16 @@ use twin_store::{StoreError, StoreOpenError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    #[error("invalid port shorthand `{query}`; use :PORT with a port between 1 and 65535")]
+    InvalidPortQuery { query: String },
+    #[error("no active TCP port matches :{port}")]
+    PortQueryNotFound { port: u16 },
+    #[error("ambiguous TCP port :{port}; use a full node ID: {candidates}")]
+    AmbiguousPortQuery { port: u16, candidates: String },
+    #[error("--limit, --label, and --state require a kind listing")]
+    GraphFiltersRequireList,
+    #[error("config error: {0}")]
+    Config(#[from] twin_core::error::ConfigError),
     #[error("init failed: {0}")]
     Init(#[from] InitError),
     #[error("path resolution failed: {0}")]
@@ -46,8 +56,13 @@ pub enum AppError {
         #[source]
         source: ParseError,
     },
-    #[error("unsupported graph kind: {kind}")]
+    #[error(
+        "unsupported graph kind: {kind}; supported kinds: {}",
+        crate::commands::graph::supported_list_kinds_text()
+    )]
     UnsupportedGraphKind { kind: String },
+    #[error("use either a target or --kind, not both")]
+    TargetAndKindConflict,
     #[error("invalid max depth {value}: {reason}")]
     InvalidMaxDepth { value: usize, reason: String },
 }
@@ -90,6 +105,8 @@ pub enum ScanError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GraphError {
+    #[error("no retained graph history at {at_ns}; scan first or choose a more recent time")]
+    HistoryUnavailable { at_ns: i64 },
     #[error("path resolution failed: {0}")]
     Paths(#[from] PathError),
     #[error("database is not initialized; run `twin init` first")]
@@ -174,6 +191,8 @@ pub enum EmulateError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TemporalError {
+    #[error("invalid history query: {reason}")]
+    InvalidQuery { reason: String },
     #[error("path resolution failed: {0}")]
     Paths(#[from] PathError),
     #[error("database is not initialized; run `twin init` first")]
@@ -184,9 +203,8 @@ pub enum TemporalError {
     Store(#[from] StoreError),
     #[error("invalid duration `{value}`: {reason}")]
     InvalidDuration { value: String, reason: String },
-    #[error("invalid snapshot name `{value}`: {source}")]
+    #[error("{source}")]
     InvalidSnapshotName {
-        value: String,
         #[source]
         source: ParseError,
     },
@@ -196,9 +214,8 @@ pub enum TemporalError {
     EmptyGraph,
     #[error("snapshot `{name}` not found")]
     SnapshotNotFound { name: String },
-    #[error("invalid graph ref `{value}`: {source}")]
+    #[error("{source}")]
     InvalidGraphRef {
-        value: String,
         #[source]
         source: ParseError,
     },
@@ -214,6 +231,10 @@ pub enum TestCmdError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum K8sCmdError {
+    #[error("Kubernetes read error: {0}")]
+    Read(#[from] twin_k8s::K8sError),
+    #[error("this database is bound to another Kubernetes source; use a separate XDG_DATA_HOME/XDG_CONFIG_HOME layout for each cluster or fixture")]
+    SourceMismatch,
     #[error("database is not initialized; run `twin init` first")]
     DatabaseNotInitialized,
     #[error("cannot open database: {0}")]

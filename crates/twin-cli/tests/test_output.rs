@@ -4,6 +4,20 @@ use twin_cli::output;
 #[test]
 fn test_run_output_has_pass_warn_fail_and_json() {
     let report = TestRunReport {
+        context: Some(twin_app::EvaluationContext {
+            evaluated_at_ns: 20,
+            graph_observed_at_ns: Some(10),
+            snapshot: None,
+            max_age_seconds: Some(300),
+            live_sources: vec!["disk usage".into()],
+        }),
+        baseline: Some(twin_app::BaselineComparison {
+            snapshot: "before-deploy".into(),
+            newly_failing: vec!["django depends on postgres".into()],
+            newly_uncertain: vec!["stale listener".into()],
+            recovered: vec![],
+            checks: vec![],
+        }),
         name: "local-readiness".to_string(),
         checks: vec![
             CheckResult {
@@ -38,6 +52,13 @@ fn test_run_output_has_pass_warn_fail_and_json() {
     assert!(text.contains("passed"));
     assert!(text.contains("warned"));
     assert!(text.contains("failed"));
+    assert!(text.contains("stored current graph"));
+    assert!(text.contains("300s"));
+    assert!(text.contains("disk usage"));
+    assert!(text.contains("baseline comparison · snapshot:before-deploy"));
+    assert!(text.contains("newly failing"));
+    assert!(text.contains("newly uncertain"));
+    assert!(text.contains("temporal difference does not establish cause"));
     let json = output::json::render(&report).expect("json");
     assert!(json.contains("\"failed\": 1"));
     assert!(json.contains("telemetry.example.com:443"));

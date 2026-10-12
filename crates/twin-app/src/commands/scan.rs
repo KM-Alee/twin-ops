@@ -25,7 +25,13 @@ use crate::ScanRequest;
 
 pub fn run_home(request: ScanRequest, proc_root: &Path) -> Result<ScanResult, AppError> {
     let paths = resolve_command_paths(request.config_override.as_deref())?;
-    scan_at(&paths.layout, &request, proc_root, &paths.db_path)
+    scan_at(
+        &paths.layout,
+        &request,
+        proc_root,
+        &paths.db_path,
+        &twin_collectors::dns::SystemDnsReader,
+    )
 }
 
 pub fn run(
@@ -33,7 +39,21 @@ pub fn run(
     request: &ScanRequest,
     proc_root: &Path,
 ) -> Result<ScanResult, AppError> {
-    scan_at(layout, request, proc_root, &layout.db_file())
+    run_with_dns(
+        layout,
+        request,
+        proc_root,
+        &twin_collectors::dns::SystemDnsReader,
+    )
+}
+
+pub(crate) fn run_with_dns(
+    layout: &TwinLayout,
+    request: &ScanRequest,
+    proc_root: &Path,
+    dns: &impl twin_collectors::dns::DnsReader,
+) -> Result<ScanResult, AppError> {
+    scan_at(layout, request, proc_root, &layout.db_file(), dns)
 }
 
 fn scan_at(
@@ -41,8 +61,9 @@ fn scan_at(
     request: &ScanRequest,
     proc_root: &Path,
     db_path: &Path,
+    dns: &impl twin_collectors::dns::DnsReader,
 ) -> Result<ScanResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    let config = crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(ScanError::DatabaseNotInitialized.into());
     }
@@ -63,6 +84,7 @@ fn scan_at(
             db_path,
             sample_index,
             samples,
+            dns,
         )?;
         edges_first_seen_by_sample.push(edges_new);
         last_result = Some(result);
@@ -73,7 +95,27 @@ fn scan_at(
     result.interval_secs = interval_secs;
     result.edges_first_seen_by_sample = edges_first_seen_by_sample;
     result.started_at_ns = overall_started.as_i64();
+    prune_after_scan(db_path, &config)?;
     Ok(result)
+}
+
+fn prune_after_scan(
+    db_path: &Path,
+    config: &twin_core::config::TwinConfig,
+) -> Result<(), AppError> {
+    let now = TimestampNs::now().as_i64();
+    let day_ns: i64 = 86_400 * 1_000_000_000;
+    let observations_before = now
+        .saturating_sub(i64::from(config.retention.raw_observations_days).saturating_mul(day_ns));
+    let ebpf_before =
+        now.saturating_sub(i64::from(config.retention.ebpf_events_days).saturating_mul(day_ns));
+    let graph_before =
+        now.saturating_sub(i64::from(config.retention.graph_history_days).saturating_mul(day_ns));
+    let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
+    store
+        .prune_retention(observations_before, ebpf_before, graph_before)
+        .map_err(ScanError::Store)?;
+    Ok(())
 }
 
 fn proc_root_for_sample(proc_root: &Path, sample_index: u32) -> Cow<'_, Path> {
@@ -87,18 +129,44 @@ fn proc_root_for_sample(proc_root: &Path, sample_index: u32) -> Cow<'_, Path> {
 
 fn run_scan_pass(
     _layout: &TwinLayout,
-    _request: &ScanRequest,
+    request: &ScanRequest,
     proc_root: &Path,
     db_path: &Path,
     sample_index: u32,
     samples_total: u32,
+    dns: &impl twin_collectors::dns::DnsReader,
 ) -> Result<(ScanResult, usize), AppError> {
     let started_at = TimestampNs::now();
+    let mut timings = std::collections::BTreeMap::new();
+    let started = std::time::Instant::now();
     let batch = ProcessCollector::new(proc_root).collect(started_at)?;
+    timings.insert("process".into(), elapsed_ms(started));
     let unit_roots = systemd_unit_roots(proc_root);
-    let unit_batch = SystemdUnitCollector::new(unit_roots.clone()).collect(started_at)?;
+    let started = std::time::Instant::now();
     let runtime_batch = collect_systemd_runtime(unit_roots.clone(), started_at)?;
-    persist_scan(
+    timings.insert("systemd_runtime".into(), elapsed_ms(started));
+    let instances: Vec<String> = runtime_batch
+        .observations()
+        .iter()
+        .filter_map(|obs| {
+            obs.metadata
+                .get("unit")
+                .and_then(|unit| unit.as_str())
+                .map(str::to_string)
+        })
+        .chain(batch.records().iter().flat_map(|record| {
+            record
+                .cgroup_memberships()
+                .iter()
+                .filter_map(|membership| membership.service_unit.clone())
+        }))
+        .collect();
+    let started = std::time::Instant::now();
+    let unit_batch = SystemdUnitCollector::new(unit_roots.clone())
+        .collect_with_instances(started_at, &instances)?;
+    timings.insert("systemd_units".into(), elapsed_ms(started));
+    let started = std::time::Instant::now();
+    let mut result = persist_scan(
         db_path,
         batch,
         unit_batch,
@@ -108,8 +176,18 @@ fn run_scan_pass(
             index: sample_index,
             total: samples_total,
             proc_root,
+            docker_fixture: request.docker_fixture.as_deref(),
+            containerd_fixture: request.containerd_fixture.as_deref(),
         },
-    )
+        dns,
+    )?;
+    timings.insert("graph_persistence_and_adapters".into(), elapsed_ms(started));
+    result.0.collector_timings_ms = timings;
+    Ok(result)
+}
+
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn collect_systemd_runtime(
@@ -151,6 +229,8 @@ struct PersistSample<'a> {
     index: u32,
     total: u32,
     proc_root: &'a Path,
+    docker_fixture: Option<&'a Path>,
+    containerd_fixture: Option<&'a Path>,
 }
 
 fn persist_scan(
@@ -160,6 +240,7 @@ fn persist_scan(
     mut runtime_batch: SystemdRuntimeBatch,
     unit_roots: Vec<PathBuf>,
     sample: PersistSample<'_>,
+    dns: &impl twin_collectors::dns::DnsReader,
 ) -> Result<(ScanResult, usize), AppError> {
     let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
     if !store.is_initialized().map_err(ScanError::Store)? {
@@ -203,6 +284,7 @@ fn persist_scan(
     let mut service_listens_on_edge_count = 0usize;
     let mut unmapped_listener_socket_count = 0usize;
     let mut tcp_connection_count = 0usize;
+    let mut udp_connection_count = 0usize;
     let mut process_connects_to_edge_count = 0usize;
     let mut service_connects_to_edge_count = 0usize;
     let mut service_depends_on_edge_count = 0usize;
@@ -224,10 +306,12 @@ fn persist_scan(
         warning: None,
         detail: None,
     };
+    let mut containerd_notes = super::scan_containerd::ContainerdScanNotes::default();
     let mut container_notes = super::scan_containers::ContainerScanNotes {
         warning: None,
         detail: None,
         unavailable: false,
+        incomplete: false,
     };
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
@@ -242,7 +326,13 @@ fn persist_scan(
     let mut seen_service_depends: HashSet<(NodeId, NodeId)> = HashSet::new();
     let mut listeners_by_port: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
     let mut listeners_by_unix_path: HashMap<String, Vec<NodeId>> = HashMap::new();
-    let mut service_connect_targets: Vec<(NodeId, String, u16, Option<ObservationId>)> = Vec::new();
+    let mut service_connect_targets: Vec<(
+        NodeId,
+        String,
+        u16,
+        twin_core::TransportProtocol,
+        Option<ObservationId>,
+    )> = Vec::new();
     let mut service_unix_connect_targets: Vec<(NodeId, String, Option<ObservationId>)> = Vec::new();
     let mut seen_unix_sockets: HashSet<NodeId> = HashSet::new();
     let mut seen_process_unix_listeners: HashSet<(NodeId, NodeId)> = HashSet::new();
@@ -257,12 +347,19 @@ fn persist_scan(
     let records_by_pid: HashMap<u32, &twin_collectors::ProcessRecord> =
         batch.records().iter().map(|r| (r.pid(), r)).collect();
     let owners_by_inode = batch.owners_by_inode();
-    let listener_by_inode: HashMap<u64, &twin_collectors::TcpSocketRecord> =
-        batch.tcp_listeners().iter().map(|l| (l.inode, l)).collect();
+    let listener_by_inode: HashMap<u64, &twin_collectors::InetSocketRecord> = batch
+        .inet_listeners()
+        .iter()
+        .map(|l| (l.inode, l))
+        .collect();
     let mut resolved_listeners = Vec::new();
-    for listener in batch.tcp_listeners() {
-        let port_id = NodeId::port_tcp(&listener.local_ip, listener.local_port)
-            .map_err(ScanError::InvalidPortId)?;
+    for listener in batch.inet_listeners() {
+        let port_id = NodeId::inet_port(
+            listener.table.protocol(),
+            &listener.local_ip,
+            listener.local_port,
+        )
+        .map_err(ScanError::InvalidPortId)?;
         resolved_listeners.push((listener.inode, port_id));
     }
 
@@ -278,7 +375,7 @@ fn persist_scan(
                 collector: COLLECTOR_NAME.to_string(),
                 started_at_ns: batch.started_at().as_i64(),
                 ended_at_ns: batch.ended_at().as_i64(),
-                status: "success".to_string(),
+                status: if batch.warnings().is_empty() { "success" } else { "degraded" }.to_string(),
                 observation_count: observations.len() as i64,
                 warning_count: batch.warnings().len() as i64,
                 error_message: None,
@@ -291,17 +388,27 @@ fn persist_scan(
                 Some(run_id),
                 prefer_stale,
                 finalize_missing,
+                super::scan_history::FinalizeScope::Host,
             );
+
+            if batch.warnings().iter().any(|warning| matches!(warning.kind(), ProcessWarningKind::UdpTableMissing | ProcessWarningKind::UdpTableMalformed)) {
+                history.skip_source("proc_net_udp");
+            }
+            for (source, missing, malformed) in [
+                ("proc_net_tcp", ProcessWarningKind::TcpTableMissing, ProcessWarningKind::TcpTableMalformed),
+                ("proc_net_unix", ProcessWarningKind::UnixTableMissing, ProcessWarningKind::UnixTableMalformed),
+            ] {
+                if batch.warnings().iter().any(|warning| warning.kind() == missing || warning.kind() == malformed) {
+                    history.uncertain_source(source);
+                }
+            }
 
             for obs in &observations {
                 store.insert_observation_typed_for_run(obs, run_id)?;
             }
 
             for record in batch.records() {
-                let node_id = NodeId::process(record.pid());
-                let existing = store.get_node_typed(&node_id)?;
-                let node =
-                    GraphNode::process(record.pid(), record.label(), scan_time, existing.as_ref());
+                let node = super::scan_process_identity::process_node(store, &history, record, scan_time)?;
                 super::scan_history::upsert_node(store, &mut history, &node)?;
                 process_count += 1;
 
@@ -321,7 +428,14 @@ fn persist_scan(
                         &mut history,
                         &mut seen_cgroups,
                         cgroup_id.clone(),
-                        |existing| GraphNode::cgroup(&membership.path, scan_time, existing),
+                        |existing| {
+                            GraphNode::identified_cgroup(
+                                &membership.path,
+                                super::ebpf_cgroup::kernel_id(&membership.path),
+                                scan_time,
+                                existing,
+                            )
+                        },
                     )? {
                         cgroup_count += 1;
                     }
@@ -432,7 +546,8 @@ fn persist_scan(
             for (inode, port_id) in &resolved_listeners {
                 let listener = listener_by_inode[inode];
                 let port_existing = store.get_node_typed(port_id)?;
-                let port_node = GraphNode::tcp_port(
+                let port_node = GraphNode::inet_port(
+                    listener.table.protocol(),
                     &listener.local_ip,
                     listener.local_port,
                     scan_time,
@@ -523,16 +638,23 @@ fn persist_scan(
                 }
             }
 
-            for connection in batch.tcp_connections() {
-                tcp_connection_count += 1;
-                let remote_port_id =
-                    NodeId::port_tcp(&connection.remote_ip, connection.remote_port).map_err(
-                        |e| StoreError::Decode {
-                            detail: e.to_string(),
-                        },
-                    )?;
+            for connection in batch.inet_connections() {
+                if connection.table.protocol() == twin_core::TransportProtocol::Tcp {
+                    tcp_connection_count += 1;
+                } else {
+                    udp_connection_count += 1;
+                }
+                let remote_port_id = NodeId::inet_port(
+                    connection.table.protocol(),
+                    &connection.remote_ip,
+                    connection.remote_port,
+                )
+                .map_err(|e| StoreError::Decode {
+                    detail: e.to_string(),
+                })?;
                 let port_existing = store.get_node_typed(&remote_port_id)?;
-                let port_node = GraphNode::tcp_port(
+                let port_node = GraphNode::inet_port(
+                    connection.table.protocol(),
                     &connection.remote_ip,
                     connection.remote_port,
                     scan_time,
@@ -625,6 +747,7 @@ fn persist_scan(
                                     service_id.clone(),
                                     connection.remote_ip.clone(),
                                     connection.remote_port,
+                                    connection.table.protocol(),
                                     conn_obs.map(|(id, _)| *id),
                                 ));
                             }
@@ -633,8 +756,11 @@ fn persist_scan(
                 }
             }
 
-            for (source_service, remote_ip, remote_port, conn_obs_id) in &service_connect_targets {
-                let candidate_ports = listener_port_candidates(remote_ip, *remote_port);
+            for (source_service, remote_ip, remote_port, protocol, conn_obs_id) in
+                &service_connect_targets
+            {
+                let candidate_ports =
+                    inet_listener_port_candidates(*protocol, remote_ip, *remote_port, batch.inet_connections().iter().any(|connection| connection.local_ip == *remote_ip) || batch.inet_listeners().iter().any(|listener| listener.local_ip == *remote_ip));
                 for listener_port in candidate_ports {
                     let target_services =
                         listener_services_for_port(&listeners_by_port, &listener_port)?;
@@ -664,6 +790,9 @@ fn persist_scan(
                             )?
                             .as_ref(),
                         );
+                        let edge = if *protocol == twin_core::TransportProtocol::Udp {
+                            edge.with_metadata(twin_core::GraphMetadata::from_json(r#"{"source":"proc_net_udp","inference":"connected_udp_listener_match"}"#))
+                        } else { edge };
                         let first_pair = seen_service_depends.insert(pair);
                         upsert_edge_with_link(store, &mut history, &edge, conn_obs)?;
                         if first_pair {
@@ -935,11 +1064,21 @@ fn persist_scan(
             )?;
 
             let service_units = super::scan_config_files::existing_service_units(store)?;
-            let config_discoveries = super::scan_config_files::discover_config_files_for_scan(
+            let mut config_discoveries = super::scan_config_files::discover_config_files_for_scan(
                 unit_batch.units(),
                 &unit_roots,
                 &service_units,
             );
+            let (included, include_warnings) = super::nginx_includes::discover(&config_discoveries);
+            config_discoveries.extend(included);
+            config_discoveries.sort_by(|a, b| {
+                a.file_path
+                    .cmp(&b.file_path)
+                    .then(a.service_unit.cmp(&b.service_unit))
+            });
+            config_discoveries
+                .dedup_by(|a, b| a.file_path == b.file_path && a.service_unit == b.service_unit);
+            config_parse_warnings.extend(include_warnings);
             super::scan_config_files::persist_config_files_in_scan(
                 store,
                 &mut history,
@@ -953,7 +1092,11 @@ fn persist_scan(
                 &mut edge_cache,
                 &config_discoveries,
                 scan_time,
+                dns,
             )?);
+            if config_parse_warnings.iter().any(|warning| warning.is_nginx) {
+                history.uncertain_source("nginx");
+            }
             super::scan_mounts::persist_mounts_in_scan(
                 store,
                 &mut history,
@@ -968,12 +1111,48 @@ fn persist_scan(
                 sample.proc_root,
                 scan_time,
             )?;
+            if library_notes.warning.as_ref().is_some_and(|warning| {
+                warning.kind == "package_manager_unsupported"
+                    || warning.kind == "package_manager_malformed"
+            }) {
+                history.skip_source("dpkg");
+                history.skip_source("pacman");
+                history.skip_source("rpm");
+            }
+            containerd_notes = super::scan_containerd::persist(store, &mut history, &mut edge_cache, scan_time, sample.containerd_fixture, sample.proc_root)?;
             container_notes = super::scan_containers::persist_containers_in_scan(
                 store,
                 &mut history,
                 &mut edge_cache,
                 scan_time,
+                sample.docker_fixture,
             )?;
+            store.insert_collector_run(&CollectorRunRow {
+                id: None,
+                collector: "docker".into(),
+                started_at_ns: scan_time.as_i64(),
+                ended_at_ns: TimestampNs::now().as_i64(),
+                status: if container_notes.unavailable {
+                    "unavailable"
+                } else if container_notes.incomplete {
+                    "degraded"
+                } else {
+                    "success"
+                }
+                .into(),
+                observation_count: 0,
+                warning_count: i64::from(container_notes.incomplete),
+                error_message: container_notes
+                    .detail
+                    .as_ref()
+                    .map(|detail| detail.detail.clone()),
+                metadata_json: "{}".into(),
+            })?;
+            if container_notes.unavailable {
+                history.skip_source("docker");
+            } else if container_notes.incomplete {
+                history.uncertain_source("docker");
+            }
 
             socket_activation_edge_count =
                 super::scan_systemd_socket::persist_socket_activation_in_scan(
@@ -1016,6 +1195,42 @@ fn persist_scan(
                 cgroup_reader,
             )?;
 
+            socket_activation_edge_count += super::scan_systemd_socket::persist_socket_activation_in_scan(
+                store, &mut history, &mut edge_cache, &runtime_observations, scan_time, &mut seen_service_depends,
+            )?;
+
+            let namespace_counts = super::scan_namespaces::persist(store, &mut history, &mut edge_cache, &batch, &observations, scan_time)?;
+            for endpoint in namespace_counts.endpoints {
+                if endpoint.kind() == Some(NodeKind::UnixSocket) {
+                    if seen_unix_sockets.insert(endpoint) { unix_socket_count += 1; }
+                } else if seen_ports.insert(endpoint) { port_count += 1; }
+            }
+            for (from, kind, to, is_unix) in namespace_counts.edges {
+                let pair = (from.clone(), to);
+                match (kind, from.kind(), is_unix) {
+                    (EdgeKind::ListensOn, Some(NodeKind::Process), false) => { if seen_process_listeners.insert(pair) { process_listens_on_edge_count += 1; } }
+                    (EdgeKind::ListensOn, Some(NodeKind::Service), false) => { if seen_service_listeners.insert(pair) { service_listens_on_edge_count += 1; } }
+                    (EdgeKind::ListensOn, Some(NodeKind::Process), true) => { if seen_process_unix_listeners.insert(pair) { process_listens_on_unix_edge_count += 1; } }
+                    (EdgeKind::ListensOn, Some(NodeKind::Service), true) => { if seen_service_unix_listeners.insert(pair) { service_listens_on_unix_edge_count += 1; } }
+                    (EdgeKind::ConnectsTo, Some(NodeKind::Process), false) => { if seen_process_connects.insert(pair) { process_connects_to_edge_count += 1; } }
+                    (EdgeKind::ConnectsTo, Some(NodeKind::Service), false) => { if seen_service_connects.insert(pair) { service_connects_to_edge_count += 1; } }
+                    (EdgeKind::ConnectsTo, Some(NodeKind::Process), true) => { if seen_process_unix_connects.insert(pair) { process_connects_to_unix_edge_count += 1; } }
+                    (EdgeKind::ConnectsTo, Some(NodeKind::Service), true) => { if seen_service_unix_connects.insert(pair) { service_connects_to_unix_edge_count += 1; } }
+                    (EdgeKind::DependsOn, _, _) if seen_service_depends.insert(pair.clone()) => { if is_unix { service_depends_on_unix_edge_count += 1; } else { service_depends_on_edge_count += 1; } }
+                    _ => {}
+                }
+            }
+            for namespace in batch.namespaces() {
+                for connection in &namespace.inet_connections {
+                    if connection.table.protocol() == twin_core::TransportProtocol::Tcp { tcp_connection_count += 1; } else { udp_connection_count += 1; }
+                    if !namespace.owners.get(&connection.inode).is_some_and(|owners| !owners.is_empty()) { unmapped_active_socket_count += 1; }
+                }
+                unmapped_listener_socket_count += namespace.inet_listeners.iter().filter(|socket| !namespace.owners.get(&socket.inode).is_some_and(|owners| !owners.is_empty())).count();
+                unix_listener_count += namespace.unix_listeners.len();
+                unix_connection_count += namespace.unix_connections.len();
+                unmapped_unix_listener_count += namespace.unix_listeners.iter().filter(|socket| !namespace.owners.get(&socket.inode).is_some_and(|owners| !owners.is_empty())).count();
+            }
+
             history.finalize_missing_rows(store)?;
 
             store.update_collector_run_metadata(
@@ -1026,6 +1241,7 @@ fn persist_scan(
                         sample_index: sample.index,
                         samples_total: sample.total,
                         tcp_connection_count,
+                        udp_connection_count,
                         unmapped_active_socket_count,
                         readable_processes: process_count,
                     },
@@ -1055,9 +1271,17 @@ fn persist_scan(
         warning_count += warning.count;
         warnings.push(warning);
     }
+    warning_count += containerd_notes
+        .warnings
+        .iter()
+        .map(|warning| warning.count)
+        .sum::<usize>();
+    warnings.extend(containerd_notes.warnings);
     warnings.sort_by(|a, b| a.kind.cmp(&b.kind));
-    let total_observations =
-        observations.len() + unit_observations.len() + runtime_observations.len();
+    let total_observations = observations.len()
+        + unit_observations.len()
+        + runtime_observations.len()
+        + containerd_notes.observation_count;
     let mut coverage = super::coverage::from_scan_counts(
         process_count,
         process_warnings,
@@ -1065,7 +1289,12 @@ fn persist_scan(
         unmapped_active_socket_count,
         &super::coverage::AvailabilityProbe::host(),
     );
+    coverage.containerd_available = !containerd_notes.unavailable && !containerd_notes.incomplete;
+    if !coverage.containerd_available {
+        coverage.unavailable_collectors.push("containerd".into());
+    }
     if container_notes.unavailable {
+        coverage.docker_available = false;
         coverage.unavailable_collectors.push("docker".to_string());
         coverage.unavailable_collectors.sort();
         coverage.unavailable_collectors.dedup();
@@ -1074,6 +1303,7 @@ fn persist_scan(
     }
     Ok((
         ScanResult {
+            collector_timings_ms: Default::default(),
             samples_requested: 1,
             samples_completed: 1,
             interval_secs: 0,
@@ -1088,12 +1318,34 @@ fn persist_scan(
             service_count,
             in_cgroup_edge_count,
             service_owns_edge_count,
-            tcp_listener_count: resolved_listeners.len(),
+            tcp_listener_count: batch
+                .inet_listeners()
+                .iter()
+                .chain(
+                    batch
+                        .namespaces()
+                        .iter()
+                        .flat_map(|namespace| &namespace.inet_listeners),
+                )
+                .filter(|l| l.table.protocol() == twin_core::TransportProtocol::Tcp)
+                .count(),
+            udp_listener_count: batch
+                .inet_listeners()
+                .iter()
+                .chain(
+                    batch
+                        .namespaces()
+                        .iter()
+                        .flat_map(|namespace| &namespace.inet_listeners),
+                )
+                .filter(|l| l.table.protocol() == twin_core::TransportProtocol::Udp)
+                .count(),
             port_count,
             process_listens_on_edge_count,
             service_listens_on_edge_count,
             unmapped_listener_socket_count,
             tcp_connection_count,
+            udp_connection_count,
             process_connects_to_edge_count,
             service_connects_to_edge_count,
             service_depends_on_edge_count,
@@ -1112,12 +1364,18 @@ fn persist_scan(
             service_connects_to_unix_edge_count,
             service_depends_on_unix_edge_count,
             unmapped_active_socket_count,
-            socket_owner_inode_count: batch.owners_by_inode().len(),
+            socket_owner_inode_count: batch.owners_by_inode().len()
+                + batch
+                    .namespaces()
+                    .iter()
+                    .map(|namespace| namespace.owners.len())
+                    .sum::<usize>(),
             observation_count: total_observations,
             warning_count,
             warnings,
             warning_details: {
                 let mut details = detailed_warnings(process_warnings);
+                details.extend(containerd_notes.details);
                 for warning in &config_parse_warnings {
                     details.push(ScanWarningDetail {
                         kind: "config_parse".to_string(),
@@ -1159,6 +1417,9 @@ struct UnixConnectionObservationKey {
 fn unix_socket_observation_ids(observations: &[Observation]) -> HashMap<u64, ObservationId> {
     let mut map = HashMap::new();
     for obs in observations {
+        if obs.metadata().get("network_namespace").is_some() {
+            continue;
+        }
         if obs.kind() != ObservationKind::UnixSocketSeen {
             continue;
         }
@@ -1180,6 +1441,9 @@ fn unix_connection_observation_ids(
 ) -> HashMap<UnixConnectionObservationKey, ObservationId> {
     let mut map = HashMap::new();
     for obs in observations {
+        if obs.metadata().get("network_namespace").is_some() {
+            continue;
+        }
         if obs.kind() != ObservationKind::UnixConnectionSeen {
             continue;
         }
@@ -1222,6 +1486,7 @@ fn aggregate_systemd_warnings(warnings: &[SystemdWarning]) -> Vec<ScanWarning> {
     let mut parse_error = 0usize;
     let mut glob_skipped = 0usize;
     let mut masked_empty = 0usize;
+    let mut socket_property_unreadable = 0usize;
     for w in warnings {
         match w.kind() {
             SystemdWarningKind::PathUnreadable => path_unreadable += 1,
@@ -1229,6 +1494,7 @@ fn aggregate_systemd_warnings(warnings: &[SystemdWarning]) -> Vec<ScanWarning> {
             SystemdWarningKind::GlobInstanceSkipped => glob_skipped += 1,
             SystemdWarningKind::MaskedEmpty => masked_empty += 1,
             SystemdWarningKind::DbusUnavailable => {}
+            SystemdWarningKind::SocketPropertyUnreadable => socket_property_unreadable += 1,
         }
     }
     let mut out = Vec::new();
@@ -1244,6 +1510,11 @@ fn aggregate_systemd_warnings(warnings: &[SystemdWarning]) -> Vec<ScanWarning> {
         glob_skipped,
     );
     push_systemd_aggregate(&mut out, SystemdWarningKind::MaskedEmpty, masked_empty);
+    push_systemd_aggregate(
+        &mut out,
+        SystemdWarningKind::SocketPropertyUnreadable,
+        socket_property_unreadable,
+    );
     let dbus_unavailable = warnings
         .iter()
         .filter(|w| w.kind() == SystemdWarningKind::DbusUnavailable)
@@ -1265,7 +1536,9 @@ fn push_systemd_aggregate(out: &mut Vec<ScanWarning>, kind: SystemdWarningKind, 
     }
 }
 
-fn services_by_pid(records: &[twin_collectors::ProcessRecord]) -> HashMap<u32, Vec<NodeId>> {
+pub(crate) fn services_by_pid(
+    records: &[twin_collectors::ProcessRecord],
+) -> HashMap<u32, Vec<NodeId>> {
     let mut map: HashMap<u32, Vec<NodeId>> = HashMap::new();
     for record in records {
         for membership in record.cgroup_memberships() {
@@ -1339,7 +1612,13 @@ fn tcp_connection_observation_ids(
 ) -> HashMap<ConnectionObservationKey, ObservationId> {
     let mut map = HashMap::new();
     for obs in observations {
-        if obs.kind() != ObservationKind::TcpConnectionSeen {
+        if obs.metadata().get("network_namespace").is_some() {
+            continue;
+        }
+        if !matches!(
+            obs.kind(),
+            ObservationKind::TcpConnectionSeen | ObservationKind::UdpConnectionSeen
+        ) {
             continue;
         }
         let Some(inode) = obs
@@ -1412,19 +1691,36 @@ fn listener_obs_from_store(
 }
 
 pub(crate) fn listener_port_candidates(remote_ip: &str, remote_port: u16) -> Vec<NodeId> {
+    inet_listener_port_candidates(
+        twin_core::TransportProtocol::Tcp,
+        remote_ip,
+        remote_port,
+        false,
+    )
+}
+
+fn inet_listener_port_candidates(
+    protocol: twin_core::TransportProtocol,
+    remote_ip: &str,
+    remote_port: u16,
+    is_observed_local: bool,
+) -> Vec<NodeId> {
     let mut out = Vec::new();
-    if let Ok(exact) = NodeId::port_tcp(remote_ip, remote_port) {
+    if let Ok(exact) = NodeId::inet_port(protocol, remote_ip, remote_port) {
         out.push(exact);
     }
-    if remote_ip.parse::<Ipv4Addr>().is_ok() {
-        if let Ok(wildcard) = NodeId::port_tcp("0.0.0.0", remote_port) {
+    let is_loopback = remote_ip
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback());
+    if (is_observed_local || is_loopback) && remote_ip.parse::<Ipv4Addr>().is_ok() {
+        if let Ok(wildcard) = NodeId::inet_port(protocol, "0.0.0.0", remote_port) {
             if !out.contains(&wildcard) {
                 out.push(wildcard);
             }
         }
     }
-    if remote_ip.parse::<Ipv6Addr>().is_ok() {
-        if let Ok(wildcard) = NodeId::port_tcp("::", remote_port) {
+    if (is_observed_local || is_loopback) && remote_ip.parse::<Ipv6Addr>().is_ok() {
+        if let Ok(wildcard) = NodeId::inet_port(protocol, "::", remote_port) {
             if !out.contains(&wildcard) {
                 out.push(wildcard);
             }
@@ -1436,7 +1732,13 @@ pub(crate) fn listener_port_candidates(remote_ip: &str, remote_port: u16) -> Vec
 fn tcp_socket_observation_ids(observations: &[Observation]) -> HashMap<u64, ObservationId> {
     let mut map = HashMap::new();
     for obs in observations {
-        if obs.kind() != ObservationKind::TcpSocketSeen {
+        if obs.metadata().get("network_namespace").is_some() {
+            continue;
+        }
+        if !matches!(
+            obs.kind(),
+            ObservationKind::TcpSocketSeen | ObservationKind::UdpSocketSeen
+        ) {
             continue;
         }
         let Some(inode) = obs
@@ -1462,6 +1764,8 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
     let mut cgroup_malformed = 0usize;
     let mut tcp_table_missing = 0usize;
     let mut tcp_table_malformed = 0usize;
+    let mut udp_table_malformed = 0usize;
+    let mut udp_table_missing = 0usize;
     let mut fd_permission = 0usize;
     let mut fd_malformed = 0usize;
     let mut fd_vanished = 0usize;
@@ -1482,6 +1786,8 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
             ProcessWarningKind::CgroupMalformed => cgroup_malformed += 1,
             ProcessWarningKind::TcpTableMissing => tcp_table_missing += 1,
             ProcessWarningKind::TcpTableMalformed => tcp_table_malformed += 1,
+            ProcessWarningKind::UdpTableMalformed => udp_table_malformed += 1,
+            ProcessWarningKind::UdpTableMissing => udp_table_missing += 1,
             ProcessWarningKind::FdPermissionDenied => fd_permission += 1,
             ProcessWarningKind::FdMalformed => fd_malformed += 1,
             ProcessWarningKind::FdVanished => fd_vanished += 1,
@@ -1518,6 +1824,16 @@ fn aggregate_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarning> {
         &mut out,
         ProcessWarningKind::TcpTableMalformed,
         tcp_table_malformed,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UdpTableMissing,
+        udp_table_missing,
+    );
+    push_aggregate(
+        &mut out,
+        ProcessWarningKind::UdpTableMalformed,
+        udp_table_malformed,
     );
     push_aggregate(
         &mut out,
@@ -1571,7 +1887,6 @@ fn push_aggregate(out: &mut Vec<ScanWarning>, kind: ProcessWarningKind, count: u
 fn detailed_warnings(warnings: &[ProcessWarning]) -> Vec<ScanWarningDetail> {
     warnings
         .iter()
-        .filter(|w| w.kind().includes_json_detail())
         .map(|w| ScanWarningDetail {
             kind: w.kind().detail_key().to_string(),
             path: w.path().display().to_string(),
@@ -1643,10 +1958,7 @@ pub(crate) fn load_existing_edge(
     if let Some(edge) = cache.edges.get(id.as_str()) {
         return Ok(Some(edge.clone()));
     }
-    let loaded = store
-        .get_edge(id.as_str())?
-        .as_ref()
-        .and_then(|row| GraphEdge::try_from(row).ok());
+    let loaded = store.get_edge_typed(&id)?;
     if let Some(ref edge) = loaded {
         cache.edges.insert(id.to_string(), edge.clone());
     }

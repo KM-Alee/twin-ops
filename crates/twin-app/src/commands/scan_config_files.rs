@@ -49,7 +49,7 @@ pub(crate) fn persist_config_files_in_scan(
             continue;
         }
 
-        let obs = config_file_observation(discovery, scan_time);
+        let obs = config_file_observation(discovery, scan_time)?;
         store.insert_observation_typed(&obs)?;
         let obs_id = obs.id();
 
@@ -75,6 +75,7 @@ pub(crate) fn persist_config_files_in_scan(
 }
 
 pub(crate) struct ConfigParseWarning {
+    pub is_nginx: bool,
     pub path: String,
     pub detail: String,
 }
@@ -85,13 +86,37 @@ pub(crate) fn apply_nginx_proxies(
     edge_cache: &mut ScanEdgeCache,
     discoveries: &[ServiceConfigFileDiscovery],
     scan_time: TimestampNs,
+    dns: &impl twin_collectors::dns::DnsReader,
 ) -> Result<Vec<ConfigParseWarning>, StoreError> {
     let mut warnings = Vec::new();
+    let mut parsed_files = Vec::new();
+    let mut origins = std::collections::BTreeMap::new();
+    let has_root = discoveries.iter().any(|item| {
+        item.service_unit == "nginx.service"
+            && item
+                .file_path
+                .file_name()
+                .is_some_and(|name| name == "nginx.conf")
+    });
     for discovery in discoveries {
         let path_str = discovery.file_path.display().to_string();
-        let host_path = host_path_for_discovery(&path_str);
-        let Ok(bytes) = std::fs::read(&host_path) else {
-            continue;
+        let is_nginx = discovery.service_unit == "nginx.service"
+            && discovery.source == ConfigFileSource::KnownServiceConfigPath;
+        let host_path = if discovery.source == ConfigFileSource::KnownServiceConfigPath {
+            host_path_for_discovery(&path_str)
+        } else {
+            discovery.file_path.clone()
+        };
+        let bytes = match super::nginx_includes::read_config(&host_path) {
+            Ok(bytes) => bytes,
+            Err(detail) => {
+                warnings.push(ConfigParseWarning {
+                    is_nginx,
+                    path: path_str.clone(),
+                    detail: detail.into(),
+                });
+                continue;
+            }
         };
         let fingerprint = twin_config::content_fingerprint(&bytes);
         let file_id = NodeId::file(&path_str);
@@ -104,58 +129,218 @@ pub(crate) fn apply_nginx_proxies(
         );
         super::scan_history::upsert_node(store, history, &file_node)?;
 
-        let parsed = twin_config::parse_nginx(&String::from_utf8_lossy(&bytes));
-        for warning in parsed.warnings {
+        if !is_nginx {
+            continue;
+        }
+        let standalone = twin_config::parse_nginx(&String::from_utf8_lossy(&bytes));
+        for name in standalone.upstreams.keys() {
+            origins
+                .entry((
+                    NodeId::service(&discovery.service_unit),
+                    name.to_ascii_lowercase(),
+                ))
+                .or_insert_with(|| file_id.clone());
+        }
+        if has_root
+            && discovery
+                .file_path
+                .file_name()
+                .is_none_or(|name| name != "nginx.conf")
+        {
+            continue;
+        }
+        let (text, include_warnings) = super::nginx_includes::contextual_text(
+            &discovery.file_path,
+            &String::from_utf8_lossy(&bytes),
+        );
+        warnings.extend(include_warnings);
+        let parsed = twin_config::parse_nginx(&text);
+        for warning in &parsed.warnings {
             warnings.push(ConfigParseWarning {
+                is_nginx,
                 path: path_str.clone(),
-                detail: warning,
+                detail: warning.clone(),
             });
         }
         let service_id = NodeId::service(&discovery.service_unit);
-        if store.get_node_typed(&service_id)?.is_none() {
-            continue;
+        if store.get_node_typed(&service_id)?.is_some() {
+            parsed_files.push((path_str, file_id, service_id, parsed));
         }
+    }
+    let mut upstreams = std::collections::BTreeMap::new();
+    for (_, file_id, service, parsed) in &parsed_files {
+        for (name, targets) in &parsed.upstreams {
+            let key = (service.clone(), name.to_ascii_lowercase());
+            upstreams
+                .entry(key.clone())
+                .and_modify(|value| *value = None)
+                .or_insert_with(|| {
+                    Some((
+                        origins
+                            .get(&key)
+                            .cloned()
+                            .unwrap_or_else(|| file_id.clone()),
+                        targets.clone(),
+                    ))
+                });
+        }
+    }
+    let hosts = parsed_files
+        .iter()
+        .flat_map(|(_, _, _, parsed)| {
+            parsed
+                .proxies
+                .iter()
+                .filter(|proxy| {
+                    let name = match &proxy.target {
+                        twin_config::ProxyTarget::Tcp { host, .. } => Some(host),
+                        twin_config::ProxyTarget::Named { name } => Some(name),
+                        _ => None,
+                    };
+                    name.is_none_or(|name| {
+                        !parsed
+                            .upstreams
+                            .contains_key(&twin_config::upstream_key(name, proxy.is_stream))
+                    })
+                })
+                .map(|proxy| &proxy.target)
+                .chain(parsed.upstreams.values().flatten())
+        })
+        .filter_map(|target| match target {
+            twin_config::ProxyTarget::Tcp { host, .. }
+                if host.parse::<std::net::IpAddr>().is_err() && valid_dns_host(host) =>
+            {
+                Some(host.to_ascii_lowercase())
+            }
+            _ => None,
+        })
+        .collect();
+    let answers = dns.resolve(&hosts);
+    for (path_str, file_id, service_id, parsed) in parsed_files {
+        let mut proxies = Vec::new();
         for proxy in parsed.proxies {
+            let name = match &proxy.target {
+                twin_config::ProxyTarget::Tcp { host, .. } => Some(host),
+                twin_config::ProxyTarget::Named { name } => Some(name),
+                _ => None,
+            };
+            let upstream = name.and_then(|name| {
+                upstreams.get(&(
+                    service_id.clone(),
+                    twin_config::upstream_key(name, proxy.is_stream).to_ascii_lowercase(),
+                ))
+            });
+            match upstream {
+                Some(_) if proxy.has_explicit_port => warnings.push(ConfigParseWarning {
+                    is_nginx: true,
+                    path: path_str.clone(),
+                    detail: "named upstream proxy_pass must not specify a port".into(),
+                }),
+                Some(Some((definition, targets))) if !targets.is_empty() => {
+                    for target in targets {
+                        proxies.push((
+                            twin_config::ProxyPass {
+                                has_explicit_port: false,
+                                is_stream: proxy.is_stream,
+                                protocol: proxy.protocol,
+                                raw: format!(
+                                    "{} via upstream declared in {}",
+                                    proxy.raw, definition
+                                ),
+                                target: target.clone(),
+                            },
+                            Some(definition.clone()),
+                        ));
+                    }
+                }
+                Some(_) => warnings.push(ConfigParseWarning {
+                    is_nginx: true,
+                    path: path_str.clone(),
+                    detail: "upstream is empty or has ambiguous definitions".into(),
+                }),
+                None => proxies.push((proxy, None)),
+            }
+        }
+        for (proxy, definition) in proxies {
             match proxy.target {
                 twin_config::ProxyTarget::Tcp { host, port } => {
-                    let Ok(port_id) = NodeId::port_tcp(&host, port) else {
-                        warnings.push(ConfigParseWarning {
-                            path: path_str.clone(),
-                            detail: format!("proxy_pass host `{host}` is not an IP address"),
-                        });
-                        continue;
-                    };
-                    let existing_port = store.get_node_typed(&port_id)?;
-                    let port_node =
-                        GraphNode::tcp_port(&host, port, scan_time, existing_port.as_ref())
-                            .map_err(|err| StoreError::Decode {
-                                detail: err.to_string(),
-                            })?;
-                    super::scan_history::upsert_node(store, history, &port_node)?;
-                    link_reference(
-                        store, history, edge_cache, &file_id, &port_id, scan_time, &proxy.raw,
-                    )?;
-                    for listener in listener_services(store, &port_id)? {
-                        if listener == service_id {
-                            continue;
+                    let addresses = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                        vec![ip]
+                    } else {
+                        match answers.get(&host.to_ascii_lowercase()) {
+                            Some(Ok(addresses)) => addresses.clone(),
+                            _ => {
+                                warnings.push(ConfigParseWarning { is_nginx: true, path: path_str.clone(), detail: "proxy hostname resolution unavailable, invalid or over budget".into() });
+                                continue;
+                            }
                         }
-                        link_proxy(
-                            store,
-                            history,
-                            edge_cache,
-                            &service_id,
-                            &listener,
+                    };
+                    let resolved = host.parse::<std::net::IpAddr>().is_err();
+                    for ip in addresses {
+                        let address = ip.to_string();
+                        let port_id =
+                            NodeId::inet_port(proxy.protocol, &address, port).map_err(|err| {
+                                StoreError::Decode {
+                                    detail: err.to_string(),
+                                }
+                            })?;
+                        let statement = if resolved {
+                            format!("{}; current DNS observation {host} -> {address}; configured backend ownership inferred", proxy.raw)
+                        } else {
+                            proxy.raw.clone()
+                        };
+                        let proof = if resolved {
+                            ProxyProof::CurrentDns(&statement)
+                        } else {
+                            ProxyProof::Config(&statement)
+                        };
+                        let existing_port = store.get_node_typed(&port_id)?;
+                        let port_node = GraphNode::inet_port(
+                            proxy.protocol,
+                            &address,
+                            port,
                             scan_time,
-                            ProxyUpstream {
-                                port: &port_id,
-                                statement: &proxy.raw,
-                            },
+                            existing_port.as_ref(),
+                        )
+                        .map_err(|err| StoreError::Decode {
+                            detail: err.to_string(),
+                        })?;
+                        super::scan_history::upsert_node(store, history, &port_node)?;
+                        link_reference(
+                            store, history, edge_cache, &file_id, &port_id, scan_time, proof,
                         )?;
+                        if let Some(definition) = &definition {
+                            if definition != &file_id {
+                                link_reference(
+                                    store, history, edge_cache, definition, &port_id, scan_time,
+                                    proof,
+                                )?;
+                            }
+                        }
+                        for listener in listener_services(store, &port_id)? {
+                            if listener == service_id {
+                                continue;
+                            }
+                            link_proxy(
+                                store,
+                                history,
+                                edge_cache,
+                                &service_id,
+                                &listener,
+                                scan_time,
+                                ProxyUpstream {
+                                    port: &port_id,
+                                    proof,
+                                    file: &file_id,
+                                },
+                            )?;
+                        }
                     }
                 }
                 twin_config::ProxyTarget::Unix { path } => {
                     let Ok(unix_id) = NodeId::unix_socket(&path) else {
                         warnings.push(ConfigParseWarning {
+                            is_nginx: true,
                             path: path_str.clone(),
                             detail: format!("proxy_pass unix path `{path}` is invalid"),
                         });
@@ -168,11 +353,35 @@ pub(crate) fn apply_nginx_proxies(
                         })?;
                     super::scan_history::upsert_node(store, history, &node)?;
                     link_reference(
-                        store, history, edge_cache, &file_id, &unix_id, scan_time, &proxy.raw,
+                        store,
+                        history,
+                        edge_cache,
+                        &file_id,
+                        &unix_id,
+                        scan_time,
+                        ProxyProof::Config(&proxy.raw),
                     )?;
+                    for listener in listener_services(store, &unix_id)? {
+                        if listener != service_id {
+                            link_proxy(
+                                store,
+                                history,
+                                edge_cache,
+                                &service_id,
+                                &listener,
+                                scan_time,
+                                ProxyUpstream {
+                                    port: &unix_id,
+                                    proof: ProxyProof::Config(&proxy.raw),
+                                    file: &file_id,
+                                },
+                            )?;
+                        }
+                    }
                 }
                 twin_config::ProxyTarget::Named { name } => {
                     warnings.push(ConfigParseWarning {
+                        is_nginx: true,
                         path: path_str.clone(),
                         detail: format!("proxy_pass host `{name}` is not a concrete address"),
                     });
@@ -207,8 +416,9 @@ fn link_reference(
     file_id: &NodeId,
     target_id: &NodeId,
     scan_time: TimestampNs,
-    proxy_pass: &str,
+    proof: ProxyProof<'_>,
 ) -> Result<(), StoreError> {
+    let proxy_pass = proof.statement();
     let existing = super::scan::load_existing_edge(
         store,
         edge_cache,
@@ -223,7 +433,12 @@ fn link_reference(
         existing.as_ref(),
         proxy_pass,
     );
-    let obs = proxy_observation(file_id, target_id, proxy_pass, scan_time)?;
+    let edge = if proof.is_dns() {
+        GraphEdge::from_stored(twin_core::GraphEdgeParts { from: edge.from().clone(), to: edge.to().clone(), kind: edge.kind(), class: twin_core::EdgeClass::Inferred, state: edge.state(), evidence_count: edge.evidence_count(), first_seen: edge.first_seen(), last_seen: edge.last_seen(), metadata: twin_core::GraphMetadata::from_json(serde_json::json!({"inference":"configured_hostname_current_dns", "proxy_pass":proxy_pass}).to_string()) })
+    } else {
+        edge
+    };
+    let obs = proxy_observation(file_id, target_id, proof, scan_time, file_id.as_str())?;
     let obs_id = obs.id();
     store.insert_observation_typed(&obs)?;
     super::scan::upsert_edge_with_link(store, history, &edge, Some((&obs_id, "direct")))?;
@@ -232,7 +447,8 @@ fn link_reference(
 
 struct ProxyUpstream<'a> {
     port: &'a NodeId,
-    statement: &'a str,
+    proof: ProxyProof<'a>,
+    file: &'a NodeId,
 }
 
 fn link_proxy(
@@ -244,7 +460,7 @@ fn link_proxy(
     scan_time: TimestampNs,
     upstream: ProxyUpstream<'_>,
 ) -> Result<(), StoreError> {
-    let proxy_pass = upstream.statement;
+    let proxy_pass = upstream.proof.statement();
     let port_id = upstream.port;
     let existing = super::scan::load_existing_edge(
         store,
@@ -260,7 +476,13 @@ fn link_proxy(
         existing.as_ref(),
         proxy_pass,
     );
-    let obs = proxy_observation(source, port_id, proxy_pass, scan_time)?;
+    let obs = proxy_observation(
+        source,
+        port_id,
+        upstream.proof,
+        scan_time,
+        upstream.file.as_str(),
+    )?;
     let obs_id = obs.id();
     store.insert_observation_typed(&obs)?;
     super::scan::upsert_edge_with_link(store, history, &edge, Some((&obs_id, "support")))?;
@@ -270,9 +492,11 @@ fn link_proxy(
 fn proxy_observation(
     subject: &NodeId,
     object: &NodeId,
-    proxy_pass: &str,
+    proof: ProxyProof<'_>,
     timestamp: TimestampNs,
+    source_file: &str,
 ) -> Result<Observation, StoreError> {
+    let proxy_pass = proof.statement();
     let mut meta = ObservationMetadata::new();
     meta.insert_str("proxy_pass", proxy_pass);
     meta.insert_str("target", object.as_str());
@@ -280,13 +504,21 @@ fn proxy_observation(
         meta.insert_str("proxy_scheme", scheme);
     }
     let raw = RawObservation {
-        source: ObservationSource::ConfigFileDiscovery,
-        kind: ObservationKind::ConfigProxyPass,
+        source: if proof.is_dns() {
+            ObservationSource::SystemDns
+        } else {
+            ObservationSource::ConfigFileDiscovery
+        },
+        kind: if proof.is_dns() {
+            ObservationKind::DnsAddressResolved
+        } else {
+            ObservationKind::ConfigProxyPass
+        },
         collector: CollectorName::new(CONFIG_DISCOVERY_COLLECTOR),
         subject: identity_for(subject),
         object: identity_for(object),
         timestamp,
-        raw_ref: Some(RawEvidenceRef::new("nginx proxy_pass")),
+        raw_ref: Some(RawEvidenceRef::new(source_file)),
         confidence_hint: ConfidenceHint::Moderate,
         metadata: meta,
     };
@@ -324,12 +556,23 @@ fn identity_for(id: &NodeId) -> Option<RawIdentity> {
                 })
         }
         Some(twin_core::NodeKind::Port) => {
-            let rest = id.as_str().strip_prefix("port:tcp:")?;
+            let (protocol, rest) = if let Some(rest) = id.as_str().strip_prefix("port:tcp:") {
+                (twin_core::TransportProtocol::Tcp, rest)
+            } else {
+                (
+                    twin_core::TransportProtocol::Udp,
+                    id.as_str().strip_prefix("port:udp:")?,
+                )
+            };
             let (host, port) = rest.rsplit_once(':')?;
             let port = port.parse().ok()?;
-            Some(RawIdentity::TcpEndpoint {
-                ip: host.to_string(),
-                port,
+            let ip = host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string();
+            Some(match protocol {
+                twin_core::TransportProtocol::Tcp => RawIdentity::TcpEndpoint { ip, port },
+                twin_core::TransportProtocol::Udp => RawIdentity::UdpEndpoint { ip, port },
             })
         }
         Some(twin_core::NodeKind::UnixSocket) => {
@@ -364,7 +607,7 @@ pub(crate) fn config_file_evidence_statement(
 fn config_file_observation(
     discovery: &ServiceConfigFileDiscovery,
     timestamp: TimestampNs,
-) -> Observation {
+) -> Result<Observation, StoreError> {
     let path_str = discovery.file_path.display().to_string();
     let mut meta = ObservationMetadata::new();
     meta.insert_str("source", discovery.source.metadata_key());
@@ -395,7 +638,9 @@ fn config_file_observation(
     };
     twin_observation::Pipeline::default()
         .process(raw)
-        .expect("config file observation")
+        .map_err(|err| StoreError::Decode {
+            detail: err.to_string(),
+        })
 }
 
 pub(crate) fn discover_config_files_for_scan(
@@ -403,10 +648,67 @@ pub(crate) fn discover_config_files_for_scan(
     unit_roots: &[PathBuf],
     existing_services: &HashSet<String>,
 ) -> Vec<ServiceConfigFileDiscovery> {
-    discover_service_config_files(units, unit_roots, existing_services, |path| {
-        let mapped = host_path_for_discovery(&path.to_string_lossy());
-        path_exists_for_discovery(&mapped)
-    })
+    let mut discoveries =
+        discover_service_config_files(units, unit_roots, existing_services, |path| {
+            let mapped = host_path_for_discovery(&path.to_string_lossy());
+            path_exists_for_discovery(&mapped)
+        });
+    let root = host_path_for_discovery("/etc/postgresql");
+    if let Ok(versions) = std::fs::read_dir(&root) {
+        for version in versions
+            .flatten()
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        {
+            let Ok(clusters) = std::fs::read_dir(version.path()) else {
+                continue;
+            };
+            for cluster in clusters
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            {
+                let unit = format!(
+                    "postgresql@{}-{}.service",
+                    version.file_name().to_string_lossy(),
+                    cluster.file_name().to_string_lossy()
+                );
+                let service = if existing_services.contains(&unit) {
+                    unit
+                } else if existing_services.contains("postgresql.service") {
+                    "postgresql.service".to_string()
+                } else {
+                    continue;
+                };
+                let Ok(files) = std::fs::read_dir(cluster.path()) else {
+                    continue;
+                };
+                for file in files.flatten() {
+                    if !file.file_type().is_ok_and(|kind| kind.is_file())
+                        || file
+                            .path()
+                            .extension()
+                            .is_none_or(|extension| extension != "conf")
+                    {
+                        continue;
+                    }
+                    let logical = PathBuf::from("/etc/postgresql")
+                        .join(version.file_name())
+                        .join(cluster.file_name())
+                        .join(file.file_name());
+                    discoveries.push(ServiceConfigFileDiscovery {
+                        service_unit: service.clone(),
+                        file_path: logical,
+                        source: ConfigFileSource::KnownServiceConfigPath,
+                    });
+                }
+            }
+        }
+    }
+    discoveries.sort_by(|a, b| {
+        a.file_path
+            .cmp(&b.file_path)
+            .then_with(|| a.service_unit.cmp(&b.service_unit))
+    });
+    discoveries
 }
 
 pub(crate) fn existing_service_units(store: &Store) -> Result<HashSet<String>, StoreError> {
@@ -415,4 +717,33 @@ pub(crate) fn existing_service_units(store: &Store) -> Result<HashSet<String>, S
         .iter()
         .filter_map(|n| n.id().as_str().strip_prefix("service:").map(str::to_string))
         .collect())
+}
+
+fn valid_dns_host(host: &str) -> bool {
+    host.len() <= 253
+        && host.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+#[derive(Clone, Copy)]
+enum ProxyProof<'a> {
+    Config(&'a str),
+    CurrentDns(&'a str),
+}
+impl<'a> ProxyProof<'a> {
+    fn statement(self) -> &'a str {
+        match self {
+            Self::Config(value) | Self::CurrentDns(value) => value,
+        }
+    }
+    fn is_dns(self) -> bool {
+        matches!(self, Self::CurrentDns(_))
+    }
 }

@@ -15,6 +15,7 @@ pub struct WatchResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WatchTick {
+    pub collector_timings_ms: std::collections::BTreeMap<String, u64>,
     pub at_ns: i64,
     pub baseline: bool,
     pub processes: u64,

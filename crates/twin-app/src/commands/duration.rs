@@ -1,6 +1,6 @@
 use twin_core::TimestampNs;
 
-use crate::error::TemporalError;
+use crate::error::{AppError, TemporalError};
 
 const MAX_DURATION_SECS: u64 = 365 * 24 * 60 * 60;
 
@@ -115,4 +115,25 @@ fn split_duration(input: &str) -> Result<(&str, char), TemporalError> {
         });
     }
     Ok((num, last))
+}
+
+pub fn parse_graph_time(raw: &str) -> Result<twin_core::TimestampNs, AppError> {
+    let invalid = || TemporalError::InvalidDuration {
+        value: raw.into(),
+        reason: "expected RFC3339 time or elapsed duration such as 1h".into(),
+    };
+    let ns = if raw == "now" {
+        twin_core::TimestampNs::now().as_i64()
+    } else if raw.contains('T') || raw.contains('t') {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .map_err(|_| invalid())?
+            .timestamp_nanos_opt()
+            .ok_or_else(invalid)?
+    } else {
+        parse_since_duration(raw, twin_core::TimestampNs::now())?
+    };
+    if ns < 0 || ns > twin_core::TimestampNs::now().as_i64() {
+        return Err(invalid().into());
+    }
+    Ok(twin_core::TimestampNs::new(ns))
 }

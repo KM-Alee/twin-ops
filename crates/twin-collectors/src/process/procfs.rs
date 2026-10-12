@@ -7,7 +7,41 @@ use crate::process::process_record::ProcessRecord;
 use crate::process::socket::{parse_socket_fd_target, SocketOwner};
 use crate::process::warning::{ProcessWarning, ProcessWarningKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    mode: u32,
+    device: u64,
+    inode: u64,
+}
+
+impl FileIdentity {
+    pub fn new(mode: u32, device: u64, inode: u64) -> Self {
+        Self {
+            mode,
+            device,
+            inode,
+        }
+    }
+
+    pub fn is_fifo(self) -> bool {
+        self.mode & 0o170000 == 0o010000
+    }
+    pub fn device(self) -> u64 {
+        self.device
+    }
+    pub fn inode(self) -> u64 {
+        self.inode
+    }
+}
+
 pub trait ProcReader {
+    fn file_identity(&self, _path: &Path) -> io::Result<FileIdentity> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "descriptor metadata unavailable",
+        ))
+    }
+
     fn list_pids(&self, proc_root: &Path) -> Result<Vec<u32>, CollectorError>;
     fn read_file(&self, path: &Path) -> io::Result<Vec<u8>>;
     fn read_link(&self, path: &Path) -> io::Result<PathBuf>;
@@ -25,6 +59,16 @@ pub(crate) fn read_dir_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
 pub struct StdProcReader;
 
 impl ProcReader for StdProcReader {
+    fn file_identity(&self, path: &Path) -> io::Result<FileIdentity> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path)?;
+        Ok(FileIdentity::new(
+            metadata.mode(),
+            metadata.dev(),
+            metadata.ino(),
+        ))
+    }
+
     fn list_pids(&self, proc_root: &Path) -> Result<Vec<u32>, CollectorError> {
         list_pids(proc_root)
     }
@@ -42,27 +86,35 @@ impl ProcReader for StdProcReader {
     }
 }
 
-pub(crate) fn read_tcp_table_content(
+pub(crate) fn read_inet_table_content(
     reader: &dyn ProcReader,
     proc_root: &Path,
-    table: crate::process::socket::TcpTableKind,
+    table: crate::process::socket::InetTableKind,
     warnings: &mut Vec<ProcessWarning>,
 ) -> Option<String> {
+    let malformed = if table.protocol() == twin_core::TransportProtocol::Udp {
+        ProcessWarningKind::UdpTableMalformed
+    } else {
+        ProcessWarningKind::TcpTableMalformed
+    };
     let path = proc_root.join("net").join(table.net_file_name());
     match reader.read_file(&path) {
         Ok(bytes) => match std::str::from_utf8(&bytes) {
             Ok(text) => Some(text.to_string()),
             Err(e) => {
-                warnings.push(ProcessWarning::new(
-                    ProcessWarningKind::TcpTableMalformed,
-                    path,
-                    e.to_string(),
-                ));
+                warnings.push(ProcessWarning::new(malformed, path, e.to_string()));
                 None
             }
         },
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            if table == crate::process::socket::TcpTableKind::Tcp {
+            if table.protocol() == twin_core::TransportProtocol::Udp {
+                warnings.push(ProcessWarning::new(
+                    ProcessWarningKind::UdpTableMissing,
+                    path.clone(),
+                    err.to_string(),
+                ));
+            }
+            if table.protocol() == twin_core::TransportProtocol::Tcp {
                 warnings.push(ProcessWarning::new(
                     ProcessWarningKind::TcpTableMissing,
                     path,
@@ -72,11 +124,7 @@ pub(crate) fn read_tcp_table_content(
             None
         }
         Err(err) => {
-            warnings.push(ProcessWarning::new(
-                ProcessWarningKind::TcpTableMalformed,
-                path,
-                err.to_string(),
-            ));
+            warnings.push(ProcessWarning::new(malformed, path, err.to_string()));
             None
         }
     }
@@ -123,6 +171,33 @@ pub(crate) fn read_fd_socket_owners(
     reader: &dyn ProcReader,
     proc_root: &Path,
     pid: u32,
+    start_ticks: Option<u64>,
+    warnings: &mut Vec<ProcessWarning>,
+) -> Vec<SocketOwner> {
+    let owners = read_fd_socket_owners_unchecked(reader, proc_root, pid, warnings);
+    if let Some(expected) = start_ticks {
+        let path = proc_root.join(pid.to_string()).join("stat");
+        let actual = reader
+            .read_file(&path)
+            .ok()
+            .and_then(|bytes| parse_stat(&bytes).ok())
+            .and_then(|stat| stat.start_ticks);
+        if actual != Some(expected) {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::FdVanished,
+                path,
+                "process incarnation changed during descriptor collection",
+            ));
+            return Vec::new();
+        }
+    }
+    owners
+}
+
+fn read_fd_socket_owners_unchecked(
+    reader: &dyn ProcReader,
+    proc_root: &Path,
+    pid: u32,
     warnings: &mut Vec<ProcessWarning>,
 ) -> Vec<SocketOwner> {
     let fd_dir = proc_root.join(pid.to_string()).join("fd");
@@ -155,6 +230,23 @@ pub(crate) fn read_fd_socket_owners(
         }
     };
 
+    let fdinfo_dir = proc_root.join(pid.to_string()).join("fdinfo");
+    let has_fdinfo = match reader.read_dir(&fdinfo_dir) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => {
+            warnings.push(ProcessWarning::new(
+                if error.kind() == io::ErrorKind::PermissionDenied {
+                    ProcessWarningKind::FdPermissionDenied
+                } else {
+                    ProcessWarningKind::FdMalformed
+                },
+                fdinfo_dir.clone(),
+                "fdinfo directory is unavailable",
+            ));
+            false
+        }
+    };
     let mut owners = Vec::new();
     for path in entries {
         let Some(fd_name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -169,11 +261,47 @@ pub(crate) fn read_fd_socket_owners(
                 let Some(inode) = parse_socket_fd_target(&target_str) else {
                     continue;
                 };
+                let mut is_fdinfo_verified = false;
+                if has_fdinfo {
+                    let fdinfo = fdinfo_dir.join(fd_name);
+                    match reader.read_file(&fdinfo) {
+                        Ok(bytes) => {
+                            let content = String::from_utf8_lossy(&bytes);
+                            let actual = content.lines().find_map(|line| {
+                                line.strip_prefix("ino:")
+                                    .and_then(|value| value.trim().parse::<u64>().ok())
+                            });
+                            if actual != Some(inode) {
+                                warnings.push(ProcessWarning::new(ProcessWarningKind::FdMalformed, fdinfo, "socket symlink and fdinfo inode disagree or fdinfo is malformed"));
+                                continue;
+                            }
+                            is_fdinfo_verified = true;
+                        }
+                        Err(error) if is_vanished(&error) => {
+                            warnings.push(ProcessWarning::new(
+                                ProcessWarningKind::FdVanished,
+                                fdinfo,
+                                "socket fd vanished during fdinfo validation",
+                            ));
+                            continue;
+                        }
+                        Err(error) => warnings.push(ProcessWarning::new(
+                            if error.kind() == io::ErrorKind::PermissionDenied {
+                                ProcessWarningKind::FdPermissionDenied
+                            } else {
+                                ProcessWarningKind::FdMalformed
+                            },
+                            fdinfo,
+                            "socket fdinfo is unreadable",
+                        )),
+                    }
+                }
                 owners.push(SocketOwner {
                     pid,
                     fd,
                     inode,
                     fd_path: format!("/proc/{pid}/fd/{fd}"),
+                    is_fdinfo_verified,
                 });
             }
             Err(err) if is_vanished(&err) => {
@@ -238,6 +366,7 @@ pub(crate) fn read_process(
     match reader.read_file(&stat_path) {
         Ok(bytes) => match parse_stat(&bytes) {
             Ok(parsed) => {
+                record.start_ticks = parsed.start_ticks;
                 record.ppid = Some(parsed.ppid);
                 record.comm = Some(parsed.comm);
                 record.state = Some(parsed.state);
@@ -314,6 +443,21 @@ pub(crate) fn read_process(
 
     read_cgroup_into_record(reader, &pid_dir, pid, &mut record, warnings);
 
+    if let Some(expected) = record.start_ticks {
+        let actual = reader
+            .read_file(&stat_path)
+            .ok()
+            .and_then(|bytes| parse_stat(&bytes).ok())
+            .and_then(|stat| stat.start_ticks);
+        if actual != Some(expected) {
+            warnings.push(ProcessWarning::new(
+                ProcessWarningKind::Vanished,
+                stat_path,
+                "process incarnation changed during collection",
+            ));
+            return None;
+        }
+    }
     Some(record)
 }
 
@@ -385,6 +529,7 @@ fn read_cgroup_into_record(
 }
 
 struct ParsedStat {
+    start_ticks: Option<u64>,
     comm: String,
     state: String,
     ppid: u32,
@@ -406,11 +551,17 @@ fn parse_stat(bytes: &[u8]) -> Result<ParsedStat, String> {
         .ok_or_else(|| "missing ppid".to_string())?
         .parse::<u32>()
         .map_err(|e| e.to_string())?;
+    let start_ticks = fields.nth(17).and_then(|value| value.parse::<u64>().ok());
     let open = text
         .find('(')
         .ok_or_else(|| "missing comm open".to_string())?;
     let comm = text[open + 1..close].to_string();
-    Ok(ParsedStat { comm, state, ppid })
+    Ok(ParsedStat {
+        comm,
+        state,
+        ppid,
+        start_ticks,
+    })
 }
 
 fn parse_status(bytes: &[u8]) -> Result<(Option<u32>, Option<u32>), String> {
@@ -442,4 +593,13 @@ fn parse_cmdline(bytes: &[u8]) -> Vec<String> {
 
 fn is_vanished(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::NotFound
+}
+
+pub(crate) fn has_start_ticks(reader: &dyn ProcReader, path: &Path, expected: u64) -> bool {
+    reader
+        .read_file(path)
+        .ok()
+        .and_then(|bytes| parse_stat(&bytes).ok())
+        .and_then(|stat| stat.start_ticks)
+        == Some(expected)
 }

@@ -172,6 +172,10 @@ fn recency_uses_injected_timestamps() {
         EvidenceRecency::Unknown
     );
 
+    assert_eq!(
+        EvidenceRecency::from_timestamps(6, 5),
+        EvidenceRecency::Unknown
+    );
     let mut factors = ebpf_repeated();
     factors.recency = EvidenceRecency::Fresh;
     assert_eq!(score_evidence(factors).strength.score(), 90);

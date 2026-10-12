@@ -1,3 +1,7 @@
+// Integration-test support module: shared by multiple test binaries, and each
+// binary uses only a subset of these fixtures.
+#![allow(dead_code)]
+
 use std::path::Path;
 
 use twin_store::{

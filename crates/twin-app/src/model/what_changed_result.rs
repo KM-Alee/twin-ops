@@ -2,6 +2,10 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WhatChangedResult {
+    pub target: Option<String>,
+    pub omitted_operational_changes: usize,
+    pub category_filter: Vec<twin_core::ChangeCategory>,
+    pub operational_changes: Vec<super::OperationalChange>,
     pub since_ns: i64,
     pub since_label: String,
     pub generated_at_ns: i64,

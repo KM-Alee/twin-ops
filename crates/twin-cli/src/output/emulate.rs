@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 
-use twin_app::{EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationResult};
+use twin_app::{
+    EmulationImpact, EmulationImpactPathView, EmulationOverlayNode, EmulationResult, ImpactUnknown,
+};
 use twin_core::RiskLevel;
 
 use crate::output::format::{evidence_label_words, Lines, ScanFreshness, Status};
@@ -65,6 +67,7 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
     render_overlay(&mut out, result);
     render_impact_section(&mut out, TRANSIENT_IMPACT, &result.transient_impacts);
     render_impact_section(&mut out, CONFIGURED_CONTEXT, &result.configured_impacts);
+    render_dependency_chain(&mut out, result);
     if result.paths_requested {
         out.blank();
         out.section(IMPACT_PATHS);
@@ -78,27 +81,7 @@ pub fn render_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) -
             &result.evidence_reasons,
         );
     }
-    let (health, unknowns) = split_scan_health(&result.unknowns);
-    if !health.is_empty() {
-        out.blank();
-        out.section(SCAN_HEALTH);
-        for (i, note) in health.iter().enumerate() {
-            let is_last = i + 1 == health.len();
-            out.tree_leaf(is_last, "note", &note.detail);
-        }
-    }
-    if !unknowns.is_empty() {
-        out.blank();
-        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
-        let title = if weakens {
-            format!("{UNKNOWNS} (weakens evidence)")
-        } else {
-            UNKNOWNS.to_string()
-        };
-        out.section(&title);
-        let grouped = group_unknown_refs(unknowns.iter().copied());
-        render_unknown_groups(&mut out, &grouped);
-    }
+    render_unknowns(&mut out, &result.unknowns);
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(true, "status", &result.safety_statement);
@@ -128,6 +111,13 @@ fn render_k8s_pod_delete(result: &EmulationResult, scan: Option<ScanFreshness>) 
         for (index, reason) in result.risk.reasons.iter().enumerate() {
             out.tree_leaf(index + 1 == result.risk.reasons.len(), "reason", reason);
         }
+    }
+    if result.show_evidence {
+        render_action_evidence(
+            &mut out,
+            result,
+            &impact_evidence_findings(&result.transient_impacts),
+        );
     }
     out.blank();
     out.section(SAFETY);
@@ -177,6 +167,13 @@ fn render_k8s_rollout(result: &EmulationResult, scan: Option<ScanFreshness>) -> 
             let label = impact.id.strip_prefix("k8s:").unwrap_or(impact.id.as_str());
             out.tree_leaf(index + 1 == result.restart_impacts.len(), "pod", label);
         }
+    }
+    if result.show_evidence {
+        render_action_evidence(
+            &mut out,
+            result,
+            &impact_evidence_findings(&result.restart_impacts),
+        );
     }
     out.blank();
     out.section(SAFETY);
@@ -234,11 +231,42 @@ fn render_container_restart(result: &EmulationResult, scan: Option<ScanFreshness
             );
         }
     }
+    render_dependency_chain(&mut out, result);
+    if result.paths_requested {
+        out.blank();
+        out.section(IMPACT_PATHS);
+        render_emulation_impact_paths(&mut out, &result.impact_paths);
+    }
+    if result.show_evidence {
+        render_action_evidence(
+            &mut out,
+            result,
+            &impact_evidence_findings(&result.transient_impacts),
+        );
+    }
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(false, "status", &result.safety_statement);
     out.tree_leaf(true, "status", "Nothing was restarted.");
     out.into_string()
+}
+
+fn render_dependency_chain(out: &mut Lines, result: &EmulationResult) {
+    if !result.paths_requested {
+        let affected: Vec<_> = result
+            .overlay
+            .unavailable_nodes
+            .iter()
+            .filter(|node| node.reason.contains("runtime dependency chain"))
+            .collect();
+        if !affected.is_empty() {
+            out.blank();
+            out.section("dependency chain impact");
+            for (index, node) in affected.iter().enumerate() {
+                out.tree_leaf(index + 1 == affected.len(), &node.id, &node.reason);
+            }
+        }
+    }
 }
 
 fn render_evidence_score(out: &mut Lines, score: u8, label: &str, reasons: &[String]) {
@@ -252,6 +280,60 @@ fn render_evidence_score(out: &mut Lines, score: u8, label: &str, reasons: &[Str
     out.tree_leaf(false, "strength", &headline);
     for (index, reason) in reasons.iter().enumerate() {
         out.tree_leaf(index + 1 == reasons.len(), "why", reason);
+    }
+}
+
+fn render_action_evidence(out: &mut Lines, result: &EmulationResult, findings: &[String]) {
+    if !findings.is_empty() {
+        out.blank();
+        out.section(EVIDENCE);
+        for (index, line) in findings.iter().enumerate() {
+            out.tree_leaf(index + 1 == findings.len(), "source", line);
+        }
+    }
+    render_evidence_score(
+        out,
+        result.evidence_strength.score,
+        &result.evidence_strength.label,
+        &result.evidence_reasons,
+    );
+    render_unknowns(out, &result.unknowns);
+}
+
+fn impact_evidence_findings(impacts: &[EmulationImpact]) -> Vec<String> {
+    let mut findings = Vec::new();
+    for impact in impacts {
+        if !impact.path.is_empty() {
+            findings.push(format!("{}: {}", impact.label, impact.path));
+        }
+        for line in &impact.evidence {
+            findings.push(format!("{}: {line}", impact.label));
+        }
+    }
+    findings
+}
+
+fn render_unknowns(out: &mut Lines, unknowns: &[ImpactUnknown]) {
+    let (health, unknowns) = split_scan_health(unknowns);
+    if !health.is_empty() {
+        out.blank();
+        out.section(SCAN_HEALTH);
+        for (i, note) in health.iter().enumerate() {
+            let is_last = i + 1 == health.len();
+            out.tree_leaf(is_last, "note", &note.detail);
+        }
+    }
+    if !unknowns.is_empty() {
+        out.blank();
+        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
+        let title = if weakens {
+            format!("{UNKNOWNS} (weakens evidence)")
+        } else {
+            UNKNOWNS.to_string()
+        };
+        out.section(&title);
+        let grouped = group_unknown_refs(unknowns.iter().copied());
+        render_unknown_groups(out, &grouped);
     }
 }
 
@@ -293,27 +375,7 @@ fn render_delete_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>
             &result.evidence_reasons,
         );
     }
-    let (health, unknowns) = split_scan_health(&result.unknowns);
-    if !health.is_empty() {
-        out.blank();
-        out.section(SCAN_HEALTH);
-        for (i, note) in health.iter().enumerate() {
-            let is_last = i + 1 == health.len();
-            out.tree_leaf(is_last, "note", &note.detail);
-        }
-    }
-    if !unknowns.is_empty() {
-        out.blank();
-        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
-        let title = if weakens {
-            format!("{UNKNOWNS} (weakens evidence)")
-        } else {
-            UNKNOWNS.to_string()
-        };
-        out.section(&title);
-        let grouped = group_unknown_refs(unknowns.iter().copied());
-        render_unknown_groups(&mut out, &grouped);
-    }
+    render_unknowns(&mut out, &result.unknowns);
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(false, "status", &result.safety_statement);
@@ -381,27 +443,7 @@ fn render_upgrade_with_scan(result: &EmulationResult, scan: Option<ScanFreshness
             &result.evidence_reasons,
         );
     }
-    let (health, unknowns) = split_scan_health(&result.unknowns);
-    if !health.is_empty() {
-        out.blank();
-        out.section(SCAN_HEALTH);
-        for (i, note) in health.iter().enumerate() {
-            let is_last = i + 1 == health.len();
-            out.tree_leaf(is_last, "note", &note.detail);
-        }
-    }
-    if !unknowns.is_empty() {
-        out.blank();
-        let weakens = unknowns.iter().any(|u| u.weakens_evidence);
-        let title = if weakens {
-            format!("{UNKNOWNS} (weakens evidence)")
-        } else {
-            UNKNOWNS.to_string()
-        };
-        out.section(&title);
-        let grouped = group_unknown_refs(unknowns.iter().copied());
-        render_unknown_groups(&mut out, &grouped);
-    }
+    render_unknowns(&mut out, &result.unknowns);
     out.blank();
     out.section(SAFETY);
     out.tree_leaf(false, "status", &result.safety_statement);
@@ -463,6 +505,9 @@ fn render_fill_with_scan(result: &EmulationResult, scan: Option<ScanFreshness>) 
             let is_last = i + 1 == result.evidence_lines.len();
             out.tree_leaf(is_last, "source", line);
         }
+    }
+    if result.show_evidence {
+        render_action_evidence(&mut out, result, &[]);
     }
     out.blank();
     out.section(SAFETY);

@@ -20,11 +20,17 @@ pub struct GlobalArgs {
 
 #[derive(Subcommand)]
 pub enum Command {
+    #[command(about = "Generate a shell completion script on stdout")]
+    Completions {
+        shell: clap_complete::Shell,
+    },
     Init(InitArgs),
     Doctor(DoctorArgs),
     Scan(ScanArgs),
     Graph(GraphArgs),
     Impact(ImpactArgs),
+    #[command(about = "Explain stored relationships with their observed or inferred evidence")]
+    Why(WhyArgs),
     Emulate(EmulateArgs),
     WhatChanged(WhatChangedArgs),
     Snapshot(SnapshotArgs),
@@ -40,13 +46,19 @@ pub struct InitArgs {
     #[arg(long, help = "Overwrite existing config")]
     pub force: bool,
 
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]
 pub struct DoctorArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(long, help = "Check kernel, BTF, capabilities, and exec tracing")]
@@ -64,15 +76,36 @@ pub struct DoctorArgs {
 
 #[derive(Args)]
 pub struct ScanArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Read namespace-scoped containerd metadata from fixtures"
+    )]
+    pub containerd_fixture: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Read Docker list and inspect documents from a fixture directory"
+    )]
+    pub docker_fixture: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
-    #[arg(long, default_value = "1", help = "Number of scan samples (1–30)")]
+    #[arg(
+        long,
+        default_value = "1",
+        value_parser = clap::value_parser!(u32).range(1..=30),
+        help = "Number of scan samples (1–30)"
+    )]
     pub samples: u32,
 
     #[arg(
         long,
         default_value = "2",
+        value_parser = clap::value_parser!(u64).range(1..),
         help = "Seconds between samples when samples > 1"
     )]
     pub interval: u64,
@@ -80,7 +113,29 @@ pub struct ScanArgs {
 
 #[derive(Args)]
 pub struct GraphArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "View retained graph history at RFC3339 time or elapsed duration (e.g. 1h)"
+    )]
+    pub at: Option<String>,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..), help = "Maximum listed nodes")]
+    pub limit: Option<u32>,
+    #[arg(long, help = "List nodes whose label contains this text")]
+    pub label: Option<String>,
+    #[arg(long, value_parser = ["active", "stale", "gone"], help = "List nodes in this state (default: active)")]
+    pub state: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        default_value = "human",
+        conflicts_with = "json",
+        help = "Graph output format"
+    )]
+    pub format: GraphFormat,
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(long, help = "List nodes of this kind (default: process)")]
@@ -127,6 +182,14 @@ pub struct K8sArgs {
 
 #[derive(Subcommand)]
 pub enum K8sAction {
+    #[command(
+        about = "Watch Kubernetes resources and refresh the graph with bounded retained results"
+    )]
+    Watch(K8sWatchArgs),
+    #[command(
+        about = "Read a bounded pod log volume summary without exposing or storing log bodies"
+    )]
+    Logs(K8sLogsArgs),
     #[command(about = "Read Kubernetes list documents into the graph")]
     Scan(K8sScanArgs),
     #[command(about = "Show a Kubernetes ownership neighborhood")]
@@ -136,14 +199,56 @@ pub enum K8sAction {
 }
 
 #[derive(Args)]
+pub struct K8sWatchArgs {
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=3600), help = "Watch duration in seconds")]
+    pub duration: u64,
+    #[arg(long, default_value_t = 256, value_parser = clap::value_parser!(u16).range(1..=4096))]
+    pub max_events: u16,
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct K8sLogsArgs {
+    #[arg(value_name = "POD", help = "Pod name within --namespace")]
+    pub pod: String,
+    #[arg(long, default_value = "default")]
+    pub namespace: String,
+    #[arg(long)]
+    pub container: Option<String>,
+    #[arg(long)]
+    pub previous: bool,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u16).range(1..=10000))]
+    pub tail_lines: u16,
+    #[arg(long, default_value_t = 65536, value_parser = clap::value_parser!(u32).range(1..=1048576))]
+    pub max_bytes: u32,
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u64).range(1..=60))]
+    pub timeout: u64,
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
 pub struct K8sScanArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        value_name = "DIR",
+        help = "Read Kubernetes list documents from a fixture directory"
+    )]
+    pub fixture: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 }
 
 #[derive(Args)]
 pub struct K8sTargetArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -155,7 +260,10 @@ pub struct K8sTargetArgs {
 
 #[derive(Args)]
 pub struct EmulateRolloutArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -170,7 +278,10 @@ pub struct EmulateRolloutArgs {
 
 #[derive(Args)]
 pub struct EmulateRestartArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(long, help = "Show transitive dependency impact paths")]
@@ -196,7 +307,10 @@ pub struct EmulateRestartArgs {
 
 #[derive(Args)]
 pub struct EmulateDeleteArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -211,7 +325,10 @@ pub struct EmulateDeleteArgs {
 
 #[derive(Args)]
 pub struct EmulateUpgradeArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -226,7 +343,10 @@ pub struct EmulateUpgradeArgs {
 
 #[derive(Args)]
 pub struct EmulateFillDiskArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -248,7 +368,24 @@ pub struct EmulateFillDiskArgs {
 
 #[derive(Args)]
 pub struct WhatChangedArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Restrict changes to this node/service and its dependency neighborhood"
+    )]
+    pub target: Option<String>,
+    #[arg(
+        long = "category",
+        help = "Filter operational changes by snake_case category; repeatable"
+    )]
+    pub categories: Vec<twin_core::ChangeCategory>,
+    #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=10000), help = "Maximum chronological operational entries (newest retained)")]
+    pub limit: u32,
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..=4), help = "Target neighborhood depth (1–4)")]
+    pub max_depth: u16,
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -267,7 +404,10 @@ pub struct WhatChangedArgs {
 
 #[derive(Args)]
 pub struct SnapshotArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -287,7 +427,10 @@ pub enum SnapshotActionArgs {
 
 #[derive(Args)]
 pub struct DiffArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(help = "Left graph ref (`current` or `snapshot:NAME`)")]
@@ -299,7 +442,10 @@ pub struct DiffArgs {
 
 #[derive(Args)]
 pub struct WatchArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(long, default_value = "5s", help = "Scan interval, for example 5s")]
@@ -331,7 +477,9 @@ pub enum TestAction {
     #[command(about = "Validate a twin.yaml file")]
     Lint(TestFileArgs),
     #[command(about = "Run checks in a twin.yaml file against the stored graph")]
-    Run(TestFileArgs),
+    Run(TestRunArgs),
+    #[command(about = "List stored twin.yaml runs")]
+    List,
 }
 
 #[derive(Args)]
@@ -350,8 +498,41 @@ pub struct TestFileArgs {
 }
 
 #[derive(Args)]
+pub struct TestRunArgs {
+    #[arg(default_value = "twin.yaml", help = "Path to the test file")]
+    pub path: PathBuf,
+    #[arg(
+        long,
+        conflicts_with = "snapshot",
+        help = "Refresh the host graph before evaluating checks"
+    )]
+    pub refresh: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Maximum graph evidence age, for example 5m"
+    )]
+    pub max_age: Option<String>,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Evaluate a retained graph snapshot instead of current rows"
+    )]
+    pub snapshot: Option<String>,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Compare check outcomes with this snapshot baseline"
+    )]
+    pub baseline: Option<String>,
+}
+
+#[derive(Args)]
 pub struct ImpactArgs {
-    #[arg(long, help = "Config file path")]
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(long, help = "Show transitive dependency impact paths")]
@@ -373,4 +554,22 @@ pub struct ImpactArgs {
 
     #[arg(long, help = "Explain the evidence score and list coverage unknowns")]
     pub evidence: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum GraphFormat {
+    Human,
+    Dot,
+    Mermaid,
+}
+
+#[derive(Args)]
+pub struct WhyArgs {
+    #[arg(
+        long,
+        help = "Settings file path (database stays in the XDG data directory)"
+    )]
+    pub config: Option<PathBuf>,
+    #[arg(help = "Node id or service name whose relationships to explain")]
+    pub target: String,
 }

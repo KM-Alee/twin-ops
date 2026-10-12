@@ -175,14 +175,14 @@ fn redacts_sensitive_command_values() {
         .find(|o| o.kind == ObservationKind::ProcessCommandSeen)
         .expect("command obs");
     let normalized = pipeline.process(cmd_obs.clone()).expect("pipeline");
-    let argv = normalized
-        .metadata()
-        .get("argv_json")
-        .and_then(|v| v.as_array())
-        .expect("argv");
-    let values: Vec<&str> = argv.iter().filter_map(|v| v.as_str()).collect();
-    assert!(values.contains(&"/usr/bin/app"));
-    assert!(values.iter().any(|v| v.contains("<redacted>")));
+    assert!(normalized.metadata().get("argv_json").is_none());
+    assert_eq!(
+        normalized
+            .metadata()
+            .get("argc")
+            .and_then(|value| value.as_u64()),
+        Some(5)
+    );
     assert_eq!(
         normalized.redaction_state(),
         twin_observation::RedactionState::Partial

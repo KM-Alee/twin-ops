@@ -27,20 +27,50 @@ pub fn render(result: &WhatChangedResult, options: WhatChangedRenderOptions) -> 
         &format!("since {}", result.since_label),
     );
     out.status_row(Status::Neutral, "summary", &summary_line(result));
+    if let Some(target) = &result.target {
+        out.status_row(Status::Neutral, "target neighborhood", target);
+    }
     out.blank();
-    render_nodes(&mut out, NEW, &result.new_nodes, options);
-    render_nodes(&mut out, DISAPPEARED, &result.disappeared_nodes, options);
-    render_nodes(&mut out, STALE, &result.stale_nodes, options);
-    render_node_deltas(&mut out, CHANGED, &result.changed_nodes, options);
-    render_nodes(&mut out, REAPPEARED, &result.reappeared_nodes, options);
-    if has_edges(result) {
+    if !result.operational_changes.is_empty() {
+        out.section("operational changes");
+        for (index, change) in result.operational_changes.iter().enumerate() {
+            out.tree_leaf(
+                index + 1 == result.operational_changes.len(),
+                &format!("{} · {}", change.recorded_at_label(), change.category),
+                &format!(
+                    "{} · {}: {} [{} evidence; {}]",
+                    change.entity,
+                    change.class,
+                    change.observation,
+                    change.evidence_strength.label(),
+                    change.source
+                ),
+            );
+        }
         out.blank();
-        out.section("edges");
-        render_edges(&mut out, NEW, &result.new_edges, options);
-        render_edges(&mut out, DISAPPEARED, &result.disappeared_edges, options);
-        render_edges(&mut out, STALE, &result.stale_edges, options);
-        render_edge_deltas(&mut out, CHANGED, &result.changed_edges, options);
-        render_edges(&mut out, REAPPEARED, &result.reappeared_edges, options);
+    }
+    if result.omitted_operational_changes > 0 {
+        out.status_row(
+            Status::Warn,
+            "earlier operational changes omitted",
+            &format!("{}; increase --limit", result.omitted_operational_changes),
+        );
+    }
+    if result.category_filter.is_empty() {
+        render_nodes(&mut out, NEW, &result.new_nodes, options);
+        render_nodes(&mut out, DISAPPEARED, &result.disappeared_nodes, options);
+        render_nodes(&mut out, STALE, &result.stale_nodes, options);
+        render_node_deltas(&mut out, CHANGED, &result.changed_nodes, options);
+        render_nodes(&mut out, REAPPEARED, &result.reappeared_nodes, options);
+        if has_edges(result) {
+            out.blank();
+            out.section("edges");
+            render_edges(&mut out, NEW, &result.new_edges, options);
+            render_edges(&mut out, DISAPPEARED, &result.disappeared_edges, options);
+            render_edges(&mut out, STALE, &result.stale_edges, options);
+            render_edge_deltas(&mut out, CHANGED, &result.changed_edges, options);
+            render_edges(&mut out, REAPPEARED, &result.reappeared_edges, options);
+        }
     }
     if !result.unknowns.is_empty() {
         out.blank();
@@ -53,6 +83,12 @@ pub fn render(result: &WhatChangedResult, options: WhatChangedRenderOptions) -> 
 }
 
 fn summary_line(result: &WhatChangedResult) -> String {
+    if !result.category_filter.is_empty() {
+        return format!(
+            "{} matching operational changes shown",
+            result.operational_changes.len()
+        );
+    }
     let node_parts = section_counts(&[
         (NEW, result.new_nodes.len()),
         (DISAPPEARED, result.disappeared_nodes.len()),

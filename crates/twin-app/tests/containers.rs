@@ -3,7 +3,7 @@ mod support;
 use std::path::Path;
 
 use twin_app::{EmulateActionRequest, EmulateRequest, GraphRequest, InitRequest, ScanRequest};
-use twin_core::{NodeId, RiskLevel};
+use twin_core::{NodeId, NodeState, RiskLevel};
 use twin_store::Store;
 
 use support::{
@@ -250,13 +250,260 @@ fn missing_fixture_and_missing_socket_do_not_panic() {
 }
 
 #[test]
+fn docker_outage_keeps_container_rows() {
+    let _env = lock_scan_env();
+    let _clear = ClearOnDrop;
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let proc = home.layout.data_dir.join("fixture-proc-redis");
+    write_api_proc(&proc);
+    let docker = home.layout.data_dir.join("fixture-docker-redis");
+    write_redis_fixture(&docker);
+    set_docker_fixture(&docker);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan with docker");
+
+    let store = Store::open(&home.layout.db_file()).expect("open");
+    let container = store
+        .get_node_typed(&NodeId::container("redis"))
+        .expect("node")
+        .expect("container");
+    assert_eq!(container.state(), NodeState::Active);
+
+    set_docker_fixture(Path::new("/no/such/twin-docker-fixture"));
+    let scan = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("scan outage");
+    assert!(
+        scan.warnings
+            .iter()
+            .any(|warning| warning.kind == "docker_unavailable"),
+        "warnings {:?}",
+        scan.warnings
+    );
+
+    let store = Store::open(&home.layout.db_file()).expect("reopen");
+    let container = store
+        .get_node_typed(&NodeId::container("redis"))
+        .expect("node")
+        .expect("container");
+    assert_eq!(
+        container.state(),
+        NodeState::Active,
+        "a docker outage must not reap container rows"
+    );
+    let edge = store
+        .get_edge("container:redis|runs_image|image:redis:7")
+        .expect("edge")
+        .expect("runs image edge");
+    assert_eq!(edge.state, "active");
+}
+
+#[test]
 fn doctor_containers_does_not_crash_without_docker() {
     let home = IsolatedHome::new();
     twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
     let result = twin_app::doctor_flags_in(&home.layout, None, false, true, false).expect("doctor");
     let containers = result.containers.expect("containers section");
+    assert!(containers.containerd.is_some());
     if !Path::new("/var/run/docker.sock").exists() {
         assert!(!containers.socket_present);
         assert!(containers.detail.contains("socket not found"));
     }
+}
+
+fn seed_node_row(store: &mut Store, id: &str, kind: &str, label: &str) {
+    store
+        .upsert_node(&twin_store::NodeRow {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            label: label.to_string(),
+            state: "active".to_string(),
+            first_seen_ns: 1,
+            last_seen_ns: 1,
+            valid_from_ns: 1,
+            valid_to_ns: None,
+            metadata_json: "{}".to_string(),
+        })
+        .expect("node");
+}
+
+fn seed_edge_row(store: &mut Store, from: &str, kind: &str, to: &str, class: &str) {
+    store
+        .upsert_edge(&twin_store::EdgeRow {
+            id: format!("{from}|{kind}|{to}"),
+            from_node_id: from.to_string(),
+            to_node_id: to.to_string(),
+            kind: kind.to_string(),
+            class: class.to_string(),
+            state: "active".to_string(),
+            evidence_score: 0,
+            evidence_label: "weak".to_string(),
+            evidence_count: 0,
+            first_seen_ns: 1,
+            last_seen_ns: 1,
+            metadata_json: "{}".to_string(),
+        })
+        .expect("edge");
+}
+
+fn container_restart_request(home: &IsolatedHome, show_paths: bool) -> twin_app::EmulationResult {
+    twin_app::emulate_in(
+        &home.layout,
+        EmulateRequest {
+            action: EmulateActionRequest::Restart {
+                target: Some(NodeId::container("redis")),
+                target_query: None,
+                show_paths,
+                max_depth: 4,
+            },
+            ..EmulateRequest::default()
+        },
+    )
+    .expect("emulate")
+}
+
+#[test]
+fn container_restart_paths_list_transitive_dependents_of_affected_services() {
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let mut store = Store::open(&home.layout.db_file()).expect("open");
+    seed_node_row(&mut store, "container:redis", "container", "redis");
+    seed_node_row(
+        &mut store,
+        "port:tcp:0.0.0.0:6379",
+        "port",
+        "tcp:0.0.0.0:6379",
+    );
+    seed_node_row(&mut store, "service:api.service", "service", "api.service");
+    seed_node_row(
+        &mut store,
+        "service:worker.service",
+        "service",
+        "worker.service",
+    );
+    seed_edge_row(
+        &mut store,
+        "container:redis",
+        "maps_port",
+        "port:tcp:0.0.0.0:6379",
+        "observed",
+    );
+    seed_edge_row(
+        &mut store,
+        "service:api.service",
+        "connects_to",
+        "port:tcp:0.0.0.0:6379",
+        "inferred",
+    );
+    seed_edge_row(
+        &mut store,
+        "service:worker.service",
+        "depends_on",
+        "service:api.service",
+        "inferred",
+    );
+
+    let direct = container_restart_request(&home, false);
+    assert!(!direct.paths_requested);
+    assert_eq!(direct.impact_paths.len(), 1);
+    assert!(direct
+        .overlay
+        .unavailable_nodes
+        .iter()
+        .any(|node| node.id == "service:worker.service"));
+    assert!(direct
+        .overlay
+        .unavailable_nodes
+        .iter()
+        .any(|node| node.id == "service:api.service"));
+    assert!(store
+        .get_node("service:worker.service")
+        .expect("node")
+        .is_some_and(|node| node.state == "active"));
+
+    let with_paths = container_restart_request(&home, true);
+    assert!(with_paths.paths_requested);
+    assert_eq!(with_paths.max_depth, 4);
+    assert_eq!(with_paths.impact_paths.len(), 1);
+    let path = &with_paths.impact_paths[0];
+    assert_eq!(path.terminal_id, "service:worker.service");
+    assert_eq!(path.terminal_label, "worker.service");
+    assert_eq!(path.depth, 1);
+    assert_eq!(
+        path.path_chain,
+        "service:worker.service -> service:api.service"
+    );
+    assert!(with_paths
+        .unknowns
+        .iter()
+        .any(|unknown| unknown.kind == "missing_evidence"));
+}
+
+#[test]
+fn missing_container_inspection_is_degraded_and_preserves_ownership_as_stale() {
+    let _env = lock_scan_env();
+    let _clear = ClearOnDrop;
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let docker = home.layout.data_dir.join("docker");
+    write_redis_fixture(&docker);
+    set_docker_fixture(&docker);
+    let proc = home.layout.data_dir.join("proc");
+    write_api_proc(&proc);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    std::fs::remove_file(docker.join("containers/abc123redis.json")).expect("inspect missing");
+    let result = twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("partial");
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.kind == "docker_inspect_incomplete"));
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let owns = store.list_edges_from("container:redis").expect("edges");
+    assert!(owns
+        .iter()
+        .any(|edge| edge.to_node_id == "process:pid:91" && edge.state == "stale"));
+    let runs = store.list_collector_runs(Some("docker")).expect("runs");
+    assert_eq!(runs.last().expect("run").status, "degraded");
+}
+
+#[test]
+fn replacement_container_preserves_alias_but_starts_a_new_lifetime() {
+    let _env = lock_scan_env();
+    let _clear = ClearOnDrop;
+    clear_scan_env();
+    let home = IsolatedHome::new();
+    twin_app::init_in(&home.layout, InitRequest::default()).expect("init");
+    let docker = home.layout.data_dir.join("docker");
+    write_redis_fixture(&docker);
+    set_docker_fixture(&docker);
+    let proc = home.layout.data_dir.join("proc");
+    write_api_proc(&proc);
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("first");
+    let store = Store::open(&home.layout.db_file()).expect("store");
+    let first = store
+        .get_node("container:redis")
+        .expect("query")
+        .expect("container");
+    let list = std::fs::read_to_string(docker.join("containers/list.json"))
+        .expect("list")
+        .replace("abc123redis", "replacement");
+    std::fs::write(docker.join("containers/list.json"), list).expect("new list");
+    let inspect = std::fs::read_to_string(docker.join("containers/abc123redis.json"))
+        .expect("inspect")
+        .replace("abc123redis", "replacement")
+        .replace(
+            "\"Config\":",
+            "\"Image\":\"sha256:actual-running-artifact\",\"Config\":",
+        );
+    std::fs::write(docker.join("containers/replacement.json"), inspect).expect("replacement");
+    twin_app::scan_in(&home.layout, ScanRequest::default(), &proc).expect("replacement scan");
+    let replacement = store
+        .get_node("container:redis")
+        .expect("query")
+        .expect("container");
+    assert!(replacement.first_seen_ns > first.first_seen_ns);
+    assert!(replacement.metadata_json.contains("replacement"));
+    assert!(replacement
+        .metadata_json
+        .contains("sha256:actual-running-artifact"));
 }

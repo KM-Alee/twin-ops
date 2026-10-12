@@ -11,6 +11,8 @@ pub enum ProcessWarningKind {
     CgroupMalformed,
     TcpTableMissing,
     TcpTableMalformed,
+    UdpTableMalformed,
+    UdpTableMissing,
     FdPermissionDenied,
     FdMalformed,
     FdVanished,
@@ -34,6 +36,8 @@ impl ProcessWarningKind {
             Self::CgroupMalformed => "cgroup_malformed",
             Self::TcpTableMissing => "tcp_table_missing",
             Self::TcpTableMalformed => "tcp_table_malformed",
+            Self::UdpTableMalformed => "udp_table_malformed",
+            Self::UdpTableMissing => "udp_table_missing",
             Self::FdPermissionDenied => "fd_permission_denied",
             Self::FdMalformed => "fd_malformed",
             Self::FdVanished => "fd_vanished",
@@ -57,6 +61,8 @@ impl ProcessWarningKind {
             Self::CgroupMalformed => "cgroup_malformed",
             Self::TcpTableMissing => "tcp_table_missing",
             Self::TcpTableMalformed => "tcp_table_malformed",
+            Self::UdpTableMalformed => "udp_table_malformed",
+            Self::UdpTableMissing => "udp_table_missing",
             Self::FdPermissionDenied => "fd_permission_denied",
             Self::FdMalformed => "fd_malformed",
             Self::FdVanished => "fd_vanished",
@@ -67,22 +73,6 @@ impl ProcessWarningKind {
             Self::UnixSocketUnmapped => "unix_socket_unmapped",
             Self::UnixConnectionUnmapped => "unix_connection_unmapped",
         }
-    }
-
-    pub fn includes_json_detail(self) -> bool {
-        matches!(
-            self,
-            Self::Vanished
-                | Self::Malformed
-                | Self::CgroupMalformed
-                | Self::TcpTableMalformed
-                | Self::FdMalformed
-                | Self::SocketUnmapped
-                | Self::ActiveSocketUnmapped
-                | Self::UnixTableMalformed
-                | Self::UnixSocketUnmapped
-                | Self::UnixConnectionUnmapped
-        )
     }
 
     pub fn from_aggregate_key(key: &str) -> Option<Self> {
@@ -96,6 +86,8 @@ impl ProcessWarningKind {
             "cgroup_malformed" => Some(Self::CgroupMalformed),
             "tcp_table_missing" => Some(Self::TcpTableMissing),
             "tcp_table_malformed" => Some(Self::TcpTableMalformed),
+            "udp_table_malformed" => Some(Self::UdpTableMalformed),
+            "udp_table_missing" => Some(Self::UdpTableMissing),
             "fd_permission_denied" => Some(Self::FdPermissionDenied),
             "fd_malformed" => Some(Self::FdMalformed),
             "fd_vanished" => Some(Self::FdVanished),
@@ -120,6 +112,8 @@ impl ProcessWarningKind {
             Self::CgroupMalformed => ("cgroup", format!("{count} malformed cgroup lines")),
             Self::TcpTableMissing => ("tcp", format!("{count} missing tcp tables")),
             Self::TcpTableMalformed => ("tcp", format!("{count} malformed tcp rows")),
+            Self::UdpTableMissing => ("udp", format!("{count} unavailable UDP socket tables")),
+            Self::UdpTableMalformed => ("udp", format!("{count} malformed udp rows")),
             Self::FdPermissionDenied => (
                 "fd",
                 format!("{count} fd directories hidden by permissions"),

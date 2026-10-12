@@ -96,7 +96,28 @@ impl EbpfReport {
 }
 
 pub fn host_facts() -> EbpfFacts {
-    read_facts(&EbpfProbePaths::host())
+    let mut facts = read_facts(&EbpfProbePaths::host());
+    facts.tcp_tracepoint_present &= [
+        "/sys/kernel/tracing/events",
+        "/sys/kernel/debug/tracing/events",
+    ]
+    .iter()
+    .any(|root| {
+        [
+            "syscalls/sys_enter_connect",
+            "syscalls/sys_exit_connect",
+            "sched/sched_process_exit",
+            "syscalls/sys_enter_accept",
+            "syscalls/sys_exit_accept",
+            "syscalls/sys_enter_accept4",
+            "syscalls/sys_exit_accept4",
+            "syscalls/sys_enter_bind",
+            "syscalls/sys_exit_bind",
+        ]
+        .iter()
+        .all(|trace| Path::new(root).join(trace).is_dir())
+    });
+    facts
 }
 
 pub fn read_facts(paths: &EbpfProbePaths) -> EbpfFacts {
@@ -129,7 +150,7 @@ pub fn assess(facts: &EbpfFacts) -> EbpfReport {
             facts.tcp_tracepoint_present,
             "available",
             "unavailable",
-            "inet_sock_set_state tracepoint not present",
+            "TCP state/connect/accept/bind syscall tracepoints unavailable",
         ),
     }
 }

@@ -17,6 +17,7 @@ fn connected_service_is_high_risk_and_performs_nothing() {
     let service = NodeId::service("api.service");
     let report = emulate_restart_container(RestartContainerInput {
         container: redis(),
+        impact_paths: Vec::new(),
         container_in_graph: true,
         affected: vec![ContainerAffectedService {
             id: service.clone(),
@@ -44,6 +45,7 @@ fn connected_service_is_high_risk_and_performs_nothing() {
 fn isolated_container_is_lower_risk_and_performs_nothing() {
     let report = emulate_restart_container(RestartContainerInput {
         container: redis(),
+        impact_paths: Vec::new(),
         container_in_graph: true,
         affected: Vec::new(),
     });
@@ -54,6 +56,6 @@ fn isolated_container_is_lower_risk_and_performs_nothing() {
         .iter()
         .any(|reason| reason.contains("nothing connects")));
     let overlay =
-        RestartContainerOverlayBuilder::new(NodeId::container("redis"), "redis", &[]).build();
+        RestartContainerOverlayBuilder::new(NodeId::container("redis"), "redis", &[], &[]).build();
     assert!(overlay.interrupted_relationships.is_empty());
 }

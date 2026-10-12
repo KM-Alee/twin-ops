@@ -87,14 +87,30 @@ impl<R: UnitFileReader> SystemdUnitCollector<R> {
     }
 
     pub fn collect(&self, started_at: TimestampNs) -> Result<SystemdUnitBatch, CollectorError> {
-        let (units, warnings) = discover_units(&self.search_roots, &self.reader);
+        self.collect_with_instances(started_at, &[])
+    }
+
+    pub fn collect_with_instances(
+        &self,
+        started_at: TimestampNs,
+        instances: &[String],
+    ) -> Result<SystemdUnitBatch, CollectorError> {
+        let (units, mut warnings) = discover_units(&self.search_roots, &self.reader, instances);
         let mut observations = Vec::new();
         let mut dependency_count = 0usize;
 
         for unit in &units {
             observations.push(raw_unit_seen(unit, started_at));
             if let Some(socket) = &unit.socket_config {
-                observations.push(raw_socket_activates(unit, socket, started_at));
+                if let Some(observation) = raw_socket_activates(unit, socket, started_at) {
+                    observations.push(observation);
+                } else {
+                    warnings.push(crate::systemd::warning::SystemdWarning::new(
+                        crate::systemd::warning::SystemdWarningKind::ParseError,
+                        unit.main_path.clone(),
+                        "invalid or unresolved socket activation target",
+                    ));
+                }
             }
             for (targets, key, kind) in [
                 (
@@ -157,14 +173,15 @@ fn raw_socket_activates(
     unit: &EffectiveUnit,
     socket: &crate::systemd::unit_parse::SocketUnitConfig,
     timestamp: TimestampNs,
-) -> RawObservation {
-    let target = socket_activation_target(&unit.unit_name, socket);
+) -> Option<RawObservation> {
+    let target = socket_activation_target(&unit.unit_name, socket)?;
     let raw_ref = RawEvidenceRef::new(unit.main_path.display().to_string());
     let mut meta = ObservationMetadata::new();
     meta.insert_str("socket_unit", &unit.unit_name);
     meta.insert_str("service_unit", &target);
     meta.insert_str("unit_path", &unit.main_path.display().to_string());
-    RawObservation {
+    meta.insert_bool("accept", socket.is_accept);
+    Some(RawObservation {
         source: ObservationSource::SystemdUnitFile,
         kind: ObservationKind::SystemdSocketActivates,
         collector: CollectorName::new(COLLECTOR_NAME),
@@ -176,7 +193,7 @@ fn raw_socket_activates(
         raw_ref: Some(raw_ref),
         confidence_hint: ConfidenceHint::High,
         metadata: meta,
-    }
+    })
 }
 
 fn raw_unit_seen(unit: &EffectiveUnit, timestamp: TimestampNs) -> RawObservation {
@@ -184,6 +201,16 @@ fn raw_unit_seen(unit: &EffectiveUnit, timestamp: TimestampNs) -> RawObservation
     let mut meta = ObservationMetadata::new();
     meta.insert_str("unit", &unit.unit_name);
     meta.insert_str("unit_path", &unit.main_path.display().to_string());
+    if let Some(socket) = &unit.socket_config {
+        meta.insert_str_array("listen_streams", &socket.listen_streams);
+        meta.insert_str_array("listen_datagrams", &socket.listen_datagrams);
+        meta.insert_str_array(
+            "listen_sequential_packets",
+            &socket.listen_sequential_packets,
+        );
+        meta.insert_str_array("listen_fifos", &socket.listen_fifos);
+        meta.insert_bool("accept", socket.is_accept);
+    }
     let kind = if unit.unit_name.ends_with(".socket") {
         ObservationKind::SystemdSocketSeen
     } else {

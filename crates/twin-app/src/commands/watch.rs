@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -131,15 +131,19 @@ pub fn run<S: WatchSink>(
     let mut warnings = Vec::new();
     let mut exec_count = 0u64;
     let mut tcp_count = 0u64;
-    let mut ticks = Vec::new();
+    let mut ticks = VecDeque::with_capacity(256);
+    let mut ticks_completed = 0u32;
     let mut previous: Option<TickSnapshot> = None;
     let (mut stream, ebpf_attached) = open_stream(&run.ebpf, sink, &mut warnings);
     let mut tcp_ingest = TcpIngestor::new(TcpRateLimits::session());
 
-    while !stop.load(Ordering::SeqCst) && !limit_reached(&run, started, ticks.len() as u32) {
+    while !stop.load(Ordering::SeqCst) && !limit_reached(&run, started, ticks_completed) {
+        let scan_started = Instant::now();
         let scan = super::scan::run(
             layout,
             &ScanRequest {
+                docker_fixture: None,
+                containerd_fixture: None,
                 config_override: run.config_override.clone(),
                 samples: 1,
                 interval_secs: 1,
@@ -148,17 +152,28 @@ pub fn run<S: WatchSink>(
         )?;
         let snapshot = TickSnapshot {
             process_ids: active_process_ids(&layout.db_file())?,
-            connections: scan.tcp_connection_count as u64,
-            listening_ports: scan.tcp_listener_count as u64,
+            connections: (scan.tcp_connection_count + scan.udp_connection_count) as u64,
+            listening_ports: (scan.tcp_listener_count + scan.udp_listener_count) as u64,
             processes: scan.process_count as u64,
         };
-        let tick = make_tick(scan.ended_at_ns, &previous, &snapshot);
+        let mut tick = make_tick(scan.ended_at_ns, &previous, &snapshot);
+        tick.collector_timings_ms = scan.collector_timings_ms;
+        tick.collector_timings_ms.insert(
+            "scan_total".into(),
+            u64::try_from(scan_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
         previous = Some(snapshot);
         sink.on_tick(&tick);
-        ticks.push(tick);
+        if ticks.len() == 256 {
+            ticks.pop_front();
+        }
+        ticks.push_back(tick);
+        ticks_completed = ticks_completed.saturating_add(1);
         if let Some(open) = stream.as_mut() {
             let drained = match open {
-                OpenStream::Exec(exec) => drain_exec(exec, sink, &mut exec_count, &mut warnings),
+                OpenStream::Exec(exec) => {
+                    drain_exec(exec, layout, sink, &mut exec_count, &mut warnings)
+                }
                 OpenStream::Tcp(tcp) => drain_tcp(
                     tcp,
                     layout,
@@ -172,7 +187,7 @@ pub fn run<S: WatchSink>(
                 stream.take();
             }
         }
-        if stop.load(Ordering::SeqCst) || limit_reached(&run, started, ticks.len() as u32) {
+        if stop.load(Ordering::SeqCst) || limit_reached(&run, started, ticks_completed) {
             break;
         }
         if wait_interval(run.interval, run.duration, started, stop) {
@@ -180,17 +195,44 @@ pub fn run<S: WatchSink>(
         }
     }
 
+    if let Some(open) = stream.as_mut().filter(|open| {
+        matches!(
+            open,
+            OpenStream::Exec(OpenExec::Session(_)) | OpenStream::Tcp(OpenTcp::Session(_))
+        )
+    }) {
+        match open {
+            OpenStream::Exec(OpenExec::Session(session)) => session.stop_tracing(),
+            OpenStream::Tcp(OpenTcp::Session(session)) => session.stop_tracing(),
+            _ => {}
+        }
+        match open {
+            OpenStream::Exec(exec) => {
+                drain_exec(exec, layout, sink, &mut exec_count, &mut warnings);
+            }
+            OpenStream::Tcp(tcp) => {
+                drain_tcp(
+                    tcp,
+                    layout,
+                    sink,
+                    &mut tcp_ingest,
+                    &mut tcp_count,
+                    &mut warnings,
+                );
+            }
+        }
+    }
     drop(stream);
     Ok(WatchResult {
         interval_secs,
         duration_secs: run.duration.map(|duration| duration.as_secs()),
-        ticks_completed: ticks.len() as u32,
+        ticks_completed,
         exec_count,
         tcp_count,
         ebpf_requested: !matches!(run.ebpf, WatchEbpf::Off),
         ebpf_attached,
         warnings,
-        ticks,
+        ticks: ticks.into_iter().collect(),
     })
 }
 
@@ -285,15 +327,36 @@ fn live_tcp_session() -> Result<twin_ebpf::TcpSession, String> {
 
 fn drain_exec<S: WatchSink>(
     open: &mut OpenExec,
+    layout: &TwinLayout,
     sink: &mut S,
     exec_count: &mut u64,
     warnings: &mut Vec<String>,
 ) -> Drain {
     let pipeline = Pipeline::default();
-    loop {
+    let mut store = match Store::open(&layout.db_file()) {
+        Ok(store) => store,
+        Err(error) => {
+            note(sink, warnings, error.to_string());
+            return Drain::StopStream;
+        }
+    };
+    for _ in 0..32768 {
         let event = match poll_exec(open) {
             Ok(Some(event)) => event,
-            Ok(None) => return Drain::Continue,
+            Ok(None) => {
+                if let OpenExec::Session(session) = open {
+                    match session.dropped_count() {
+                        Ok(count) if count > 0 => {
+                            if let Err(error) = persist_exec_drops(&mut store, count) {
+                                note(sink, warnings, error.to_string());
+                            }
+                        }
+                        Err(error) => note(sink, warnings, error.to_string()),
+                        _ => {}
+                    }
+                }
+                return Drain::Continue;
+            }
             Err(err) => {
                 note(sink, warnings, err.to_string());
                 return Drain::StopStream;
@@ -302,6 +365,10 @@ fn drain_exec<S: WatchSink>(
         let raw = twin_ebpf::exec_to_raw(&event);
         match pipeline.process(raw) {
             Ok(observation) => {
+                if let Err(error) = persist_exec(&mut store, &observation, &event) {
+                    note(sink, warnings, error.to_string());
+                    return Drain::StopStream;
+                }
                 let node_id = observation
                     .subject()
                     .map(|id| id.to_string())
@@ -318,6 +385,7 @@ fn drain_exec<S: WatchSink>(
             Err(err) => note(sink, warnings, err.to_string()),
         }
     }
+    Drain::Continue
 }
 
 fn drain_tcp<S: WatchSink>(
@@ -335,8 +403,14 @@ fn drain_tcp<S: WatchSink>(
             return Drain::StopStream;
         }
     };
-    let mut last_ts = 0i64;
-    loop {
+    if let OpenTcp::Session(session) = open {
+        match session.dropped_count() {
+            Ok(total) => ingest.record_kernel_drops(total),
+            Err(error) => note(sink, warnings, error.to_string()),
+        }
+    }
+    let mut last_ts = twin_core::TimestampNs::now().as_i64();
+    for _ in 0..32768 {
         let event = match poll_tcp(open) {
             Ok(Some(event)) => event,
             Ok(None) => break,
@@ -379,6 +453,7 @@ fn make_tick(at_ns: i64, previous: &Option<TickSnapshot>, current: &TickSnapshot
     let Some(previous) = previous else {
         return WatchTick {
             at_ns,
+            collector_timings_ms: Default::default(),
             baseline: true,
             processes: current.processes,
             connections: current.connections,
@@ -405,6 +480,7 @@ fn make_tick(at_ns: i64, previous: &Option<TickSnapshot>, current: &TickSnapshot
         split_delta(previous.listening_ports, current.listening_ports);
     WatchTick {
         at_ns,
+        collector_timings_ms: Default::default(),
         baseline: false,
         processes: current.processes,
         connections: current.connections,
@@ -491,5 +567,156 @@ fn wait_interval(
 
 fn note<S: WatchSink>(sink: &mut S, warnings: &mut Vec<String>, message: String) {
     sink.on_warning(&message);
-    warnings.push(message);
+    if !warnings.contains(&message) {
+        if warnings.len() == 256 {
+            warnings.remove(0);
+        }
+        warnings.push(message);
+    }
+}
+
+fn persist_exec(
+    store: &mut Store,
+    observation: &twin_observation::Observation,
+    event: &EbpfExec,
+) -> Result<(), AppError> {
+    store
+        .with_transaction(|store| {
+            let mut history = super::scan_history::ScanHistorySession::new(
+                observation.timestamp().as_i64(),
+                None,
+                false,
+                false,
+                super::scan_history::FinalizeScope::Host,
+            );
+            let mut runtime_uncertain = Vec::new();
+            for owner in
+                store.list_edges_to(&twin_core::NodeId::process(event.pid()).to_string())?
+            {
+                if owner.kind != "owns" {
+                    continue;
+                }
+                for edge in store.list_edges_from(&owner.from_node_id)? {
+                    if edge.kind != "connects_to"
+                        || edge.last_seen_ns > observation.timestamp().as_i64()
+                    {
+                        continue;
+                    }
+                    let metadata: serde_json::Value =
+                        serde_json::from_str(&edge.metadata_json).unwrap_or_default();
+                    if metadata.get("source").and_then(|value| value.as_str()) != Some("ebpf_tcp") {
+                        continue;
+                    }
+                    let mut has_other_origin = false;
+                    for (id, _) in store.list_observations_for_edge(&edge.id)? {
+                        if let Some(observation) = store.get_observation(&id)? {
+                            if observation.kind == "ebpf_connect"
+                                && observation
+                                    .subject_node_id
+                                    .as_deref()
+                                    .is_some_and(|subject| {
+                                        subject != format!("process:pid:{}", event.pid())
+                                    })
+                            {
+                                has_other_origin = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !has_other_origin {
+                        runtime_uncertain.push(edge.id);
+                    }
+                }
+            }
+            store.insert_observation_typed(observation)?;
+            if !super::ebpf_tcp::ensure_process(
+                store,
+                &mut history,
+                event.pid(),
+                observation.timestamp(),
+                event.start_ticks(),
+            )? {
+                return Ok(());
+            }
+            store.mark_edges_missing(
+                &runtime_uncertain,
+                observation.timestamp().as_i64(),
+                true,
+                history.collector_run_id(),
+            )?;
+            let id = twin_core::NodeId::process(event.pid());
+            if let Some(existing) = store.get_node_typed(&id)? {
+                let mut metadata: serde_json::Value =
+                    serde_json::from_str(existing.metadata().as_str())
+                        .unwrap_or_else(|_| serde_json::json!({}));
+                metadata["last_exec_ns"] = observation.timestamp().as_i64().into();
+                metadata["exec_observation_id"] = observation.id().to_string().into();
+                if let Some(namespace) = event.network_namespace() {
+                    metadata["network_namespace"] = namespace.to_string().into();
+                }
+                let node = twin_core::GraphNode::from_parts(twin_core::GraphNodeParts {
+                    id: id.clone(),
+                    kind: NodeKind::Process,
+                    label: event.comm().to_string(),
+                    state: twin_core::NodeState::Active,
+                    first_seen: existing.first_seen(),
+                    last_seen: observation.timestamp(),
+                    valid_from: existing.valid_from(),
+                    valid_to: None,
+                    metadata: twin_core::GraphMetadata::from_json(metadata.to_string()),
+                });
+                super::scan_history::upsert_node(store, &mut history, &node)?;
+                let uncertain: Vec<_> = store
+                    .list_edges_from(id.as_str())?
+                    .into_iter()
+                    .filter(|edge| {
+                        matches!(
+                            edge.kind.as_str(),
+                            "connects_to" | "listens_on" | "loads_library" | "uses" | "references"
+                        ) && edge.last_seen_ns <= observation.timestamp().as_i64()
+                    })
+                    .map(|edge| edge.id)
+                    .collect();
+                store.mark_edges_missing(
+                    &uncertain,
+                    observation.timestamp().as_i64(),
+                    true,
+                    history.collector_run_id(),
+                )?;
+            }
+            super::ebpf_cgroup::attribute(
+                store,
+                &mut history,
+                observation,
+                event.pid(),
+                event.cgroup_id(),
+            )?;
+            Ok(())
+        })
+        .map_err(ScanError::Store)?;
+    Ok(())
+}
+
+fn persist_exec_drops(store: &mut Store, count: u64) -> Result<(), AppError> {
+    let mut raw = twin_ebpf::dropped_observation(count, twin_core::TimestampNs::now().as_i64());
+    raw.collector = twin_core::CollectorName::new("ebpf_exec");
+    raw.metadata.insert_str("source", "ebpf_exec");
+    raw.raw_ref = Some(twin_observation::RawEvidenceRef::new("ebpf:exec:dropped"));
+    let observation = twin_observation::Pipeline::default()
+        .process(raw)
+        .map_err(ScanError::Observation)?;
+    store
+        .with_transaction(|store| {
+            for row in store.list_observations_by_kind("ebpf_dropped_events")? {
+                let metadata: serde_json::Value =
+                    serde_json::from_str(&row.metadata_json).unwrap_or_default();
+                if metadata.get("source").and_then(|value| value.as_str()) == Some("ebpf_exec") {
+                    store.delete_observation(&row.id)?;
+                }
+            }
+            store.insert_observation_typed(&observation)?;
+            Ok(())
+        })
+        .map_err(ScanError::Store)?;
+    Ok(())
 }

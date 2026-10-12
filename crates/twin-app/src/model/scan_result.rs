@@ -17,6 +17,7 @@ pub struct ScanWarningDetail {
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ScanResult {
+    pub collector_timings_ms: std::collections::BTreeMap<String, u64>,
     pub samples_requested: u32,
     pub samples_completed: u32,
     pub interval_secs: u64,
@@ -32,11 +33,13 @@ pub struct ScanResult {
     pub in_cgroup_edge_count: usize,
     pub service_owns_edge_count: usize,
     pub tcp_listener_count: usize,
+    pub udp_listener_count: usize,
     pub port_count: usize,
     pub process_listens_on_edge_count: usize,
     pub service_listens_on_edge_count: usize,
     pub unmapped_listener_socket_count: usize,
     pub tcp_connection_count: usize,
+    pub udp_connection_count: usize,
     pub process_connects_to_edge_count: usize,
     pub service_connects_to_edge_count: usize,
     pub service_depends_on_edge_count: usize,

@@ -55,3 +55,13 @@ _(nothing)_
 | Process graph visible | Met — `graph_in_lists_process_nodes`, `graph_in_returns_process_neighborhood` |
 | Command values redacted | Met — argv redaction tests (flags, separate args, URI userinfo) |
 | No host mutation | Met — read-only FS; tests use temp proc fixtures |
+
+## 2026-10-08 follow-up: Warning detail retention
+
+Scan JSON includes every process warning, including homogeneous bulk gaps. Collector-run metadata persists kind, path, and detail for later evidence explanations. Aggregate counts remain for coverage; individual details do not penalize evidence a second time.
+
+## 2026-10-09 legacy process metadata cleanup
+
+Schema 6 removes argv and argv_json keys recursively from observation, node, edge, history, snapshot and collector metadata, preserving other safe facts and an existing argc or deriving it from a valid argument array. Invalid metadata becomes an empty object. Synthetic sentinel regressions cover each retained graph location, nested objects/arrays, invalid argument JSON, valid encoded argv arrays and existing counts. Existing databases require `twin init` to upgrade; merely opening a database does not migrate it.
+
+The same recursive key removal covers retained test report JSON; safe report content remains. Migration does not attempt to recognize arbitrary secret values inside unrelated prose.

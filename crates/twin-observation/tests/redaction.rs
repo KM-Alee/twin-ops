@@ -96,3 +96,22 @@ fn keeps_safe_fields() {
         Some("PATH")
     );
 }
+
+#[test]
+fn connection_string_endpoint_never_retains_query_credentials() {
+    let mut metadata = ObservationMetadata::new();
+    metadata.insert_str(
+        "database_url",
+        "postgres://db:5432?password=SENTINEL#PRIVATE",
+    );
+    let mut raw = raw_with_metadata(metadata);
+    BasicRedactor.redact(&mut raw);
+    assert_eq!(
+        raw.metadata
+            .get("maybe_endpoint")
+            .and_then(|value| value.as_str()),
+        Some("db:5432")
+    );
+    assert!(!raw.metadata.to_json().contains("SENTINEL"));
+    assert!(!raw.metadata.to_json().contains("PRIVATE"));
+}

@@ -9,8 +9,11 @@ use twin_observation::{
 use crate::error::EbpfError;
 
 pub const TCP_CONNECT_LEN: usize = 56;
+pub const TCP_CONNECT_LIVE_LEN: usize = 72;
 pub const TCP_ACCEPT_LEN: usize = 58;
+pub const TCP_ACCEPT_LIVE_LEN: usize = 74;
 pub const TCP_BIND_LEN: usize = 40;
+pub const TCP_BIND_LIVE_LEN: usize = 72;
 const ADDR_LEN: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +24,8 @@ pub struct TcpConnect {
     daddr: IpAddr,
     dport: u16,
     timestamp_ns: u64,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+    start_ticks: Option<u64>,
 }
 
 impl TcpConnect {
@@ -39,7 +44,16 @@ impl TcpConnect {
             daddr,
             dport,
             timestamp_ns,
+            namespace: None,
+            start_ticks: None,
         }
+    }
+
+    pub fn network_namespace(&self) -> Option<twin_core::NetworkNamespaceId> {
+        self.namespace
+    }
+    pub fn start_ticks(&self) -> Option<u64> {
+        self.start_ticks
     }
 
     pub fn pid(&self) -> u32 {
@@ -67,7 +81,11 @@ impl TcpConnect {
     }
 
     pub fn endpoint(&self) -> String {
-        format_endpoint(self.daddr, self.dport)
+        let endpoint = format_endpoint(self.daddr, self.dport);
+        match self.namespace {
+            Some(namespace) => format!("{endpoint} (netns:{namespace})"),
+            None => endpoint,
+        }
     }
 }
 
@@ -80,6 +98,8 @@ pub struct TcpAccept {
     daddr: IpAddr,
     dport: u16,
     timestamp_ns: u64,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+    start_ticks: Option<u64>,
 }
 
 impl TcpAccept {
@@ -100,7 +120,16 @@ impl TcpAccept {
             daddr,
             dport,
             timestamp_ns,
+            namespace: None,
+            start_ticks: None,
         }
+    }
+
+    pub fn network_namespace(&self) -> Option<twin_core::NetworkNamespaceId> {
+        self.namespace
+    }
+    pub fn start_ticks(&self) -> Option<u64> {
+        self.start_ticks
     }
 
     pub fn pid(&self) -> u32 {
@@ -124,7 +153,7 @@ impl TcpAccept {
     }
 
     pub fn endpoint(&self) -> String {
-        format_endpoint(self.saddr, self.sport)
+        scoped_endpoint(self.saddr, self.sport, self.namespace)
     }
 }
 
@@ -135,6 +164,8 @@ pub struct TcpBind {
     addr: IpAddr,
     port: u16,
     timestamp_ns: u64,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+    start_ticks: Option<u64>,
 }
 
 impl TcpBind {
@@ -145,7 +176,16 @@ impl TcpBind {
             addr,
             port,
             timestamp_ns,
+            namespace: None,
+            start_ticks: None,
         }
+    }
+
+    pub fn network_namespace(&self) -> Option<twin_core::NetworkNamespaceId> {
+        self.namespace
+    }
+    pub fn start_ticks(&self) -> Option<u64> {
+        self.start_ticks
     }
 
     pub fn pid(&self) -> u32 {
@@ -169,7 +209,7 @@ impl TcpBind {
     }
 
     pub fn endpoint(&self) -> String {
-        format_endpoint(self.addr, self.port)
+        scoped_endpoint(self.addr, self.port, self.namespace)
     }
 }
 
@@ -180,7 +220,37 @@ pub enum TcpEvent {
     Bind(TcpBind),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TcpEventKind {
+    Connect,
+    Accept,
+    Bind,
+}
+
 impl TcpEvent {
+    pub fn start_ticks(&self) -> Option<u64> {
+        match self {
+            Self::Connect(event) => event.start_ticks(),
+            Self::Accept(event) => event.start_ticks(),
+            Self::Bind(event) => event.start_ticks(),
+        }
+    }
+
+    pub fn kind(&self) -> TcpEventKind {
+        match self {
+            Self::Connect(_) => TcpEventKind::Connect,
+            Self::Accept(_) => TcpEventKind::Accept,
+            Self::Bind(_) => TcpEventKind::Bind,
+        }
+    }
+    pub fn cgroup_id(&self) -> u64 {
+        match self {
+            Self::Connect(event) => event.cgroup_id(),
+            Self::Accept(event) => event.cgroup_id(),
+            Self::Bind(event) => event.cgroup_id(),
+        }
+    }
+
     pub fn pid(&self) -> u32 {
         match self {
             Self::Connect(event) => event.pid(),
@@ -216,8 +286,9 @@ impl TcpEvent {
 
 pub fn decode_tcp_event(bytes: &[u8]) -> Result<TcpEvent, EbpfError> {
     match bytes.len() {
-        TCP_CONNECT_LEN => decode_connect(bytes).map(TcpEvent::Connect),
-        TCP_ACCEPT_LEN => decode_accept(bytes).map(TcpEvent::Accept),
+        TCP_BIND_LIVE_LEN if bytes[23] == 2 => decode_bind(bytes).map(TcpEvent::Bind),
+        TCP_CONNECT_LEN | TCP_CONNECT_LIVE_LEN => decode_connect(bytes).map(TcpEvent::Connect),
+        TCP_ACCEPT_LEN | TCP_ACCEPT_LIVE_LEN => decode_accept(bytes).map(TcpEvent::Accept),
         TCP_BIND_LEN => decode_bind(bytes).map(TcpEvent::Bind),
         other => Err(malformed(format!(
             "tcp event is {other} bytes, expected {TCP_CONNECT_LEN}, {TCP_ACCEPT_LEN}, or {TCP_BIND_LEN}"
@@ -226,11 +297,16 @@ pub fn decode_tcp_event(bytes: &[u8]) -> Result<TcpEvent, EbpfError> {
 }
 
 pub fn decode_connect(bytes: &[u8]) -> Result<TcpConnect, EbpfError> {
-    if bytes.len() != TCP_CONNECT_LEN {
+    if ![TCP_CONNECT_LEN, TCP_CONNECT_LIVE_LEN].contains(&bytes.len()) {
         return Err(malformed(format!(
             "connect event is {} bytes, expected {TCP_CONNECT_LEN}",
             bytes.len()
         )));
+    }
+    if bytes[23] != 0 {
+        return Err(malformed(
+            "connect event has unsupported kind marker".into(),
+        ));
     }
     let family = bytes[22];
     Ok(TcpConnect {
@@ -240,15 +316,31 @@ pub fn decode_connect(bytes: &[u8]) -> Result<TcpConnect, EbpfError> {
         dport: read_u16(bytes, 20),
         saddr: read_addr(&bytes[24..40], family)?,
         daddr: read_addr(&bytes[40..56], family)?,
+        namespace: if bytes.len() == TCP_CONNECT_LIVE_LEN {
+            Some(
+                twin_core::NetworkNamespaceId::new(read_u64(bytes, 56))
+                    .map_err(|_| malformed("live event has invalid namespace".into()))?,
+            )
+        } else {
+            None
+        },
+        start_ticks: if bytes.len() == TCP_CONNECT_LIVE_LEN {
+            Some(read_u64(bytes, 64))
+        } else {
+            None
+        },
     })
 }
 
 pub fn decode_accept(bytes: &[u8]) -> Result<TcpAccept, EbpfError> {
-    if bytes.len() != TCP_ACCEPT_LEN {
+    if ![TCP_ACCEPT_LEN, TCP_ACCEPT_LIVE_LEN].contains(&bytes.len()) {
         return Err(malformed(format!(
             "accept event is {} bytes, expected {TCP_ACCEPT_LEN}",
             bytes.len()
         )));
+    }
+    if bytes[25] != 0 {
+        return Err(malformed("accept event has unsupported kind marker".into()));
     }
     let family = bytes[24];
     Ok(TcpAccept {
@@ -259,15 +351,26 @@ pub fn decode_accept(bytes: &[u8]) -> Result<TcpAccept, EbpfError> {
         dport: read_u16(bytes, 22),
         saddr: read_addr(&bytes[26..42], family)?,
         daddr: read_addr(&bytes[42..58], family)?,
+        namespace: live_namespace(bytes, TCP_ACCEPT_LIVE_LEN, 58)?,
+        start_ticks: (bytes.len() == TCP_ACCEPT_LIVE_LEN).then(|| read_u64(bytes, 66)),
     })
 }
 
 pub fn decode_bind(bytes: &[u8]) -> Result<TcpBind, EbpfError> {
-    if bytes.len() != TCP_BIND_LEN {
+    if ![TCP_BIND_LEN, TCP_BIND_LIVE_LEN].contains(&bytes.len()) {
         return Err(malformed(format!(
             "bind event is {} bytes, expected {TCP_BIND_LEN}",
             bytes.len()
         )));
+    }
+    if bytes[23]
+        != if bytes.len() == TCP_BIND_LIVE_LEN {
+            2
+        } else {
+            0
+        }
+    {
+        return Err(malformed("bind event has unsupported kind marker".into()));
     }
     let family = bytes[22];
     Ok(TcpBind {
@@ -276,6 +379,8 @@ pub fn decode_bind(bytes: &[u8]) -> Result<TcpBind, EbpfError> {
         timestamp_ns: read_u64(bytes, 12),
         port: read_u16(bytes, 20),
         addr: read_addr(&bytes[24..40], family)?,
+        namespace: live_namespace(bytes, TCP_BIND_LIVE_LEN, 56)?,
+        start_ticks: (bytes.len() == TCP_BIND_LIVE_LEN).then(|| read_u64(bytes, 64)),
     })
 }
 
@@ -325,7 +430,7 @@ pub fn tcp_to_raw(event: &TcpEvent) -> RawObservation {
 
 fn connect_raw(event: &TcpConnect) -> RawObservation {
     let endpoint = event.endpoint();
-    observation(
+    let mut raw = observation(
         ObservationKind::EbpfConnect,
         event.pid(),
         event.cgroup_id(),
@@ -335,12 +440,26 @@ fn connect_raw(event: &TcpConnect) -> RawObservation {
             port: event.dport(),
         }),
         format!("ebpf:tcp:connect:{}:{endpoint}", event.pid()),
-    )
+    );
+    if let Some(namespace) = event.network_namespace() {
+        raw.object = Some(RawIdentity::NamespacedEndpoint {
+            namespace,
+            protocol: twin_core::TransportProtocol::Tcp,
+            ip: event.daddr().to_string(),
+            port: event.dport(),
+        });
+        raw.metadata
+            .insert_str("network_namespace", &namespace.to_string());
+    }
+    if let Some(start) = event.start_ticks() {
+        raw.metadata.insert_u64("start_ticks", start);
+    }
+    raw
 }
 
 fn accept_raw(event: &TcpAccept) -> RawObservation {
     let endpoint = event.endpoint();
-    observation(
+    let mut raw = observation(
         ObservationKind::EbpfAccept,
         event.pid(),
         event.cgroup_id(),
@@ -350,12 +469,20 @@ fn accept_raw(event: &TcpAccept) -> RawObservation {
             port: event.sport(),
         }),
         format!("ebpf:tcp:accept:{}:{endpoint}", event.pid()),
-    )
+    );
+    attach_identity(
+        &mut raw,
+        event.saddr(),
+        event.sport(),
+        event.network_namespace(),
+        event.start_ticks(),
+    );
+    raw
 }
 
 fn bind_raw(event: &TcpBind) -> RawObservation {
     let endpoint = event.endpoint();
-    observation(
+    let mut raw = observation(
         ObservationKind::EbpfBind,
         event.pid(),
         event.cgroup_id(),
@@ -365,7 +492,62 @@ fn bind_raw(event: &TcpBind) -> RawObservation {
             port: event.port(),
         }),
         format!("ebpf:tcp:bind:{}:{endpoint}", event.pid()),
-    )
+    );
+    attach_identity(
+        &mut raw,
+        event.addr(),
+        event.port(),
+        event.network_namespace(),
+        event.start_ticks(),
+    );
+    raw
+}
+
+fn live_namespace(
+    bytes: &[u8],
+    live_len: usize,
+    offset: usize,
+) -> Result<Option<twin_core::NetworkNamespaceId>, EbpfError> {
+    if bytes.len() != live_len {
+        return Ok(None);
+    }
+    twin_core::NetworkNamespaceId::new(read_u64(bytes, offset))
+        .map(Some)
+        .map_err(|_| malformed("live event has invalid namespace".into()))
+}
+
+fn scoped_endpoint(
+    addr: IpAddr,
+    port: u16,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+) -> String {
+    let endpoint = format_endpoint(addr, port);
+    match namespace {
+        Some(namespace) => format!("{endpoint} (netns:{namespace})"),
+        None => endpoint,
+    }
+}
+
+fn attach_identity(
+    raw: &mut RawObservation,
+    addr: IpAddr,
+    port: u16,
+    namespace: Option<twin_core::NetworkNamespaceId>,
+    start_ticks: Option<u64>,
+) {
+    if let Some(namespace) = namespace {
+        raw.object = Some(RawIdentity::NamespacedEndpoint {
+            namespace,
+            protocol: twin_core::TransportProtocol::Tcp,
+            ip: addr.to_string(),
+            port,
+        });
+        raw.metadata
+            .insert_str("network_namespace", &namespace.to_string());
+    }
+    if let Some(start) = start_ticks {
+        raw.metadata.insert_u64("start_ticks", start);
+    }
 }
 
 fn observation(

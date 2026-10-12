@@ -6,7 +6,10 @@ pub fn render(result: &DoctorResult) -> String {
     let mut out = Lines::new();
     out.title("twin doctor");
 
-    let overall = if result.core.config_found && result.database.initialized {
+    let overall = if result.core.config_found
+        && result.core.config_error.is_none()
+        && result.database.initialized
+    {
         Status::Ok
     } else if result.database.initialized || result.core.config_found {
         Status::Warn
@@ -33,7 +36,9 @@ pub fn render(result: &DoctorResult) -> String {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "unknown".to_string());
-    let (config_status, config_detail) = if result.core.config_found {
+    let (config_status, config_detail) = if let Some(error) = &result.core.config_error {
+        (Status::Bad, format!("{config_path}: {error}"))
+    } else if result.core.config_found {
         (Status::Ok, config_path)
     } else {
         (Status::Bad, "not found".to_string())
@@ -191,6 +196,28 @@ pub fn render(result: &DoctorResult) -> String {
             &format!("{}  {count}", status_tag(api_status)),
         );
         out.tree_leaf(true, "mode", &containers.detail);
+        if let Some(containerd) = &containers.containerd {
+            out.blank();
+            out.section("containerd");
+            out.tree_leaf(false, "socket", &containerd.socket_path);
+            let count = containerd.namespace_count.map_or_else(
+                || "not listed".to_string(),
+                |count| format!("{count} namespaces listed"),
+            );
+            out.tree_leaf(
+                false,
+                "api",
+                &format!(
+                    "{}  {count}",
+                    status_tag(if containerd.listed {
+                        Status::Ok
+                    } else {
+                        Status::Warn
+                    })
+                ),
+            );
+            out.tree_leaf(true, "mode", &containerd.detail);
+        }
     }
 
     if let Some(k8s) = &result.k8s {

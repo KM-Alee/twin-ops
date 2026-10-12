@@ -7,10 +7,6 @@ pub trait Redactor {
 
 pub struct BasicRedactor;
 
-const SENSITIVE_FLAG_NAMES: &[&str] = &[
-    "password", "passwd", "token", "secret", "key", "api-key", "api_key",
-];
-
 const SENSITIVE_SUBSTRINGS: &[&str] = &[
     "password",
     "passwd",
@@ -67,89 +63,15 @@ impl Redactor for BasicRedactor {
 }
 
 fn redact_argv_metadata(metadata: &mut crate::observation::ObservationMetadata) -> bool {
-    let Some(argv) = metadata
-        .get("argv_json")
-        .and_then(|v| v.as_array())
-        .cloned()
-    else {
+    let argv = metadata.remove("argv_json");
+    let other = metadata.remove("argv");
+    let Some(value) = argv.or(other) else {
         return false;
     };
-    let strings: Vec<String> = argv
-        .iter()
-        .filter_map(|v| v.as_str().map(str::to_string))
-        .collect();
-    if strings.is_empty() {
-        return false;
+    if let Some(values) = value.as_array() {
+        metadata.insert_u64("argc", values.len() as u64);
     }
-    let (redacted_argv, changed) = redact_argv(&strings);
-    if changed {
-        metadata.insert_str_array("argv_json", &redacted_argv);
-    }
-    changed
-}
-
-fn redact_argv(argv: &[String]) -> (Vec<String>, bool) {
-    let mut out = Vec::with_capacity(argv.len());
-    let mut changed = false;
-    let mut redact_next = false;
-    for arg in argv {
-        if redact_next {
-            out.push("<redacted>".to_string());
-            changed = true;
-            redact_next = false;
-            continue;
-        }
-        if let Some(redacted) = redact_flag_value(arg) {
-            out.push(redacted);
-            changed = true;
-            continue;
-        }
-        if is_sensitive_flag(arg) {
-            out.push(arg.clone());
-            redact_next = true;
-            continue;
-        }
-        if let Some(redacted) = redact_uri_userinfo(arg) {
-            out.push(redacted);
-            changed = true;
-            continue;
-        }
-        out.push(arg.clone());
-    }
-    (out, changed)
-}
-
-fn redact_flag_value(arg: &str) -> Option<String> {
-    let (name, _value) = arg.split_once('=')?;
-    if !is_sensitive_flag(name) {
-        return None;
-    }
-    Some(format!("{name}=<redacted>"))
-}
-
-fn is_sensitive_flag(arg: &str) -> bool {
-    let name = arg.trim_start_matches('-');
-    let name = name.trim_start_matches('-');
-    let name_lower = name.to_ascii_lowercase();
-    SENSITIVE_FLAG_NAMES
-        .iter()
-        .any(|needle| name_lower == *needle || name_lower.starts_with(&format!("{needle}=")))
-}
-
-fn redact_uri_userinfo(arg: &str) -> Option<String> {
-    let scheme_end = arg.find("://")?;
-    let scheme = &arg[..scheme_end];
-    if scheme.is_empty() || scheme == "file" {
-        return None;
-    }
-    let after = &arg[scheme_end + 3..];
-    let at = after.find('@')?;
-    let userinfo = &after[..at];
-    if !userinfo.contains(':') {
-        return None;
-    }
-    let host_part = &after[at + 1..];
-    Some(format!("{scheme}://<redacted>@{host_part}"))
+    true
 }
 
 fn redact_connection_string(raw: &mut RawObservation, key: &str, value: &str) -> Option<String> {
@@ -159,12 +81,11 @@ fn redact_connection_string(raw: &mut RawObservation, key: &str, value: &str) ->
         return None;
     }
     let after_scheme = &value[scheme_end + 3..];
-    let endpoint = if let Some(at) = after_scheme.find('@') {
-        let host_part = &after_scheme[at + 1..];
-        host_part.split('/').next().unwrap_or(host_part)
-    } else {
-        after_scheme.split('/').next().unwrap_or(after_scheme)
-    };
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let endpoint = authority.rsplit('@').next().unwrap_or_default();
     if endpoint.is_empty() {
         return None;
     }

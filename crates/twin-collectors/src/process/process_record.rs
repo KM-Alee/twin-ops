@@ -5,6 +5,9 @@ use crate::process::cgroup::CgroupMembership;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessRecord {
     pid: u32,
+    pub(crate) start_ticks: Option<u64>,
+    pub(crate) boot_id: Option<String>,
+    pub(crate) network_namespace: Option<twin_core::NetworkNamespaceId>,
     pub(crate) ppid: Option<u32>,
     pub(crate) comm: Option<String>,
     pub(crate) state: Option<String>,
@@ -19,6 +22,9 @@ impl ProcessRecord {
     pub(crate) fn new(pid: u32) -> Self {
         Self {
             pid,
+            start_ticks: None,
+            boot_id: None,
+            network_namespace: None,
             ppid: None,
             comm: None,
             state: None,
@@ -32,6 +38,18 @@ impl ProcessRecord {
 
     pub fn pid(&self) -> u32 {
         self.pid
+    }
+
+    pub fn start_ticks(&self) -> Option<u64> {
+        self.start_ticks
+    }
+
+    pub fn boot_id(&self) -> Option<&str> {
+        self.boot_id.as_deref()
+    }
+
+    pub fn network_namespace(&self) -> Option<twin_core::NetworkNamespaceId> {
+        self.network_namespace
     }
 
     pub fn ppid(&self) -> Option<u32> {
@@ -67,13 +85,13 @@ impl ProcessRecord {
     }
 
     pub fn label(&self) -> String {
-        if let Some(argv0) = self.argv.first() {
-            let base = argv0
-                .rsplit('/')
-                .next()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(argv0.as_str());
-            return base.to_string();
+        if let Some(name) = self
+            .exe
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+        {
+            return name.to_string();
         }
         self.comm
             .clone()

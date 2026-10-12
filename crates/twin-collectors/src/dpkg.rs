@@ -4,6 +4,7 @@ use twin_core::lexical_canonical;
 pub struct InstalledPackage {
     pub name: String,
     pub architecture: String,
+    pub version: Option<String>,
 }
 
 pub fn parse_dpkg_status(text: &str) -> Vec<InstalledPackage> {
@@ -36,6 +37,7 @@ pub fn parse_dpkg_list(text: &str) -> Vec<String> {
 fn installed_package(paragraph: &str) -> Option<InstalledPackage> {
     let mut name = None;
     let mut architecture = String::new();
+    let mut version = None;
     let mut installed = false;
     for line in paragraph.lines() {
         if line.starts_with(' ') || line.starts_with('\t') {
@@ -48,6 +50,7 @@ fn installed_package(paragraph: &str) -> Option<InstalledPackage> {
         match key {
             "Package" => name = Some(value.to_string()),
             "Architecture" => architecture = value.to_string(),
+            "Version" => version = (!value.is_empty()).then(|| value.to_string()),
             "Status" => {
                 installed = value.split_whitespace().nth(2) == Some("installed");
             }
@@ -58,7 +61,11 @@ fn installed_package(paragraph: &str) -> Option<InstalledPackage> {
     if !installed || name.is_empty() {
         return None;
     }
-    Some(InstalledPackage { name, architecture })
+    Some(InstalledPackage {
+        name,
+        architecture,
+        version,
+    })
 }
 
 #[cfg(test)]

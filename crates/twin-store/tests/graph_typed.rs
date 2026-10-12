@@ -1,7 +1,6 @@
 mod support;
 
 use std::convert::TryFrom;
-use std::str::FromStr;
 
 use twin_core::{
     EdgeClass, EdgeId, EdgeKind, EdgeState, GraphEdge, GraphNode, NodeId, NodeKind, NodeState,
@@ -43,7 +42,11 @@ fn graph_edge_round_trips_through_store() {
     store.upsert_edge_typed(&edge).expect("edge");
     let edge_id = EdgeId::new(&parent, EdgeKind::ParentOf, &child);
     let row = store.get_edge(edge_id.as_str()).expect("get").expect("row");
-    let got = GraphEdge::try_from(&row).expect("typed");
+    let got = store
+        .get_edge_typed(&edge_id)
+        .expect("typed get")
+        .expect("edge");
+    assert_eq!(got, GraphEdge::try_from(&row).expect("typed"));
     assert_eq!(got.kind(), EdgeKind::ParentOf);
     assert_eq!(got.class(), EdgeClass::Observed);
     assert_eq!(got.state(), EdgeState::Active);
@@ -105,4 +108,136 @@ fn edge_observation_link_round_trips() {
         links,
         vec![("obs-parent-1".to_string(), "support".to_string())]
     );
+}
+
+#[test]
+fn batched_edge_links_handle_empty_missing_and_duplicate_ids_across_chunks() {
+    let mut store = blank_store();
+    let edge = GraphEdge::observed_parent(
+        &NodeId::process(1),
+        &NodeId::process(42),
+        TimestampNs::new(TS),
+        None,
+    );
+    for pid in [1, 42] {
+        store
+            .upsert_node_typed(&GraphNode::process(pid, "test", TimestampNs::new(TS), None))
+            .unwrap();
+    }
+    store.upsert_edge_typed(&edge).unwrap();
+    store
+        .insert_observation(&support::observation_row(
+            "a",
+            "proc",
+            "process_parent_seen",
+            TS,
+        ))
+        .unwrap();
+    store
+        .insert_observation(&support::observation_row(
+            "b",
+            "proc",
+            "process_parent_seen",
+            TS,
+        ))
+        .unwrap();
+    store
+        .link_edge_observation(edge.id().as_str(), "b", "support")
+        .unwrap();
+    store
+        .link_edge_observation(edge.id().as_str(), "a", "support")
+        .unwrap();
+    assert!(store.list_observations_for_edges(&[]).unwrap().is_empty());
+    assert!(store
+        .list_observations_for_edges(&["missing", "' OR 1=1 --"])
+        .unwrap()
+        .is_empty());
+    let ids = vec![edge.id().as_str(); 1001];
+    let batch = store.list_observations_for_edges(&ids).unwrap();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(
+        batch[edge.id().as_str()],
+        store
+            .list_observations_for_edge(edge.id().as_str())
+            .unwrap()
+    );
+}
+
+#[test]
+fn typed_edge_lookup_distinguishes_missing_from_malformed_rows() {
+    let mut store = blank_store();
+    let from = NodeId::process(1);
+    let to = NodeId::process(42);
+    let id = EdgeId::new(&from, EdgeKind::ParentOf, &to);
+    assert!(store.get_edge_typed(&id).unwrap().is_none());
+    for pid in [1, 42] {
+        store
+            .upsert_node_typed(&GraphNode::process(pid, "test", TimestampNs::new(TS), None))
+            .unwrap();
+    }
+    let mut row = support::edge_row(id.as_str(), from.as_str(), to.as_str(), "parent_of", TS);
+    row.class = "invalid".into();
+    store.upsert_edge(&row).unwrap();
+    assert!(matches!(
+        store.get_edge_typed(&id),
+        Err(twin_store::StoreError::Decode { .. })
+    ));
+}
+
+#[test]
+fn batched_incoming_edges_match_single_reads_across_chunks_and_duplicate_ids() {
+    let mut store = twin_store::Store::open_in_memory().expect("store");
+    store.initialize().expect("initialize");
+    for index in 0..503 {
+        let id = format!("service:batch-{index}.service");
+        store
+            .upsert_node(&twin_store::NodeRow {
+                id: id.clone(),
+                kind: "service".into(),
+                label: id.clone(),
+                state: "active".into(),
+                first_seen_ns: 1,
+                last_seen_ns: 1,
+                valid_from_ns: 1,
+                valid_to_ns: None,
+                metadata_json: "{}".into(),
+            })
+            .expect("node");
+        store
+            .upsert_edge(&twin_store::EdgeRow {
+                id: format!("{id}|depends_on|{id}"),
+                from_node_id: id.clone(),
+                to_node_id: id,
+                kind: "depends_on".into(),
+                class: "observed".into(),
+                state: if index == 0 { "stale" } else { "active" }.into(),
+                evidence_score: 45,
+                evidence_label: "moderate".into(),
+                evidence_count: 1,
+                first_seen_ns: 1,
+                last_seen_ns: 1,
+                metadata_json: "{}".into(),
+            })
+            .expect("edge");
+    }
+    let mut ids: Vec<_> = (0..503)
+        .map(|index| format!("service:batch-{index}.service"))
+        .collect();
+    ids.push(ids[501].clone());
+    ids.push("service:missing'; SELECT secret.service".into());
+    let refs: Vec<_> = ids.iter().map(String::as_str).collect();
+    let batch = store.list_active_edges_to_nodes(&refs).expect("batch");
+    assert!(store
+        .list_active_edges_to_nodes(&[])
+        .expect("empty")
+        .is_empty());
+    for id in ids {
+        let expected = store.list_active_edges_to(&id).expect("single");
+        let actual = batch.get(&id).cloned().unwrap_or_default();
+        assert_eq!(
+            actual.iter().map(|row| &row.id).collect::<Vec<_>>(),
+            expected.iter().map(|row| &row.id).collect::<Vec<_>>()
+        );
+    }
+    assert_eq!(batch.len(), 502);
 }

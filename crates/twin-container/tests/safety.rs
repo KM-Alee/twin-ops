@@ -93,3 +93,26 @@ fn container_crate_does_not_shell_out() {
         );
     }
 }
+
+#[test]
+fn containerd_rpc_paths_are_exactly_the_four_metadata_lists() {
+    let source = fs::read_to_string(manifest_dir().join("src/containerd/live.rs")).unwrap();
+    let paths: Vec<_> = source
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_end_matches(',');
+            line.strip_prefix('"')
+                .and_then(|line| line.strip_suffix('"'))
+                .filter(|line| line.starts_with("/containerd.services."))
+        })
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/containerd.services.namespaces.v1.Namespaces/List",
+            "/containerd.services.containers.v1.Containers/List",
+            "/containerd.services.tasks.v1.Tasks/List",
+            "/containerd.services.images.v1.Images/List",
+        ]
+    );
+}

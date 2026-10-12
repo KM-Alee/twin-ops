@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use twin_container::{
-    ContainerInspect, ContainerSummary, DockerBackend, DockerReadOnly, PortMapping, VolumeMount,
-    DOCKER_SOCKET,
+    ContainerHealth, ContainerInspect, ContainerSummary, DockerBackend, DockerReadOnly,
+    PortMapping, VolumeMount, DOCKER_SOCKET,
 };
 use twin_core::{
-    EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, NodeKind, PortPublish, TimestampNs,
+    EdgeId, EdgeKind, GraphEdge, GraphMetadata, GraphNode, GraphNodeParts, NodeId, NodeKind,
+    PortPublish, TimestampNs,
 };
 use twin_store::{Store, StoreError};
 
@@ -17,6 +18,7 @@ pub(crate) struct ContainerScanNotes {
     pub warning: Option<ScanWarning>,
     pub detail: Option<ScanWarningDetail>,
     pub unavailable: bool,
+    pub incomplete: bool,
 }
 
 pub(crate) struct ContainerServiceLink {
@@ -33,6 +35,10 @@ pub(crate) struct ContainerImpactFacts {
 }
 
 struct SeenContainer {
+    is_running: Option<bool>,
+    health: ContainerHealth,
+    id: String,
+    image_id: Option<String>,
     name: String,
     image: String,
     pid: Option<u32>,
@@ -56,20 +62,33 @@ pub(crate) fn persist_containers_in_scan(
     history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut ScanEdgeCache,
     scan_time: TimestampNs,
+    fixture_override: Option<&Path>,
 ) -> Result<ContainerScanNotes, StoreError> {
     let fixture = std::env::var("TWIN_DOCKER_FIXTURE")
         .ok()
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
-    let backend = match DockerBackend::open(fixture.as_deref(), Path::new(DOCKER_SOCKET)) {
+    let backend = match DockerBackend::open(
+        fixture_override.or(fixture.as_deref()),
+        Path::new(DOCKER_SOCKET),
+    ) {
         Ok(backend) => backend,
         Err(err) => return Ok(unavailable(&err.to_string())),
     };
     match record(store, history, edge_cache, &backend, scan_time) {
-        Ok(()) => Ok(ContainerScanNotes {
-            warning: None,
-            detail: None,
+        Ok(incomplete) => Ok(ContainerScanNotes {
+            warning: (incomplete > 0).then(|| ScanWarning {
+                kind: "docker_inspect_incomplete".into(),
+                count: incomplete,
+            }),
+            detail: (incomplete > 0).then(|| ScanWarningDetail {
+                kind: "docker".into(),
+                path: DOCKER_SOCKET.into(),
+                detail: "container inspection was incomplete; prior relationships are uncertain"
+                    .into(),
+            }),
             unavailable: false,
+            incomplete: incomplete > 0,
         }),
         Err(RecordError::Store(err)) => Err(err),
         Err(RecordError::Docker(detail)) => Ok(unavailable(&detail)),
@@ -132,48 +151,67 @@ fn record(
     edge_cache: &mut ScanEdgeCache,
     docker: &DockerBackend,
     scan_time: TimestampNs,
-) -> Result<(), RecordError> {
+) -> Result<usize, RecordError> {
     let summaries = docker
         .list_containers()
         .map_err(|err| RecordError::Docker(err.to_string()))?;
+    let mut incomplete = 0;
     for summary in summaries {
-        let seen = seen_container(docker, summary);
+        let (seen, is_incomplete) = seen_container(docker, summary);
+        incomplete += usize::from(is_incomplete);
         persist_one(store, history, edge_cache, scan_time, &seen)?;
     }
-    Ok(())
+    Ok(incomplete)
 }
 
-fn seen_container(docker: &DockerBackend, summary: ContainerSummary) -> SeenContainer {
+fn seen_container(docker: &DockerBackend, summary: ContainerSummary) -> (SeenContainer, bool) {
     match docker.inspect_container(&summary.id) {
-        Ok(inspect) => seen_from_inspect(docker, inspect),
-        Err(_) => SeenContainer {
-            name: summary.name,
-            image: confirmed_image(docker, &summary.image),
-            pid: None,
-            ports: summary.ports,
-            mounts: summary.mounts,
-        },
+        Ok(inspect) => (seen_from_inspect(inspect), false),
+        Err(_) => (
+            SeenContainer {
+                is_running: summary.is_running,
+                health: ContainerHealth::Unknown,
+                id: summary.id,
+                name: summary.name,
+                image: summary.image,
+                image_id: summary.image_id,
+                pid: None,
+                ports: summary.ports,
+                mounts: summary.mounts,
+            },
+            true,
+        ),
     }
 }
 
-fn seen_from_inspect(docker: &DockerBackend, inspect: ContainerInspect) -> SeenContainer {
-    let image = confirmed_image(docker, &inspect.image);
+fn seen_from_inspect(inspect: ContainerInspect) -> SeenContainer {
     let ports = inspect.port_mappings().to_vec();
     let mounts = inspect.mounts().to_vec();
     SeenContainer {
+        is_running: inspect.is_running,
+        health: inspect.health,
+        id: inspect.id,
         name: inspect.name,
-        image,
+        image: inspect.image,
+        image_id: inspect.image_id,
         pid: inspect.pid,
         ports,
         mounts,
     }
 }
 
-fn confirmed_image(docker: &DockerBackend, reference: &str) -> String {
-    match docker.inspect_image(reference) {
-        Ok(image) => image.reference,
-        Err(_) => reference.to_string(),
-    }
+fn with_metadata(node: GraphNode, metadata: serde_json::Value) -> GraphNode {
+    GraphNode::from_parts(GraphNodeParts {
+        id: node.id().clone(),
+        kind: node.kind(),
+        label: node.label().into(),
+        state: node.state(),
+        first_seen: node.first_seen(),
+        last_seen: node.last_seen(),
+        valid_from: node.valid_from(),
+        valid_to: node.valid_to(),
+        metadata: GraphMetadata::from_json(metadata.to_string()),
+    })
 }
 
 fn persist_one(
@@ -192,10 +230,47 @@ fn persist_one(
         return Ok(());
     }
     let existing = store.get_node_typed(&container)?;
-    let node = GraphNode::container(&seen.name, scan_time, existing.as_ref());
+    let recreated = existing
+        .as_ref()
+        .and_then(|node| serde_json::from_str::<serde_json::Value>(node.metadata().as_str()).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("docker_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|id| id != seen.id);
+    if recreated {
+        let mut edges = store.list_active_edges_from(container.as_str())?;
+        edges.extend(store.list_active_edges_to(container.as_str())?);
+        store.mark_edges_missing(
+            &edges.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+            scan_time.as_i64(),
+            false,
+            history.collector_run_id(),
+        )?;
+        store.mark_nodes_missing(
+            &[container.to_string()],
+            scan_time.as_i64(),
+            false,
+            history.collector_run_id(),
+        )?;
+        store.reset_node_incarnation(&container, scan_time)?;
+    }
+    let node = with_metadata(
+        GraphNode::container(
+            &seen.name,
+            scan_time,
+            existing.as_ref().filter(|_| !recreated),
+        ),
+        serde_json::json!({"source":"docker", "docker_id":seen.id, "image_id":seen.image_id, "running_known":seen.is_running.is_some(), "is_running":seen.is_running, "health_status":seen.health.as_str()}),
+    );
     super::scan_history::upsert_node(store, history, &node)?;
     let image_existing = store.get_node_typed(&image)?;
-    let image_node = GraphNode::image(&seen.image, scan_time, image_existing.as_ref());
+    let image_node = with_metadata(
+        GraphNode::image(&seen.image, scan_time, image_existing.as_ref()),
+        serde_json::json!({"source":"docker", "image_id":seen.image_id}),
+    );
     super::scan_history::upsert_node(store, history, &image_node)?;
     let image_edge = GraphEdge::observed_runs_image(
         &container,
@@ -332,5 +407,6 @@ fn unavailable(detail: &str) -> ContainerScanNotes {
             detail: detail.to_string(),
         }),
         unavailable: true,
+        incomplete: true,
     }
 }

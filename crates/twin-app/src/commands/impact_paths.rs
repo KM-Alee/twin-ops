@@ -36,9 +36,15 @@ pub(crate) fn load_service_impact_paths(
     collector.sort_and_dedupe();
     let transitive_runtime_count = collector.transitive_runtime_count();
     let public_exposure_label = collector.public_exposure_label();
-    let mut criticality_hints = service_criticality_hints(target_label);
+    let mut criticality_hints = service_criticality_hints(store, target)?;
     for path in &collector.paths {
-        for hint in service_criticality_hints(&path.terminal.label) {
+        let id = NodeId::from_str(&path.terminal.id).map_err(|source| {
+            AppError::InvalidImpactTarget {
+                value: path.terminal.id.clone(),
+                source,
+            }
+        })?;
+        for hint in service_criticality_hints(store, &id)? {
             if !criticality_hints.contains(&hint) {
                 criticality_hints.push(hint);
             }
@@ -54,8 +60,10 @@ pub(crate) fn load_service_impact_paths(
 }
 
 pub(crate) fn port_impact_paths_from_dependents(
+    store: &Store,
     direct_dependents: &[crate::model::ImpactDependent],
-) -> Vec<ImpactPath> {
+    max_depth: usize,
+) -> Result<Vec<ImpactPath>, AppError> {
     let mut paths = Vec::new();
     for dependent in direct_dependents {
         if dependent.path.is_empty() {
@@ -74,8 +82,29 @@ pub(crate) fn port_impact_paths_from_dependents(
             cycle_note: None,
         });
     }
+    if max_depth > 1 {
+        for dependent in direct_dependents {
+            let id = NodeId::from_str(&dependent.id).map_err(|source| {
+                AppError::InvalidImpactTarget {
+                    value: dependent.id.clone(),
+                    source,
+                }
+            })?;
+            if id.kind() != Some(NodeKind::Service) {
+                continue;
+            }
+            for mut path in
+                load_service_impact_paths(store, &id, &dependent.label, max_depth - 1)?.paths
+            {
+                path.steps.extend(dependent.path.iter().cloned());
+                path.evidence.extend(dependent.evidence.iter().cloned());
+                path.depth = path.steps.len();
+                paths.push(path);
+            }
+        }
+    }
     paths.sort_by(path_sort_key);
-    paths
+    Ok(paths)
 }
 
 struct PathCollector<'a> {
@@ -111,8 +140,8 @@ impl<'a> PathCollector<'a> {
     ) -> Result<(), AppError> {
         let incoming = self.runtime_incoming_edges(current)?;
         if depth >= self.max_depth {
-            if !incoming.is_empty() && !steps.is_empty() {
-                self.emit_path(&steps, false, true, None)?;
+            if !steps.is_empty() {
+                self.emit_path(&steps, false, !incoming.is_empty(), None)?;
             }
             return Ok(());
         }
@@ -171,7 +200,12 @@ impl<'a> PathCollector<'a> {
             .map_err(ImpactError::Store)?
         {
             let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
-            if !is_active_edge(&edge) || edge.kind() != EdgeKind::DependsOn {
+            if !is_active_edge(&edge)
+                || !matches!(
+                    edge.kind(),
+                    EdgeKind::DependsOn | EdgeKind::ConnectsTo | EdgeKind::ProxiesTo
+                )
+            {
                 continue;
             }
             let dependent_node = self
@@ -181,6 +215,9 @@ impl<'a> PathCollector<'a> {
                 .ok_or_else(|| ImpactError::NodeNotFound {
                     id: edge.from().clone(),
                 })?;
+            if dependent_node.kind() != NodeKind::Service {
+                continue;
+            }
             let impact_kind =
                 classify_dependent_impact_kind(&edge, dependent_node.metadata().as_str());
             if impact_kind.is_runtime() {
@@ -294,10 +331,17 @@ impl<'a> PathCollector<'a> {
     }
 
     fn transitive_runtime_count(&self) -> usize {
+        let direct: HashSet<_> = self
+            .paths
+            .iter()
+            .filter_map(|path| path.steps.last())
+            .map(|step| step.from.id.as_str())
+            .collect();
         self.paths
             .iter()
-            .filter(|p| p.depth >= 2)
-            .map(|p| p.terminal.id.as_str())
+            .flat_map(|path| path.steps.iter().rev().skip(1))
+            .map(|step| step.from.id.as_str())
+            .filter(|id| *id != self.target.as_str() && !direct.contains(id))
             .collect::<HashSet<_>>()
             .len()
     }
@@ -334,25 +378,27 @@ fn path_sort_key(a: &ImpactPath, b: &ImpactPath) -> std::cmp::Ordering {
         })
 }
 
-const CRITICALITY_HINTS: &[&str] = &[
-    "postgres",
-    "mysql",
-    "mariadb",
-    "redis",
-    "rabbitmq",
-    "nats",
-    "kafka",
-    "etcd",
-    "containerd",
-];
-
-pub(crate) fn service_criticality_hints(label: &str) -> Vec<String> {
-    let lower = label.to_lowercase();
-    CRITICALITY_HINTS
-        .iter()
-        .filter(|hint| lower.contains(**hint))
-        .map(|hint| format!("service criticality hint: {hint}"))
-        .collect()
+pub(crate) fn service_criticality_hints(
+    store: &Store,
+    target: &NodeId,
+) -> Result<Vec<String>, AppError> {
+    let mut hints = Vec::new();
+    for row in store
+        .list_active_edges_from(target.as_str())
+        .map_err(ImpactError::Store)?
+    {
+        if row.kind == EdgeKind::Uses.to_string()
+            && row.to_node_id.starts_with("directory:/var/lib/")
+        {
+            hints.push(format!(
+                "persistent storage dependency: {} uses {}",
+                target, row.to_node_id
+            ));
+        }
+    }
+    hints.sort();
+    hints.dedup();
+    Ok(hints)
 }
 
 fn service_has_public_listener(store: &Store, service_id: &str) -> Option<String> {
@@ -375,10 +421,14 @@ fn service_has_public_listener(store: &Store, service_id: &str) -> Option<String
 }
 
 fn is_non_loopback_port(port_id: &str) -> bool {
-    let Some(rest) = port_id.strip_prefix("port:tcp:") else {
+    let Some(rest) = port_id
+        .strip_prefix("port:tcp:")
+        .or_else(|| port_id.strip_prefix("port:udp:"))
+    else {
         return false;
     };
     let (ip, _) = rest.rsplit_once(':').unwrap_or((rest, ""));
+    let ip = ip.trim_start_matches('[').trim_end_matches(']');
     ip == "0.0.0.0" || ip == "::" || (!ip.starts_with("127.") && ip != "::1")
 }
 

@@ -50,6 +50,11 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
         twin_core::NodeKind::Process => "Process tree",
         twin_core::NodeKind::Service => "Service list",
         twin_core::NodeKind::Port => "Port list",
+        twin_core::NodeKind::UnixSocket => "Unix socket list",
+        twin_core::NodeKind::File => "File list",
+        twin_core::NodeKind::Cgroup => "Cgroup list",
+        twin_core::NodeKind::Mount => "Mount list",
+        twin_core::NodeKind::Directory => "Directory list",
         twin_core::NodeKind::Library => "Library list",
         twin_core::NodeKind::Package => "Package list",
         twin_core::NodeKind::Container => "Container list",
@@ -80,6 +85,11 @@ fn render_list(list: &GraphListResult, scan: Option<ScanFreshness>) -> String {
 
     if list.kind == twin_core::NodeKind::Service
         || list.kind == twin_core::NodeKind::Port
+        || list.kind == twin_core::NodeKind::UnixSocket
+        || list.kind == twin_core::NodeKind::File
+        || list.kind == twin_core::NodeKind::Cgroup
+        || list.kind == twin_core::NodeKind::Mount
+        || list.kind == twin_core::NodeKind::Directory
         || list.kind == twin_core::NodeKind::Library
         || list.kind == twin_core::NodeKind::Package
         || list.kind == twin_core::NodeKind::Container
@@ -168,7 +178,17 @@ fn render_service(service: &GraphServiceResult, scan: Option<ScanFreshness>) -> 
     }
     if !service.connected_ports.is_empty() {
         lines.push(String::new());
-        lines.push("connects to (inferred from active TCP)".to_string());
+        lines.push(
+            if service
+                .connected_ports
+                .iter()
+                .any(|port| port.id.starts_with("port:udp:"))
+            {
+                "connects to (inferred from observed TCP/connected UDP sockets)".to_string()
+            } else {
+                "connects to (inferred from active TCP)".to_string()
+            },
+        );
         for (i, port) in service.connected_ports.iter().enumerate() {
             let is_last = i + 1 == service.connected_ports.len();
             let branch = if is_last { "└──" } else { "├──" };
@@ -549,6 +569,25 @@ fn normalize_evidence_statement(statement: &str) -> String {
 }
 
 fn render_node(node: &GraphNodeResult, scan: Option<ScanFreshness>) -> String {
+    if !node.node.id.starts_with("process:") {
+        let mut out = graph_header("node neighborhood", scan);
+        out.section(&format_peer(&node.node.id, &node.node.label));
+        for (title, edges) in [("Incoming", &node.incoming), ("Outgoing", &node.outgoing)] {
+            out.section(title);
+            for (index, edge) in edges.iter().enumerate() {
+                out.tree_leaf(
+                    index + 1 == edges.len(),
+                    &edge.kind,
+                    &format_peer(&edge.peer_id, &edge.peer_label),
+                );
+            }
+            if edges.is_empty() {
+                out.tree_leaf(true, "status", "no relationships stored");
+            }
+        }
+        return out.into_string();
+    }
+
     let out = graph_header("process neighborhood", scan);
     let mut lines = Vec::new();
 

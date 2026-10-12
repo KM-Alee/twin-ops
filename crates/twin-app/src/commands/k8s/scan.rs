@@ -3,14 +3,16 @@ use std::str::FromStr;
 
 use twin_core::{EdgeId, EdgeKind, GraphEdge, GraphNode, NodeId, TimestampNs};
 use twin_k8s::{kubeconfig_check, open_source, ClusterView, OpenSource, ServiceView};
-use twin_store::{Store, StoreError};
+use twin_store::{CollectorRunRow, Store, StoreError};
 
+use crate::commands::scan_history::{FinalizeScope, ScanHistorySession};
 use crate::error::{AppError, K8sCmdError};
 use crate::model::K8sScanResult;
 use crate::paths::{resolve_command_paths, TwinLayout};
 
 #[derive(Debug, Clone, Default)]
 pub struct K8sScanRequest {
+    pub fixture: Option<std::path::PathBuf>,
     pub config_override: Option<std::path::PathBuf>,
 }
 
@@ -20,44 +22,85 @@ pub fn run_home(request: K8sScanRequest) -> Result<K8sScanResult, AppError> {
 }
 
 pub fn run(layout: &TwinLayout, request: &K8sScanRequest) -> Result<K8sScanResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    crate::config_io::load(layout, request.config_override.as_deref())?;
     let kubeconfig = kubeconfig_check();
-    match open_source() {
+    match open_source(request.fixture.as_deref()) {
         OpenSource::Gap { detail } => {
-            Ok(gap_result(&kubeconfig, &gap_detail(&kubeconfig, &detail)))
+            let detail = gap_detail(&kubeconfig, &detail);
+            persist_gap(layout, &detail)?;
+            Ok(gap_result(&kubeconfig, &detail))
         }
-        OpenSource::Fixture(fixture) => {
-            let view = fixture.view().clone();
-            let warnings = view.warnings.clone();
-            persist(layout, &view)?;
-            Ok(K8sScanResult {
-                source: "fixture".to_string(),
-                kubeconfig_present: kubeconfig.present,
-                kubeconfig_path: kubeconfig.path,
-                coverage_gap: None,
-                warnings,
-                namespaces: view.namespaces.len(),
-                pods: view.pods.len(),
-                deployments: view.deployments.len(),
-                replicasets: view.replicasets.len(),
-                services: view.services.len(),
-                endpoints: view.endpoints.len(),
-                ingresses: view.ingresses.len(),
-                configmaps: view.configmaps.len(),
-                secret_refs: view.secret_refs.len(),
-                pvcs: view.pvcs.len(),
-                events: view.events.len(),
-            })
+        source => {
+            let source_name = if matches!(source, OpenSource::Live(_)) {
+                "live"
+            } else {
+                "fixture"
+            };
+            let Some(view) = twin_k8s::cluster_view(&source) else {
+                return Ok(gap_result(&kubeconfig, "source unavailable"));
+            };
+            scan_view(layout, &kubeconfig, view, source_name)
         }
     }
 }
 
+fn scan_view(
+    layout: &TwinLayout,
+    kubeconfig: &twin_k8s::KubeconfigCheck,
+    view: &ClusterView,
+    source: &str,
+) -> Result<K8sScanResult, AppError> {
+    let warnings = view.warnings.clone();
+    persist(layout, view)?;
+    Ok(K8sScanResult {
+        source: source.to_string(),
+        kubeconfig_present: kubeconfig.present,
+        kubeconfig_path: kubeconfig.path.clone(),
+        coverage_gap: None,
+        warnings,
+        namespaces: view.namespaces.len(),
+        pods: view.pods.len(),
+        deployments: view.deployments.len(),
+        replicasets: view.replicasets.len(),
+        services: view.services.len(),
+        endpoints: view.endpoints.len(),
+        ingresses: view.ingresses.len(),
+        configmaps: view.configmaps.len(),
+        secret_refs: view.secret_refs.len(),
+        pvcs: view.pvcs.len(),
+        events: view.events.len(),
+    })
+}
+
+pub(super) fn persist_gap(layout: &TwinLayout, detail: &str) -> Result<(), AppError> {
+    let db_path = layout.db_file();
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let mut store = Store::open(&db_path).map_err(K8sCmdError::StoreOpen)?;
+    if !store.is_initialized().map_err(K8sCmdError::Store)? {
+        return Ok(());
+    }
+    let now = TimestampNs::now().as_i64();
+    store
+        .insert_collector_run(&CollectorRunRow {
+            id: None,
+            collector: "k8s".into(),
+            started_at_ns: now,
+            ended_at_ns: now,
+            status: "unavailable".into(),
+            observation_count: 0,
+            warning_count: 1,
+            error_message: Some(detail.into()),
+            metadata_json: r#"{"source":"k8s"}"#.into(),
+        })
+        .map_err(K8sCmdError::Store)?;
+    Ok(())
+}
+
 fn gap_detail(kubeconfig: &twin_k8s::KubeconfigCheck, detail: &str) -> String {
     if kubeconfig.present {
-        format!(
-            "{detail}; kubeconfig found at {} and no live read client is built",
-            kubeconfig.path
-        )
+        format!("{detail}; kubeconfig found at {}", kubeconfig.path)
     } else {
         format!("{detail}; kubeconfig not found at {}", kubeconfig.path)
     }
@@ -84,7 +127,7 @@ fn gap_result(kubeconfig: &twin_k8s::KubeconfigCheck, detail: &str) -> K8sScanRe
     }
 }
 
-fn persist(layout: &TwinLayout, view: &ClusterView) -> Result<(), AppError> {
+pub(super) fn persist(layout: &TwinLayout, view: &ClusterView) -> Result<(), AppError> {
     let db_path = layout.db_file();
     if !db_path.exists() {
         return Err(K8sCmdError::DatabaseNotInitialized.into());
@@ -93,36 +136,100 @@ fn persist(layout: &TwinLayout, view: &ClusterView) -> Result<(), AppError> {
     if !store.is_initialized().map_err(K8sCmdError::Store)? {
         return Err(K8sCmdError::DatabaseNotInitialized.into());
     }
-    record(&mut store, view).map_err(K8sCmdError::Store)?;
+    let now = TimestampNs::now();
+    let persisted = store.with_transaction(|store| {
+    let previous_source = store
+        .list_collector_runs(Some("k8s"))
+        ?
+        .iter()
+        .rev()
+        .find_map(|run| {
+            serde_json::from_str::<serde_json::Value>(&run.metadata_json)
+                .ok()
+                .and_then(|metadata| {
+                    metadata
+                        .get("source_identity")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string)
+                })
+        });
+    if previous_source
+        .as_deref()
+        .zip(view.source_identity.as_deref())
+        .is_some_and(|(old, new)| old != new)
+    {
+        return Ok(false);
+    }
+    let run_id = store
+        .insert_collector_run(&CollectorRunRow {
+            id: None,
+            collector: "k8s".to_string(),
+            started_at_ns: now.as_i64(),
+            ended_at_ns: now.as_i64(),
+            status: if view.warnings.is_empty() {
+                "success"
+            } else {
+                "degraded"
+            }
+            .to_string(),
+            observation_count: 0,
+            warning_count: view.warnings.len() as i64,
+            error_message: None,
+            metadata_json: serde_json::json!({"source":"k8s", "source_identity":view.source_identity, "endpoints_complete":view.endpoints_complete}).to_string(),
+        })
+        ?;
+    record(store, view, run_id)?;
+    Ok(true)
+    }).map_err(K8sCmdError::Store)?;
+    if !persisted {
+        return Err(K8sCmdError::SourceMismatch.into());
+    }
     Ok(())
 }
 
-fn record(store: &mut Store, view: &ClusterView) -> Result<(), StoreError> {
-    let seen = TimestampNs::now();
+fn record(store: &mut Store, view: &ClusterView, collector_run_id: i64) -> Result<(), StoreError> {
+    // A fixture read that emitted warnings may hide objects, so an absent row
+    // goes stale instead of gone.
+    let mut history = ScanHistorySession::new(
+        TimestampNs::now().as_i64(),
+        Some(collector_run_id),
+        !view.warnings.is_empty(),
+        true,
+        FinalizeScope::K8s,
+    );
     for name in &view.namespaces {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_namespace(name),
             name,
-            seen,
             r#"{"source":"k8s"}"#,
         )?;
     }
     for deployment in &view.deployments {
+        let metadata =
+            serde_json::json!({"source":"k8s", "rollout": deployment.rollout,
+                "desired_replicas": deployment.desired_replicas, "ready_replicas": deployment.ready_replicas,
+                "generation": deployment.generation, "observed_generation": deployment.observed_generation,
+                "readiness_known": deployment.readiness_known,
+            }).to_string();
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_deployment(&deployment.namespace, &deployment.name),
             &deployment.name,
-            seen,
-            r#"{"source":"k8s"}"#,
+            &metadata,
         )?;
     }
     for replicaset in &view.replicasets {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_replicaset(&replicaset.namespace, &replicaset.name),
             &replicaset.name,
-            seen,
             r#"{"source":"k8s"}"#,
         )?;
     }
@@ -134,38 +241,42 @@ fn record(store: &mut Store, view: &ClusterView) -> Result<(), StoreError> {
         .to_string();
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_pod(&pod.namespace, &pod.name),
             &pod.name,
-            seen,
             &metadata,
         )?;
         for image in &pod.images {
-            upsert_image(store, image, seen)?;
+            upsert_image(store, &mut history, image)?;
         }
         for name in &pod.config_map_names {
             upsert_node(
                 store,
+                view,
+                &mut history,
                 NodeId::k8s_configmap(&pod.namespace, name),
                 name,
-                seen,
                 r#"{"source":"k8s"}"#,
             )?;
         }
         for name in &pod.secret_names {
             upsert_node(
                 store,
+                view,
+                &mut history,
                 NodeId::k8s_secret_ref(&pod.namespace, name),
                 name,
-                seen,
                 r#"{"source":"k8s","ref":"name"}"#,
             )?;
         }
         for name in &pod.pvc_names {
             upsert_node(
                 store,
+                view,
+                &mut history,
                 NodeId::k8s_pvc(&pod.namespace, name),
                 name,
-                seen,
                 r#"{"source":"k8s"}"#,
             )?;
         }
@@ -175,13 +286,16 @@ fn record(store: &mut Store, view: &ClusterView) -> Result<(), StoreError> {
         let metadata = serde_json::json!({
             "source": "k8s",
             "ready_pods": ready,
+            "ready_pods_known": view.endpoints_complete,
+            "ready_pods_source": "endpoint_membership",
         })
         .to_string();
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_service(&service.namespace, &service.name),
             &service.name,
-            seen,
             &metadata,
         )?;
     }
@@ -194,51 +308,63 @@ fn record(store: &mut Store, view: &ClusterView) -> Result<(), StoreError> {
         .to_string();
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_endpoints(&endpoint.namespace, &endpoint.name),
             &endpoint.name,
-            seen,
             &metadata,
         )?;
     }
     for ingress in &view.ingresses {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_ingress(&ingress.namespace, &ingress.name),
             &ingress.name,
-            seen,
             r#"{"source":"k8s"}"#,
         )?;
         for service_name in &ingress.service_names {
             let service_id = NodeId::k8s_service(&ingress.namespace, service_name);
             if store.get_node_typed(&service_id)?.is_none() {
-                upsert_node(store, service_id, service_name, seen, r#"{"source":"k8s"}"#)?;
+                upsert_node(
+                    store,
+                    view,
+                    &mut history,
+                    service_id,
+                    service_name,
+                    r#"{"source":"k8s"}"#,
+                )?;
             }
         }
     }
     for configmap in &view.configmaps {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_configmap(&configmap.namespace, &configmap.name),
             &configmap.name,
-            seen,
             r#"{"source":"k8s"}"#,
         )?;
     }
     for secret in &view.secret_refs {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_secret_ref(&secret.namespace, &secret.name),
             &secret.name,
-            seen,
             r#"{"source":"k8s","ref":"name"}"#,
         )?;
     }
     for pvc in &view.pvcs {
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_pvc(&pvc.namespace, &pvc.name),
             &pvc.name,
-            seen,
             r#"{"source":"k8s"}"#,
         )?;
     }
@@ -252,16 +378,22 @@ fn record(store: &mut Store, view: &ClusterView) -> Result<(), StoreError> {
         .to_string();
         upsert_node(
             store,
+            view,
+            &mut history,
             NodeId::k8s_event(&event.namespace, &event.name),
             &event.name,
-            seen,
             &metadata,
         )?;
     }
-    link_edges(store, view, seen)
+    link_edges(store, view, &mut history)?;
+    history.finalize_missing_rows(store)
 }
 
-fn link_edges(store: &mut Store, view: &ClusterView, seen: TimestampNs) -> Result<(), StoreError> {
+fn link_edges(
+    store: &mut Store,
+    view: &ClusterView,
+    history: &mut ScanHistorySession,
+) -> Result<(), StoreError> {
     for replicaset in &view.replicasets {
         let child = NodeId::k8s_replicaset(&replicaset.namespace, &replicaset.name);
         for owner in &replicaset.owners {
@@ -272,13 +404,14 @@ fn link_edges(store: &mut Store, view: &ClusterView, seen: TimestampNs) -> Resul
             if store.get_node_typed(&parent)?.is_none() {
                 upsert_node(
                     store,
+                    view,
+                    history,
                     parent.clone(),
                     &owner.name,
-                    seen,
                     r#"{"source":"k8s"}"#,
                 )?;
             }
-            upsert_edge(store, &parent, EdgeKind::Owns, &child, seen)?;
+            upsert_edge(store, history, &parent, EdgeKind::Owns, &child)?;
         }
     }
     for pod in &view.pods {
@@ -291,32 +424,33 @@ fn link_edges(store: &mut Store, view: &ClusterView, seen: TimestampNs) -> Resul
             if store.get_node_typed(&parent)?.is_none() {
                 upsert_node(
                     store,
+                    view,
+                    history,
                     parent.clone(),
                     &owner.name,
-                    seen,
                     r#"{"source":"k8s"}"#,
                 )?;
             }
-            upsert_edge(store, &parent, EdgeKind::Owns, &pod_id, seen)?;
+            upsert_edge(store, history, &parent, EdgeKind::Owns, &pod_id)?;
         }
         for image in &pod.images {
             let image_id = NodeId::image(image);
             if NodeId::from_str(image_id.as_str()).is_err() {
                 continue;
             }
-            upsert_edge(store, &pod_id, EdgeKind::RunsImage, &image_id, seen)?;
+            upsert_edge(store, history, &pod_id, EdgeKind::RunsImage, &image_id)?;
         }
         for name in &pod.config_map_names {
             let target = NodeId::k8s_configmap(&pod.namespace, name);
-            upsert_edge(store, &pod_id, EdgeKind::UsesConfigMap, &target, seen)?;
+            upsert_edge(store, history, &pod_id, EdgeKind::UsesConfigMap, &target)?;
         }
         for name in &pod.secret_names {
             let target = NodeId::k8s_secret_ref(&pod.namespace, name);
-            upsert_edge(store, &pod_id, EdgeKind::UsesSecretRef, &target, seen)?;
+            upsert_edge(store, history, &pod_id, EdgeKind::UsesSecretRef, &target)?;
         }
         for name in &pod.pvc_names {
             let target = NodeId::k8s_pvc(&pod.namespace, name);
-            upsert_edge(store, &pod_id, EdgeKind::UsesPvc, &target, seen)?;
+            upsert_edge(store, history, &pod_id, EdgeKind::UsesPvc, &target)?;
         }
     }
     for service in &view.services {
@@ -328,20 +462,23 @@ fn link_edges(store: &mut Store, view: &ClusterView, seen: TimestampNs) -> Resul
                 continue;
             }
             let pod_id = NodeId::k8s_pod(&pod.namespace, &pod.name);
-            upsert_edge(store, &service_id, EdgeKind::Selects, &pod_id, seen)?;
+            upsert_edge(store, history, &service_id, EdgeKind::Selects, &pod_id)?;
         }
     }
     for ingress in &view.ingresses {
         let ingress_id = NodeId::k8s_ingress(&ingress.namespace, &ingress.name);
         for service_name in &ingress.service_names {
             let service_id = NodeId::k8s_service(&ingress.namespace, service_name);
-            upsert_edge(store, &ingress_id, EdgeKind::RoutesTo, &service_id, seen)?;
+            upsert_edge(store, history, &ingress_id, EdgeKind::RoutesTo, &service_id)?;
         }
     }
     Ok(())
 }
 
 fn ready_pod_names(view: &ClusterView, service: &ServiceView) -> Vec<String> {
+    if !view.endpoints_complete {
+        return Vec::new();
+    }
     let matched: Vec<_> = view
         .endpoints
         .iter()
@@ -356,15 +493,7 @@ fn ready_pod_names(view: &ClusterView, service: &ServiceView) -> Vec<String> {
         }
         return names.into_iter().collect();
     }
-    view.pods
-        .iter()
-        .filter(|pod| {
-            pod.namespace == service.namespace
-                && pod.ready
-                && selector_matches(&service.selector, &pod.labels)
-        })
-        .map(|pod| pod.name.clone())
-        .collect()
+    Vec::new()
 }
 
 fn selector_matches(
@@ -377,21 +506,26 @@ fn selector_matches(
             .all(|(key, value)| labels.get(key).is_some_and(|label| label == value))
 }
 
-fn upsert_image(store: &mut Store, reference: &str, seen: TimestampNs) -> Result<(), StoreError> {
+fn upsert_image(
+    store: &mut Store,
+    history: &mut ScanHistorySession,
+    reference: &str,
+) -> Result<(), StoreError> {
     let id = NodeId::image(reference);
     if NodeId::from_str(id.as_str()).is_err() {
         return Ok(());
     }
     let existing = store.get_node_typed(&id)?;
-    let node = GraphNode::image_sourced(reference, seen, existing.as_ref(), "k8s");
-    store.upsert_node_typed(&node)
+    let node = GraphNode::image_sourced(reference, history.recorded_at(), existing.as_ref(), "k8s");
+    crate::commands::scan_history::upsert_node(store, history, &node)
 }
 
 fn upsert_node(
     store: &mut Store,
+    view: &ClusterView,
+    history: &mut ScanHistorySession,
     id: NodeId,
     label: &str,
-    seen: TimestampNs,
     metadata: &str,
 ) -> Result<(), StoreError> {
     if NodeId::from_str(id.as_str()).is_err() {
@@ -401,16 +535,60 @@ fn upsert_node(
         return Ok(());
     };
     let existing = store.get_node_typed(&id)?;
-    let node = GraphNode::k8s(id, kind, label, seen, existing.as_ref(), metadata);
-    store.upsert_node_typed(&node)
+    let mut metadata: serde_json::Value =
+        serde_json::from_str(metadata).map_err(|_| StoreError::Decode {
+            detail: "invalid Kubernetes metadata projection".into(),
+        })?;
+    let uid = view.resource_uids.get(id.as_str());
+    if let Some(uid) = uid {
+        metadata["uid"] = uid.clone().into();
+    }
+    metadata["source_identity"] = view.source_identity.clone().into();
+    let recreated = existing
+        .as_ref()
+        .and_then(|node| serde_json::from_str::<serde_json::Value>(node.metadata().as_str()).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("uid")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .zip(uid)
+        .is_some_and(|(old, new)| old != *new);
+    if recreated {
+        let mut edges = store.list_active_edges_from(id.as_str())?;
+        edges.extend(store.list_active_edges_to(id.as_str())?);
+        store.mark_edges_missing(
+            &edges.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+            history.recorded_at().as_i64(),
+            false,
+            history.collector_run_id(),
+        )?;
+        store.mark_nodes_missing(
+            &[id.to_string()],
+            history.recorded_at().as_i64(),
+            false,
+            history.collector_run_id(),
+        )?;
+        store.reset_node_incarnation(&id, history.recorded_at())?;
+    }
+    let node = GraphNode::k8s(
+        id,
+        kind,
+        label,
+        history.recorded_at(),
+        existing.as_ref().filter(|_| !recreated),
+        &metadata.to_string(),
+    );
+    crate::commands::scan_history::upsert_node(store, history, &node)
 }
 
 fn upsert_edge(
     store: &mut Store,
+    history: &mut ScanHistorySession,
     from: &NodeId,
     kind: EdgeKind,
     to: &NodeId,
-    seen: TimestampNs,
 ) -> Result<(), StoreError> {
     if NodeId::from_str(from.as_str()).is_err() || NodeId::from_str(to.as_str()).is_err() {
         return Ok(());
@@ -420,6 +598,6 @@ fn upsert_edge(
         .get_edge(id.as_str())?
         .as_ref()
         .and_then(|row| GraphEdge::try_from(row).ok());
-    let edge = GraphEdge::observed_k8s(from, kind, to, seen, existing.as_ref());
-    store.upsert_edge_typed(&edge)
+    let edge = GraphEdge::observed_k8s(from, kind, to, history.recorded_at(), existing.as_ref());
+    crate::commands::scan_history::upsert_edge(store, history, &edge)
 }

@@ -36,12 +36,12 @@ impl Store {
                 name: name.to_string(),
             }));
         }
-        let nodes = self.list_current_nodes()?;
-        let edges = self.list_current_edges()?;
-        if nodes.is_empty() && edges.is_empty() {
-            return Err(StoreError::Snapshot(SnapshotError::EmptyGraph));
-        }
         self.with_transaction(|store| {
+            let nodes = store.list_current_nodes()?;
+            let edges = store.list_current_edges()?;
+            if nodes.is_empty() && edges.is_empty() {
+                return Err(StoreError::Snapshot(SnapshotError::EmptyGraph));
+            }
             store
                 .conn
                 .execute(
@@ -100,6 +100,14 @@ impl Store {
                     )
                     .map_err(|source| StoreError::Upsert { source })?;
             }
+            store.conn.execute(
+                "INSERT INTO snapshot_edge_observations (snapshot_name, edge_id, observation_id, role)
+                 SELECT ?1, eo.edge_id, eo.observation_id, eo.role FROM edge_observations eo
+                 JOIN snapshot_edges se ON se.snapshot_name = ?1 AND se.id = eo.edge_id
+                 JOIN observations o ON o.id = eo.observation_id
+                 WHERE o.timestamp_ns <= ?2",
+                params![name, created_at_ns],
+            ).map_err(|source| StoreError::Insert { source })?;
             Ok(SnapshotRow {
                 name: name.to_string(),
                 created_at_ns,
@@ -107,6 +115,24 @@ impl Store {
                 edge_count: edges.len() as i64,
             })
         })
+    }
+
+    pub fn load_snapshot_observations_for_edge(
+        &self,
+        name: &str,
+        edge_id: &str,
+    ) -> Result<Vec<(String, String)>, StoreError> {
+        let mut statement = self
+            .conn
+            .prepare(
+                "SELECT observation_id, role FROM snapshot_edge_observations
+             WHERE snapshot_name = ?1 AND edge_id = ?2 ORDER BY observation_id, role",
+            )
+            .map_err(|source| StoreError::Query { source })?;
+        let rows = statement
+            .query_map(params![name, edge_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|source| StoreError::Query { source })?;
+        collect_rows(rows)
     }
 
     pub fn list_snapshots(&self) -> Result<Vec<SnapshotRow>, StoreError> {

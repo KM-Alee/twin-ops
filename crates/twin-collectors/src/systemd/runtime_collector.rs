@@ -66,14 +66,24 @@ impl SystemdRuntimeBatch {
 pub struct SystemdRuntimeCollector {
     search_roots: Vec<PathBuf>,
     dbus_fixture: Option<Vec<UnitDBusSnapshot>>,
+    socket_listen_fixture: HashMap<String, Vec<super::SocketListenAddress>>,
     cgroup_fixture: Option<HashMap<String, String>>,
 }
 
 impl SystemdRuntimeCollector {
+    pub fn with_socket_listen_fixture(
+        mut self,
+        listen: HashMap<String, Vec<super::SocketListenAddress>>,
+    ) -> Self {
+        self.socket_listen_fixture = listen;
+        self
+    }
+
     pub fn new(search_roots: Vec<PathBuf>) -> Self {
         Self {
             search_roots,
             dbus_fixture: None,
+            socket_listen_fixture: HashMap::new(),
             cgroup_fixture: None,
         }
     }
@@ -82,6 +92,7 @@ impl SystemdRuntimeCollector {
         Self {
             search_roots,
             dbus_fixture: Some(units),
+            socket_listen_fixture: HashMap::new(),
             cgroup_fixture: None,
         }
     }
@@ -94,6 +105,7 @@ impl SystemdRuntimeCollector {
         Self {
             search_roots,
             dbus_fixture: Some(units),
+            socket_listen_fixture: HashMap::new(),
             cgroup_fixture: Some(cgroup_to_unit),
         }
     }
@@ -147,6 +159,7 @@ impl SystemdRuntimeCollector {
                 }
                 None => FixtureSystemdDBusReader::new(fixture.clone()),
             };
+            let reader = reader.with_socket_listen(self.socket_listen_fixture.clone());
             let dbus_obs = collect_dbus_observations(&reader, started_at, &mut warnings)?;
             dbus_unit_count = dbus_obs
                 .iter()

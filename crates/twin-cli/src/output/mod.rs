@@ -14,3 +14,7 @@ pub mod test_report;
 pub mod unknowns;
 pub mod watch;
 pub mod what_changed;
+
+pub mod graph_export;
+
+pub mod why;

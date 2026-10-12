@@ -86,7 +86,13 @@ pub(crate) fn persist_runtime_in_scan(
                 )?;
             }
         }
-        let Some(primary) = obs_ids.iter().find_map(|id| obs_by_id.get(id)) else {
+        let Some(primary) = obs_ids
+            .iter()
+            .filter_map(|id| obs_by_id.get(id))
+            .max_by_key(|obs| {
+                obs.metadata().get("key").and_then(|value| value.as_str()) == Some("Requires")
+            })
+        else {
             continue;
         };
         let dep_key = primary
@@ -171,7 +177,11 @@ fn upsert_service_state_node(
         .strip_prefix("service:")
         .unwrap_or(unit)
         .to_string();
-    let mut meta = serde_json::Map::new();
+    let mut meta = existing
+        .as_ref()
+        .and_then(|node| serde_json::from_str::<serde_json::Value>(node.metadata().as_str()).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
     meta.insert(
         "source".to_string(),
         serde_json::Value::String("systemd_dbus".to_string()),
@@ -192,9 +202,28 @@ fn upsert_service_state_node(
             serde_json::Value::String("service".to_string()),
         );
     }
-    for key in ["active_state", "load_state", "sub_state"] {
+    meta.insert(
+        "runtime_observed_at_ns".into(),
+        serde_json::json!(obs.timestamp().as_i64()),
+    );
+    for key in ["active_state", "load_state", "sub_state", "invocation_id"] {
         if let Some(v) = obs.metadata().get(key).and_then(|v| v.as_str()) {
             meta.insert(key.to_string(), serde_json::Value::String(v.to_string()));
+        }
+    }
+    if unit.ends_with(".socket") {
+        for key in [
+            "socket_config_known",
+            "socket_config_source",
+            "socket_config_streams",
+            "socket_config_datagrams",
+            "socket_config_sequential_packets",
+            "socket_config_fifos",
+        ] {
+            meta.remove(key);
+            if let Some(value) = obs.metadata().get(key) {
+                meta.insert(key.into(), value.clone());
+            }
         }
     }
     let node = GraphNode::from_parts(GraphNodeParts {

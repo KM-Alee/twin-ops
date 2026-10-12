@@ -9,7 +9,7 @@ fn dependent_impact_kind_display_and_parse() {
         DependentImpactKind::from_str("configured").unwrap(),
         DependentImpactKind::Configured
     );
-    assert!(DependentImpactKind::Configured.is_runtime() == false);
+    assert!(!DependentImpactKind::Configured.is_runtime());
     assert!(DependentImpactKind::Runtime.is_runtime());
 }
 

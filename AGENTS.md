@@ -96,7 +96,8 @@ Human-facing command output lives in `twin-cli/src/output/`. **Every command mus
 ### Tests
 
 - Every slice needs tests. No slice ships without tests.
-- Prefer integration tests in each crate’s `tests/` directory; use `tests/support/` for shared fixtures (e.g. `IsolatedHome` + `TwinLayout`).
+- Prefer integration tests in each crate’s `tests/` directory; use `tests/support/` for shared fixtures (e.g. `IsolatedHome` + `TwinLayout`). Shared support modules carry `#![allow(dead_code)]` with a comment; each test binary uses a subset.
+- A test function without `#[test]` is dead code that never runs — and a missing `#[test]` must never be fixed by deleting the test.
 - Inject dependencies (`TwinLayout`, fake paths) — never global mutexes or hidden env vars in production code for test hooks.
 - Unit tests in-source only for small pure helpers; test commands and I/O via integration tests.
 - Use `twin-fixtures` for fake `/proc`, fake systemd, fake K8s, fake eBPF streams. No root/Docker/K8s/eBPF needed for tests.
@@ -138,7 +139,7 @@ Check `Cargo.toml` before adding new crate. Prefer std. Minimize deps. New dep =
 
 ### What Not To Do
 
-- No `dead_code` suppressions. If unused, delete it.
+- No `dead_code` suppressions. If unused, delete it. Exception: `tests/support/mod.rs` modules shared by several integration-test binaries carry `#![allow(dead_code)]` with a comment — each binary uses a subset, so per-binary dead-code warnings are false positives.
 - No `#[allow(clippy::...)]` unless proven false positive with comment explaining why.
 - No `todo!()` or `unimplemented!()` in merged code. Use proper error return.
 - No `println!` or `eprintln!` in library code. Only in `twin-cli` binary.
@@ -169,3 +170,65 @@ cargo build && cargo test --workspace && cargo clippy --workspace && cargo fmt -
 ```
 
 Add crate → update root `Cargo.toml` `[workspace]`.
+## 2026-10-08 implementation conventions
+
+- `twin-safety` is the workspace-wide source safety test crate. It scans production source for shell execution and host mutation paths.
+- `clap_complete` in twin-cli generates completions from clap. `chrono` (std only) in twin-app parses RFC3339 history timestamps; elapsed durations retain the existing parser.
+- Graph exports request raw stored neighborhoods to preserve edge kinds. Historical graph reads use latest retained history at/before the timestamp and never substitute current rows.
+- Watch streams every tick but retains only the latest 256 result ticks and 256 distinct warnings. Keep total counts independent of retained history.
+- Config overrides select settings only; the database stays under TwinLayout/XDG. Validate configuration and request shape before a refresh scan.
+
+- `twin-package` reads RPM SQLite, NDB v0 and standalone BDB hash v8/v9 databases; headers and binary pages are decoded with strict bounds. NDB slot/blob identity, bounds and Adler checksums must validate. BDB accepts endian-aware hash/overflow pages and rejects unsupported flags, duplicate/subdatabase forms and cache/recovery environments. Never invoke RPM or repair/recover a source database. Active WAL requires a bounded, metadata-stable private snapshot with validated salts/checksums and committed-frame replay; never let SQLite open the source WAL database or create host journal/shm files. Nonempty rollback journals reject immutable reads. Package source/version metadata must match the actual adapter.
+- `twin-fixtures` owns shared RPM header, NDB and BDB byte fixtures; migrate other duplicated helpers when changing them. It is a dev dependency only.
+- `twin-k8s` uses kube 4.2 + k8s-openapi 0.28 + Tokio for live reads. Rustls must enable the ring provider to avoid provider-selection panics. Reject external credential-command/auth-provider configurations; metadata-only secret/configmap requests, sanitized errors, bounded timeouts, and pagination are required.
+- Exec ABI: 44 little-endian bytes, UID appended at offset 40. TCP admission is bounded by PID, endpoint, cgroup, event kind, and global session counters.
+- Nginx include expansion is bounded; proxy evidence stores sanitized origins, never URL credentials/query values. Kernel cgroup identities are read only from cgroup-v2 paths and must match uniquely before attribution.
+
+Internet socket collection uses protocol-neutral `InetTableKind`/`InetSocketRecord`/`InetConnectionRecord`. Use core `TransportProtocol` and `NodeId::inet_port` for protocol-sensitive matching; never merge TCP and UDP endpoints. UDP bound/connected socket observations do not prove packet transmission. Missing/malformed UDP tables are coverage gaps and must not reap stored UDP relationships.
+
+Domain history summaries use core ChangeCategory and the shared score_evidence formula. A changed valid systemd InvocationID supports an inferred restart/reactivation, never a claim about its cause; missing/pruned predecessors cannot establish a restart or version change.
+
+Fake proc file construction belongs in twin-fixtures (dev dependencies only); owning test support may wrap it with expect assertions. Systemd templates apply only as fallback for concrete enabled/observed instances; explicit instance files, masks and search-path priority take precedence. Unsupported specifiers must warn and suppress unresolved relationships. Accept=yes template declarations do not prove a running instance; use D-Bus trigger relations for concrete observed instances.
+
+Outbound allowlist DNS belongs in twin-app orchestration through twin-collectors::dns::DnsReader; twin-test stays pure. Tokio is reused for bounded resolver waiting. Current DNS answers are observations, matching historical peers is inference, and failed resolution must never silently pass. Never retain raw resolver errors or malformed endpoint values. Nginx named upstream definitions are scoped per service and ambiguous duplicates must not choose an arbitrary backend.
+
+Lifecycle finalization must consider both active and stale unresolved rows, while active-only current/snapshot queries keep their existing semantics. An incomplete nginx configuration makes unseen nginx evidence stale, never a confirmed removal; independently observed socket evidence stays current. Parse nginx syntax only for nginx configuration sources.
+
+Incident timelines use typed ChangeCategory filters and chronological operational entries. `what-changed --target` traverses bounded explicit semantic links from current/stale rows plus retained window history, never mount/cgroup/parent-process fan-out. Show omitted-entry counts and preserve coverage unknowns under filtering; temporal association is not causation.
+
+Restart reasoning preserves systemd declaration semantics: active Wants alone is configured context, not proof of runtime disruption. Requires is preferred when both declarations exist for a pair. Transitive counts use distinct affected service IDs across path steps, excluding direct dependents and the target; leaves exactly at a depth bound remain visible.
+
+Kubernetes rollout policy is projected as safe resolved counts with documented API defaults/rounding. Availability predictions are conditional on current observed endpoints and policy; never assume new surge pods become ready or mark all rolling-update pods simultaneously unavailable. Missing/stale reads, unsupported policy and unknown endpoint coverage require Unknown availability and shared-core weak evidence. Pod deletion must respect the same coverage/freshness limits.
+
+`why` proof traversal is bounded (4 links, 64 relationships, 32 traversed nodes, 16 paths). Each stored link keeps its observed/inferred class and shared evidence score; do not create a separate chain-scoring formula. Display allowlisted observation facts only, with raw line content excluded. Observation display truncation never truncates the evidence used for scoring.
+
+Network namespace collection uses read-only `/proc/PID/net` tables and `/proc/PID/ns/net` identities, never `setns`. Socket inode ownership joins are scoped to a stable namespace; reread identities after collecting tables/descriptors. Scanner namespace endpoints retain host aliases, while other endpoint IDs carry namespace identity. Wildcard local dependency inference requires loopback or a concrete observed local address in the same namespace; a remote peer sharing the listener port does not prove a local dependency. Preserve relation-specific inference metadata and actual namespace table evidence paths.
+
+Namespace endpoints and inferred/observed runtime edges retain the shared validated boot identity. Changed known boots and gone reappearance reset incarnation boundaries; prior edge observation links cannot count toward new evidence. Missing boot identity is coverage uncertainty, with last known identity retained only for later comparison.
+
+Store schema migrations run explicitly through `twin init`, never implicitly on open. Each migration's changes and version marker commit atomically. Schema 6 removes legacy argv/argv_json recursively from stored metadata, preserves safe argument counts, and sanitizes legacy Docker failures. `secure_delete` applies only to twin's own SQLite store; logical cleanup does not establish forensic erasure of WAL files, backups or exported artifacts. Existing users must run `twin init` to upgrade.
+
+Snapshot edge proof references are captured with graph rows in one transaction and survive current-edge reincarnation/reset and observation retention. Retained reference IDs do not prove retained observations; missing rows remain Unknown. Pre-v6 snapshots can backfill only still-linked observations at or before their capture timestamp; absent older references cannot be reconstructed.
+
+Schema 6's structured argument cleanup includes retained test report JSON. It removes argument keys rather than guessing secret values in arbitrary prose.
+
+Semantic health policies use source-scoped Unknown facts and retained observation counts; snapshot policies read captured snapshot proof references and as-of coverage. Historical disk/DNS/emulation inputs absent from snapshots stay Unknown. Deduplicate routed endpoint pods and reject ambiguous or stale ownership. Future timestamps do not establish freshness. Usage and explicit limits live in docs/operational-workflows.md.
+
+Nginx contextual include parsing preserves enclosing HTTP/stream groups and proxy transport, with depth/file/byte budgets and cycle warnings. twin-config depends inward on twin-core for TransportProtocol. Scan DNS uses injected DnsReader; DNS-derived references are inferred and typed system_dns observations identify current resolver evidence, never nginx's historical/runtime answer. Includes still retain per-file fingerprints and original safe evidence paths.
+
+Systemd relevant values use continued logical lines and quoted/escaped item parsing; malformed relevant values return sanitized parse errors. Type and dash-prefix drop-in specificity precedes load-path priority for equal filenames; masks suppress lower choices. Unit-name-only specifiers can expand without host context; unsupported user/credential-dependent specifiers remain coverage gaps.
+
+Containerd uses tonic/prost metadata-only read projections for Namespaces/Containers/Tasks/Images List RPCs. No OCI specs, labels, task I/O or env bodies are projected. Canonical container/image IDs include runtime plus namespace. Complete source reads may finalize their own absent rows despite unrelated host collector gaps; unavailable sources are preserved and incomplete sources remain uncertain.
+
+Kubernetes resource watches use metadata-only GET streams, bounded event lines and retained results, resource-version/bookmark continuation, relist on 410, and bounded reconnect backoff. Safe full-cluster projections refresh the graph; interruption coverage never finalizes unseen graph rows. `futures-util` supplies bounded stream I/O. Explicit configured-client injection is permitted for embedding and fixtures, without environment hooks. Shared Kubernetes stream fake-server fixtures live in twin-fixtures (dev-only), using serde_json to generate synthetic responses.
+
+Pod log reads are non-following, tail/byte/time bounded and volume/lexical summaries only. Clear transient chunks/windows, never return/store log bodies, snippets or content hashes. Typed phrase matches are observations, not causes or severity conclusions. Capability-gated fake API tests return only on actual PermissionDenied binding.
+
+Bundled read-only eBPF producers are `twin-ebpf/probes/twin.bpf.c` plus its tracked `.o` and SHA-256 manifest; `python3 tools/build_ebpf.py --check` verifies source/object reproducibility with clang's BPF target. Ordinary Rust builds/tests use the bundled object without clang or root. `aya-obj` is a dev dependency solely for unprivileged ELF/BTF/map validation. Live payload extensions are exec 60 bytes and connect 72 bytes, appending namespace inode and process leader start ticks; legacy fixture payloads remain 44/56 bytes. Live attachment checks Linux little-endian 64-bit/USER_HZ=100 and TCP tracepoint field layout. TCP initiator identity is captured inside a connect syscall and retained by socket pointer until ESTABLISHED, never taken from the completion/softirq task. Namespace identity comes from the socket itself. Kernel drop counters and queue drains preserve source-scoped coverage gaps. Exec invalidates previous runtime relationships as stale, not confirmed closed; process generations never borrow an older PID's evidence.
+
+Specialized graph neighborhoods use temporary bounded node/link/observation batches; preserve per-edge proof IDs and historical-store selection. Batch incoming-edge queries bind and deduplicate target IDs in chunks of 500. Missing or malformed specialized-view observation rows retain their existing omission semantics, never fabricate proof. Watch soak cardinality samples read only numeric counts/sizes from Twin's isolated store and explicitly close read-only connections; RSS and database growth correlation does not establish allocator/leak causation.
+
+Systemd main/template/drop-in file reads are bounded to 1 MiB. `[Unit]` is optional; malformed relevant declarations are gaps. Apply a drop-in's dependency and socket changes atomically after all relevant sections validate.
+
+
+Systemd D-Bus `Socket.Listen` is observed manager configuration, never proof of an open listener or descriptor ownership. Store `socket_config_known` separately from active/substate; failed properties clear current configuration addresses and raise per-unit coverage gaps. Runtime FIFO ownership requires stable descriptor mode/device/inode evidence and namespace-safe path agreement; VSOCK requires kernel socket-diag evidence, never an invented `/proc/net/vsock` table or declaration-only join.

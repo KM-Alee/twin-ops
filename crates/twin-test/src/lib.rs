@@ -6,8 +6,8 @@ mod starter;
 pub use document::{parse_file, parse_str, CheckKind, EmulateAction, TestCheck, TestDocument};
 pub use error::TestError;
 pub use evaluate::{
-    evaluate, CheckResult, CheckStatus, DiskFact, EdgeFact, EmulationFact, EndpointFact,
-    GraphFacts, NodeFact, TestRunReport, UnknownFact,
+    evaluate, BaselineComparison, CheckResult, CheckStatus, DiskFact, EdgeFact, EmulationFact,
+    EndpointFact, EvaluationContext, GraphFacts, NodeFact, ServiceFact, TestRunReport, UnknownFact,
 };
 pub use starter::STARTER_YAML;
 
@@ -33,3 +33,9 @@ pub fn write_starter(path: &Path, force: bool) -> Result<(), TestError> {
         source,
     })
 }
+
+mod health;
+pub use health::{ContainerFact, K8sReadyFact, RoutingFact};
+
+mod coverage;
+pub use coverage::FactSource;

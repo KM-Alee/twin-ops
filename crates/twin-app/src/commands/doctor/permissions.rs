@@ -1,5 +1,4 @@
 use std::fs;
-use std::process::Command;
 
 use crate::model::{DoctorPermissions, PermissionMode};
 
@@ -34,12 +33,16 @@ pub fn check() -> DoctorPermissions {
 }
 
 fn detect_permission_mode() -> PermissionMode {
-    if let Ok(output) = Command::new("id").arg("-u").output() {
-        if output.status.success() {
-            let uid = String::from_utf8_lossy(&output.stdout);
-            if uid.trim() == "0" {
-                return PermissionMode::Privileged;
-            }
+    if let Ok(status) = fs::read_to_string("/proc/self/status") {
+        let effective_uid = status.lines().find_map(|line| {
+            line.strip_prefix("Uid:")?
+                .split_whitespace()
+                .nth(1)?
+                .parse::<u32>()
+                .ok()
+        });
+        if effective_uid == Some(0) {
+            return PermissionMode::Privileged;
         }
     }
     PermissionMode::Unprivileged

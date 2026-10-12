@@ -100,3 +100,31 @@ fn connect_observation_is_endpoint_only() {
     assert!(!metadata.contains("password"));
     assert!(!metadata.contains("10.0.0.1"));
 }
+
+#[test]
+fn live_connect_extension_scopes_endpoint_and_birth_identity() {
+    let event = twin_ebpf::TcpConnect::new(
+        42,
+        9,
+        "127.0.0.1".parse().unwrap(),
+        "127.0.0.1".parse().unwrap(),
+        443,
+        100,
+    );
+    let mut bytes = twin_ebpf::encode_connect(&event).to_vec();
+    bytes.extend_from_slice(&2u64.to_le_bytes());
+    bytes.extend_from_slice(&300u64.to_le_bytes());
+    let event = twin_ebpf::decode_tcp_event(&bytes).unwrap();
+    let raw = twin_ebpf::tcp_to_raw(&event);
+    let observation = twin_observation::Pipeline::default().process(raw).unwrap();
+    assert_eq!(
+        observation.object().unwrap().to_string(),
+        "port:tcp:127.0.0.1:443:netns:2"
+    );
+    assert_eq!(
+        observation.metadata().get("start_ticks").unwrap().as_u64(),
+        Some(300)
+    );
+    bytes[56..64].fill(0);
+    assert!(twin_ebpf::decode_tcp_event(&bytes).is_err());
+}

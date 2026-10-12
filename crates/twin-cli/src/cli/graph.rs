@@ -3,7 +3,7 @@ use std::str::FromStr;
 use twin_app::{AppError, GraphRequest};
 use twin_core::{NodeId, NodeKind};
 
-use super::args::GraphArgs;
+use super::args::{GraphArgs, GraphFormat};
 
 enum GraphQuery {
     List(NodeKind),
@@ -12,6 +12,10 @@ enum GraphQuery {
 }
 
 pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
+    if args.target.is_some() && args.kind.is_some() {
+        return Err(AppError::TargetAndKindConflict);
+    }
+
     let query = if let Some(value) = &args.target {
         parse_positional(value)?
     } else if let Some(value) = &args.kind {
@@ -20,13 +24,42 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
         GraphQuery::List(NodeKind::Process)
     };
 
+    if let GraphQuery::List(kind) = &query {
+        twin_app::validate_graph_kind(*kind)?;
+    }
+
     let (kind, target, target_query) = match query {
         GraphQuery::List(kind) => (Some(kind), None, None),
         GraphQuery::Node(id) => (None, Some(id), None),
         GraphQuery::Search(query) => (None, None, Some(query)),
     };
 
+    if kind.is_none() && (args.limit.is_some() || args.label.is_some() || args.state.is_some()) {
+        return Err(AppError::GraphFiltersRequireList);
+    }
+    if let Some(id) = &target {
+        if let Some(kind) = id.kind() {
+            twin_app::validate_graph_kind(kind)?;
+        }
+    }
     Ok(GraphRequest {
+        raw_neighborhood: args.format != GraphFormat::Human,
+        at: args
+            .at
+            .as_deref()
+            .map(twin_app::parse_graph_time)
+            .transpose()?,
+        limit: args.limit.map(|limit| limit as usize),
+        label: args.label.clone(),
+        state: args
+            .state
+            .as_deref()
+            .map(twin_core::NodeState::from_str)
+            .transpose()
+            .map_err(|source| AppError::InvalidGraphTarget {
+                value: args.state.clone().unwrap_or_default(),
+                source,
+            })?,
         config_override: args.config.clone(),
         kind,
         target,
@@ -36,6 +69,9 @@ pub fn graph_request(args: &GraphArgs) -> Result<GraphRequest, AppError> {
 }
 
 fn parse_positional(value: &str) -> Result<GraphQuery, AppError> {
+    if twin_app::parse_port_query(value)?.is_some() {
+        return Ok(GraphQuery::Search(value.into()));
+    }
     if value.starts_with('/') {
         return Ok(GraphQuery::Node(NodeId::file(value)));
     }
@@ -86,6 +122,11 @@ mod tests {
     #[test]
     fn defaults_to_process_list() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -98,6 +139,11 @@ mod tests {
     #[test]
     fn positional_process_is_kind_list() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -111,6 +157,11 @@ mod tests {
     fn positional_pid_shorthands() {
         for value in ["1234", "pid:1234", "process:pid:1234"] {
             let req = request(GraphArgs {
+                at: None,
+                limit: None,
+                label: None,
+                state: None,
+                format: GraphFormat::Human,
                 config: None,
                 evidence: false,
                 kind: None,
@@ -122,8 +173,32 @@ mod tests {
     }
 
     #[test]
+    fn target_and_kind_together_error() {
+        let err = graph_request(&GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
+            config: None,
+            evidence: false,
+            kind: Some("service".to_string()),
+            target: Some("process".to_string()),
+        })
+        .expect_err("conflicting query");
+        assert!(err
+            .to_string()
+            .contains("use either a target or --kind, not both"));
+    }
+
+    #[test]
     fn kind_flag_still_works() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: Some("process".to_string()),
@@ -135,6 +210,11 @@ mod tests {
     #[test]
     fn invalid_port_target_errors() {
         let err = graph_request(&GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -147,6 +227,11 @@ mod tests {
     #[test]
     fn library_id_is_a_node() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -161,6 +246,11 @@ mod tests {
     #[test]
     fn library_basename_is_a_search() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -173,6 +263,11 @@ mod tests {
     #[test]
     fn container_id_is_a_node() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -187,6 +282,11 @@ mod tests {
     #[test]
     fn image_id_is_a_node() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,
@@ -201,6 +301,11 @@ mod tests {
     #[test]
     fn service_shorthand_passes_through_as_search() {
         let req = request(GraphArgs {
+            at: None,
+            limit: None,
+            label: None,
+            state: None,
+            format: GraphFormat::Human,
             config: None,
             evidence: false,
             kind: None,

@@ -5,6 +5,27 @@ use twin_core::NodeId;
 
 use crate::error::ContainerError;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerHealth {
+    Healthy,
+    Unhealthy,
+    Starting,
+    None,
+    Unknown,
+}
+
+impl ContainerHealth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Unhealthy => "unhealthy",
+            Self::Starting => "starting",
+            Self::None => "none",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortMapping {
     pub container_port: u16,
@@ -26,6 +47,8 @@ pub struct ContainerSummary {
     pub id: String,
     pub name: String,
     pub image: String,
+    pub image_id: Option<String>,
+    pub is_running: Option<bool>,
     pub ports: Vec<PortMapping>,
     pub mounts: Vec<VolumeMount>,
 }
@@ -35,6 +58,9 @@ pub struct ContainerInspect {
     pub id: String,
     pub name: String,
     pub image: String,
+    pub image_id: Option<String>,
+    pub is_running: Option<bool>,
+    pub health: ContainerHealth,
     pub pid: Option<u32>,
     ports: Vec<PortMapping>,
     mounts: Vec<VolumeMount>,
@@ -67,9 +93,10 @@ pub(crate) fn parse_container_list(
     })?;
     let mut out = Vec::new();
     for item in items {
-        let Some(summary) = summary_from_value(item) else {
-            continue;
-        };
+        let summary = summary_from_value(item).ok_or_else(|| ContainerError::Parse {
+            path: path.to_string(),
+            detail: "container list contains an incomplete object".into(),
+        })?;
         out.push(summary);
     }
     Ok(out)
@@ -124,6 +151,14 @@ fn summary_from_value(value: &Value) -> Option<ContainerSummary> {
         id,
         name,
         image,
+        is_running: value
+            .get("State")
+            .and_then(|value| value.as_str())
+            .and_then(running_state),
+        image_id: value
+            .get("ImageID")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
         ports: ports_from_list(value),
         mounts: mounts_from_value(value),
     })
@@ -152,10 +187,41 @@ fn inspect_from_value(value: &Value) -> Option<ContainerInspect> {
         id,
         name,
         image,
+        is_running: value
+            .pointer("/State/Running")
+            .and_then(|value| value.as_bool())
+            .or_else(|| {
+                value
+                    .pointer("/State/Status")
+                    .and_then(|value| value.as_str())
+                    .and_then(running_state)
+            }),
+        health: match value.pointer("/State/Health") {
+            None => ContainerHealth::None,
+            Some(health) => match health.get("Status").and_then(|value| value.as_str()) {
+                Some("healthy") => ContainerHealth::Healthy,
+                Some("unhealthy") => ContainerHealth::Unhealthy,
+                Some("starting") => ContainerHealth::Starting,
+                _ => ContainerHealth::Unknown,
+            },
+        },
+        image_id: value
+            .get("Image")
+            .and_then(|value| value.as_str())
+            .filter(|value| value.starts_with("sha256:"))
+            .map(str::to_string),
         pid,
         ports,
         mounts: mounts_from_value(value),
     })
+}
+
+fn running_state(state: &str) -> Option<bool> {
+    match state {
+        "running" | "paused" => Some(true),
+        "created" | "exited" | "dead" => Some(false),
+        _ => None,
+    }
 }
 
 fn choose_name(value: &Value, id: &str) -> Option<String> {
@@ -188,9 +254,6 @@ fn image_reference(value: &Value) -> Option<String> {
         value.get("Image").and_then(|item| item.as_str()),
     ];
     for candidate in candidates.into_iter().flatten() {
-        if candidate.starts_with("sha256:") {
-            continue;
-        }
         if usable_image(candidate) {
             return Some(candidate.to_string());
         }

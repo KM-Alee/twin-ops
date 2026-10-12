@@ -40,3 +40,9 @@ cargo fmt --check
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
+
+Runtime follow-up: systemd Unit.InvocationID is decoded as a nonzero 16-byte identity and stored as safe lowercase hex metadata. Missing/zero/malformed IDs are absent. This supports inferred restart/reactivation history without reading environment values or claiming a restart cause. Fixture and property-decoder tests cover the new field.
+
+## 2026-10-08 dependency semantics follow-up
+
+An active service's optional systemd `Wants=` declaration remains configured context unless independent runtime evidence establishes a dependency. `Requires=` retains its explicit stop/restart propagation behavior for an active dependent. File and D-Bus groups prefer a retained `Requires` declaration when both keys exist for the same pair. A fixture checks active Wants vs Requires vs inferred connection behavior through impact and restart emulation. This does not yet model `PartOf`, `BindsTo`, `Upholds` or every systemd dependency directive.

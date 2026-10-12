@@ -35,15 +35,12 @@ fn create_at(
     request: &SnapshotCreateRequest,
     db_path: &std::path::Path,
 ) -> Result<SnapshotCreateResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(TemporalError::DatabaseNotInitialized.into());
     }
-    let name =
-        SnapshotId::new(&request.name).map_err(|source| TemporalError::InvalidSnapshotName {
-            value: request.name.clone(),
-            source,
-        })?;
+    let name = SnapshotId::new(&request.name)
+        .map_err(|source| TemporalError::InvalidSnapshotName { source })?;
     let mut store = Store::open(db_path).map_err(TemporalError::StoreOpen)?;
     if !store.is_initialized().map_err(TemporalError::Store)? {
         return Err(TemporalError::DatabaseNotInitialized.into());
@@ -65,7 +62,7 @@ fn list_at(
     request: &SnapshotListRequest,
     db_path: &std::path::Path,
 ) -> Result<SnapshotListResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(TemporalError::DatabaseNotInitialized.into());
     }

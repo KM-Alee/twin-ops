@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::TcpEventKind;
+
 use twin_core::{CollectorName, TimestampNs};
 use twin_observation::{
     ConfidenceHint, ObservationKind, ObservationMetadata, ObservationSource, RawEvidenceRef,
@@ -15,6 +17,8 @@ pub struct TcpRateLimits {
     pub per_pid: u32,
     pub per_endpoint: u32,
     pub global_limit: u32,
+    pub per_cgroup: u32,
+    pub per_event_type: u32,
 }
 
 impl TcpRateLimits {
@@ -23,6 +27,8 @@ impl TcpRateLimits {
             per_pid: DEFAULT_PER_PID,
             per_endpoint: DEFAULT_PER_ENDPOINT,
             global_limit: DEFAULT_GLOBAL,
+            per_cgroup: 128,
+            per_event_type: 256,
         }
     }
 }
@@ -33,6 +39,8 @@ pub struct TcpRateLimiter {
     pid_counts: HashMap<u32, u32>,
     endpoint_counts: HashMap<String, u32>,
     global_count: u32,
+    cgroup_counts: HashMap<u64, u32>,
+    event_counts: HashMap<TcpEventKind, u32>,
     dropped: u64,
 }
 
@@ -43,14 +51,26 @@ impl TcpRateLimiter {
             pid_counts: HashMap::new(),
             endpoint_counts: HashMap::new(),
             global_count: 0,
+            cgroup_counts: HashMap::new(),
+            event_counts: HashMap::new(),
             dropped: 0,
         }
     }
 
-    pub fn admit(&mut self, pid: u32, endpoint: &str) -> bool {
+    pub fn admit(
+        &mut self,
+        pid: u32,
+        endpoint: &str,
+        cgroup_id: u64,
+        event_kind: TcpEventKind,
+    ) -> bool {
+        let cgroup_count = self.cgroup_counts.get(&cgroup_id).copied().unwrap_or(0);
+        let event_count = self.event_counts.get(&event_kind).copied().unwrap_or(0);
         let pid_count = self.pid_counts.get(&pid).copied().unwrap_or(0);
         let endpoint_count = self.endpoint_counts.get(endpoint).copied().unwrap_or(0);
         if self.global_count >= self.limits.global_limit
+            || cgroup_count >= self.limits.per_cgroup
+            || event_count >= self.limits.per_event_type
             || pid_count >= self.limits.per_pid
             || endpoint_count >= self.limits.per_endpoint
         {
@@ -58,6 +78,10 @@ impl TcpRateLimiter {
             return false;
         }
         self.global_count = self.global_count.saturating_add(1);
+        self.cgroup_counts
+            .insert(cgroup_id, cgroup_count.saturating_add(1));
+        self.event_counts
+            .insert(event_kind, event_count.saturating_add(1));
         *self.pid_counts.entry(pid).or_insert(0) = pid_count.saturating_add(1);
         self.endpoint_counts
             .insert(endpoint.to_string(), endpoint_count.saturating_add(1));

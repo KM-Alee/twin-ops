@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use tempfile::TempDir;
 use twin_collectors::SystemdRuntimeCollector;
 use twin_core::TimestampNs;

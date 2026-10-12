@@ -22,7 +22,7 @@ use crate::commands::scan_quality::assess_scan_quality;
 use crate::commands::service_dependents::{impact_unknown_to_emulation, TypedServiceDependent};
 use crate::error::{AppError, EmulateError};
 use crate::model::ImpactPath;
-use crate::model::{EmulationResult, ImpactUnknown};
+use crate::model::{EmulationImpactPathView, EmulationResult, ImpactUnknown};
 use crate::paths::{resolve_command_paths, TwinLayout};
 use crate::EmulateActionRequest;
 use crate::EmulateRequest;
@@ -41,7 +41,8 @@ fn emulate_at(
     request: &EmulateRequest,
     db_path: &std::path::Path,
 ) -> Result<EmulationResult, AppError> {
-    let _ = layout.config_file(request.config_override.as_deref());
+    validate_request(request)?;
+    crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(EmulateError::DatabaseNotInitialized.into());
     }
@@ -69,6 +70,8 @@ fn emulate_at(
                     &store,
                     &resolved,
                     node.label(),
+                    *show_paths,
+                    *max_depth,
                     request.show_evidence,
                 );
             }
@@ -111,7 +114,7 @@ fn delete_k8s_pod_emulate(
     show_evidence: bool,
 ) -> Result<EmulationResult, AppError> {
     let input = super::k8s::delete_pod_input(store, target)?;
-    let mut result = EmulationResult::from_domain(emulate_delete_k8s_pod(input), Vec::new());
+    let mut result = k8s_domain_result(emulate_delete_k8s_pod(input));
     result.show_evidence = show_evidence;
     Ok(result)
 }
@@ -122,10 +125,23 @@ fn rollout_k8s_emulate(
     show_evidence: bool,
 ) -> Result<EmulationResult, AppError> {
     let input = super::k8s::rollout_input(store, target)?;
-    let mut result =
-        EmulationResult::from_domain(emulate_rollout_k8s_deployment(input), Vec::new());
+    let mut result = k8s_domain_result(emulate_rollout_k8s_deployment(input));
     result.show_evidence = show_evidence;
     Ok(result)
+}
+
+fn k8s_domain_result(report: twin_emulate::EmulationDomainReport) -> EmulationResult {
+    let unknowns = report
+        .unknown_impacts
+        .iter()
+        .map(|impact| ImpactUnknown {
+            kind: UnknownKind::MissingEvidence.as_str().into(),
+            detail: impact.statement.clone(),
+            source: Some("k8s".into()),
+            weakens_evidence: true,
+        })
+        .collect();
+    EmulationResult::from_domain(report, unknowns)
 }
 
 fn resolve_restart_target(
@@ -543,10 +559,18 @@ fn restart_container_emulate(
     store: &Store,
     target: &NodeId,
     label: &str,
+    show_paths: bool,
+    max_depth: usize,
     show_evidence: bool,
 ) -> Result<EmulationResult, AppError> {
     let facts = super::scan_containers::container_impact_facts(store, target)
         .map_err(EmulateError::Store)?;
+    let (paths, unknowns) = container_impact_paths(store, &facts.affected, max_depth)?;
+    let impact_paths = paths.iter().map(impact_path_view).collect();
+    let domain_paths = paths
+        .iter()
+        .map(impact_path_to_emulation)
+        .collect::<Result<Vec<_>, _>>()?;
     let affected = facts
         .affected
         .into_iter()
@@ -565,10 +589,55 @@ fn restart_container_emulate(
         },
         container_in_graph: facts.in_graph,
         affected,
+        impact_paths: domain_paths,
     });
-    let mut result = EmulationResult::from_domain(report, Vec::new());
+    let mut result = EmulationResult::from_domain(report, unknowns);
+    result.paths_requested = show_paths;
+    result.max_depth = max_depth;
+    result.impact_paths = impact_paths;
     result.show_evidence = show_evidence;
     Ok(result)
+}
+
+fn container_impact_paths(
+    store: &Store,
+    services: &[super::scan_containers::ContainerServiceLink],
+    max_depth: usize,
+) -> Result<(Vec<ImpactPath>, Vec<ImpactUnknown>), AppError> {
+    let mut paths = Vec::new();
+    let mut unknowns: Vec<ImpactUnknown> = Vec::new();
+    for service in services {
+        let analysis =
+            load_service_impact_paths(store, &service.service, &service.label, max_depth)?;
+        unknowns = merge_emulate_unknowns(&unknowns, &analysis.unknowns);
+        paths.extend(analysis.paths);
+    }
+    paths.sort_by(|a, b| {
+        a.terminal
+            .id
+            .cmp(&b.terminal.id)
+            .then_with(|| a.depth.cmp(&b.depth))
+    });
+    Ok((paths, unknowns))
+}
+
+fn impact_path_view(path: &ImpactPath) -> EmulationImpactPathView {
+    let mut nodes = vec![path.terminal.id.clone()];
+    nodes.extend(path.steps.iter().map(|step| step.to.id.clone()));
+    EmulationImpactPathView {
+        terminal_id: path.terminal.id.clone(),
+        terminal_label: path.terminal.label.clone(),
+        depth: path.depth,
+        path_chain: nodes.join(" -> "),
+        evidence: path
+            .evidence
+            .iter()
+            .map(|line| line.statement.clone())
+            .collect(),
+        is_cycle_capped: path.is_cycle_capped,
+        is_depth_capped: path.is_depth_capped,
+        cycle_note: path.cycle_note.clone(),
+    }
 }
 
 fn restart_service_emulate(
@@ -581,7 +650,7 @@ fn restart_service_emulate(
 ) -> Result<EmulationResult, AppError> {
     let analysis = load_typed_service_dependents(store, target, label)?;
     let unavailable_nodes = load_listening_sockets(store, target)?;
-    let (impact_paths, path_scoring, unknowns) = if show_paths {
+    let (impact_paths, path_scoring, unknowns) = {
         let path_analysis = load_service_impact_paths(store, target, label, max_depth)?;
         let paths: Vec<EmulationImpactPath> = path_analysis
             .paths
@@ -595,8 +664,6 @@ fn restart_service_emulate(
         };
         let merged = merge_emulate_unknowns(&analysis.unknowns, &path_analysis.unknowns);
         (paths, Some(scoring), merged)
-    } else {
-        (Vec::new(), None, analysis.unknowns.clone())
     };
     let coverage = super::coverage::load(store)?;
     let mut unknowns = unknowns;
@@ -636,6 +703,8 @@ fn restart_service_emulate(
         paths_requested: show_paths,
         max_depth,
         path_scoring,
+        has_conflicting_evidence: super::evidence::observations_conflict(store, &observed)
+            .map_err(crate::error::ScanError::Store)?,
         permission_gaps: u32::try_from(coverage.restricted_processes).unwrap_or(u32::MAX),
         dropped_ebpf: super::ebpf_tcp::ebpf_drops_recorded(store)
             .map_err(crate::error::ScanError::Store)?,
@@ -792,4 +861,56 @@ fn load_listening_sockets(store: &Store, target: &NodeId) -> Result<Vec<Emulatio
     }
     nodes.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
     Ok(nodes)
+}
+
+pub fn validate_request(request: &EmulateRequest) -> Result<(), AppError> {
+    match &request.action {
+        EmulateActionRequest::Restart {
+            target, max_depth, ..
+        } => {
+            crate::validate_max_depth(*max_depth)?;
+            if let Some(id) = target {
+                if !matches!(id.kind(), Some(NodeKind::Service | NodeKind::Container)) {
+                    return Err(EmulateError::UnsupportedTarget {
+                        kind: id.kind().map(|kind| kind.to_string()).unwrap_or_default(),
+                    }
+                    .into());
+                }
+            }
+        }
+        EmulateActionRequest::DeleteFile { path } => {
+            resolve_delete_file_target(path)?;
+        }
+        EmulateActionRequest::FillDisk { mount, to_percent } => {
+            resolve_fill_mount(mount)?;
+            if !(1..=100).contains(to_percent) {
+                return Err(EmulateError::InvalidFillPercent {
+                    value: to_percent.to_string(),
+                }
+                .into());
+            }
+        }
+        EmulateActionRequest::UpgradePackage { package } => {
+            resolve_upgrade_package(package)?;
+        }
+        EmulateActionRequest::DeleteK8sPod { target } => {
+            if target.kind() != Some(NodeKind::K8sPod) {
+                return Err(EmulateError::InvalidDeleteTarget {
+                    value: target.to_string(),
+                    reason: "expected pod:namespace/name".into(),
+                }
+                .into());
+            }
+        }
+        EmulateActionRequest::RolloutK8sDeployment { target } => {
+            if target.kind() != Some(NodeKind::K8sDeployment) {
+                return Err(EmulateError::InvalidRolloutTarget {
+                    value: target.to_string(),
+                    reason: "expected deployment:namespace/name".into(),
+                }
+                .into());
+            }
+        }
+    }
+    Ok(())
 }

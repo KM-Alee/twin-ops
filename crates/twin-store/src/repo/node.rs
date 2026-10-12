@@ -18,6 +18,20 @@ pub struct NodeRow {
 }
 
 impl Store {
+    pub fn reset_node_incarnation(
+        &mut self,
+        id: &twin_core::NodeId,
+        started_at: twin_core::TimestampNs,
+    ) -> Result<(), StoreError> {
+        self.conn
+            .execute(
+                "UPDATE nodes SET first_seen_ns = ?2, valid_from_ns = ?2 WHERE id = ?1",
+                params![id.as_str(), started_at.as_i64()],
+            )
+            .map_err(|source| StoreError::Upsert { source })?;
+        Ok(())
+    }
+
     pub fn upsert_node(&mut self, node: &NodeRow) -> Result<(), StoreError> {
         self.conn
             .execute(

@@ -29,14 +29,76 @@ pub struct UnitDBusSnapshot {
     pub active_state: String,
     pub load_state: String,
     pub sub_state: String,
+    pub invocation_id: Option<String>,
+    pub triggered_by: Vec<String>,
     pub requires: Vec<String>,
     pub wants: Vec<String>,
     pub control_group: String,
     pub fragment_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SocketListenAddress {
+    kind: SocketListenKind,
+    address: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketListenKind {
+    Stream,
+    Datagram,
+    SequentialPacket,
+    Fifo,
+}
+
+impl SocketListenKind {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "Stream" => Some(Self::Stream),
+            "Datagram" => Some(Self::Datagram),
+            "SequentialPacket" => Some(Self::SequentialPacket),
+            "FIFO" => Some(Self::Fifo),
+            _ => None,
+        }
+    }
+
+    fn metadata_key(self) -> &'static str {
+        match self {
+            Self::Stream => "socket_config_streams",
+            Self::Datagram => "socket_config_datagrams",
+            Self::SequentialPacket => "socket_config_sequential_packets",
+            Self::Fifo => "socket_config_fifos",
+        }
+    }
+}
+
+impl SocketListenAddress {
+    pub fn new(kind: SocketListenKind, address: String) -> Result<Self, SystemdDBusError> {
+        if address.is_empty() || address.len() > 4096 || address.chars().any(char::is_control) {
+            return Err(SystemdDBusError::CallFailed {
+                detail: "invalid socket Listen address".into(),
+            });
+        }
+        Ok(Self { kind, address })
+    }
+
+    pub fn kind(&self) -> SocketListenKind {
+        self.kind
+    }
+
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+}
+
 pub trait SystemdDBusReader {
     fn list_units(&self) -> Result<Vec<UnitDBusSnapshot>, SystemdDBusError>;
+
+    fn socket_listen(&self, _unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
+        Err(SystemdDBusError::Unavailable {
+            detail: "socket Listen property unavailable".into(),
+        })
+    }
 
     fn get_unit_by_control_group(
         &self,
@@ -67,6 +129,8 @@ impl StdSystemdDBusReader {
 )]
 trait SystemdManager {
     fn list_units(&self) -> zbus::Result<Vec<UnitListTuple>>;
+
+    fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
 
     fn get_unit_by_control_group(&self, cgroup: &str) -> zbus::Result<OwnedObjectPath>;
 }
@@ -101,6 +165,19 @@ fn unit_props_from_get_all(
         string_prop(&props, "ControlGroup"),
         string_prop(&props, "FragmentPath"),
     )
+}
+
+fn invocation_id_prop(props: &HashMap<String, OwnedValue>) -> Option<String> {
+    let values = Vec::<OwnedValue>::try_from(props.get("InvocationID")?.clone()).ok()?;
+    let bytes: Vec<u8> = values
+        .into_iter()
+        .map(u8::try_from)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if bytes.len() != 16 || bytes.iter().all(|byte| *byte == 0) {
+        return None;
+    }
+    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn string_prop(props: &HashMap<String, OwnedValue>, key: &str) -> String {
@@ -162,12 +239,16 @@ impl SystemdDBusReader for StdSystemdDBusReader {
             let props = props_proxy
                 .get_all("org.freedesktop.systemd1.Unit")
                 .unwrap_or_default();
+            let triggered_by = string_vec_prop(&props, "TriggeredBy");
+            let invocation_id = invocation_id_prop(&props);
             let (requires, wants, control_group, fragment_path) = unit_props_from_get_all(props);
             out.push(UnitDBusSnapshot {
                 name,
                 active_state,
                 load_state,
                 sub_state,
+                invocation_id,
+                triggered_by,
                 requires,
                 wants,
                 control_group,
@@ -175,6 +256,34 @@ impl SystemdDBusReader for StdSystemdDBusReader {
             });
         }
         Ok(out)
+    }
+
+    fn socket_listen(&self, unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
+        let manager = SystemdManagerProxyBlocking::new(&self.connection)
+            .map_err(|_| socket_property_error())?;
+        let path = manager
+            .get_unit(unit)
+            .map_err(|_| socket_property_error())?;
+        let proxy = UnitPropertiesProxyBlocking::builder(&self.connection)
+            .path(path)
+            .map_err(|_| socket_property_error())?
+            .build()
+            .map_err(|_| socket_property_error())?;
+        let props = proxy
+            .get_all("org.freedesktop.systemd1.Socket")
+            .map_err(|_| socket_property_error())?;
+        let value = props.get("Listen").ok_or_else(socket_property_error)?;
+        let rows = Vec::<(String, String)>::try_from(value.clone())
+            .map_err(|_| socket_property_error())?;
+        if rows.len() > 256 {
+            return Err(socket_property_error());
+        }
+        rows.into_iter()
+            .map(|(kind, address)| {
+                let kind = SocketListenKind::parse(&kind).ok_or_else(socket_property_error)?;
+                SocketListenAddress::new(kind, address)
+            })
+            .collect()
     }
 
     fn get_unit_by_control_group(
@@ -219,15 +328,28 @@ impl SystemdDBusReader for StdSystemdDBusReader {
     }
 }
 
+fn socket_property_error() -> SystemdDBusError {
+    SystemdDBusError::CallFailed {
+        detail: "socket Listen property unreadable or unsupported".into(),
+    }
+}
+
 pub struct FixtureSystemdDBusReader {
     units: Vec<UnitDBusSnapshot>,
+    socket_listen: HashMap<String, Vec<SocketListenAddress>>,
     cgroup_to_unit: std::collections::HashMap<String, String>,
 }
 
 impl FixtureSystemdDBusReader {
+    pub fn with_socket_listen(mut self, listen: HashMap<String, Vec<SocketListenAddress>>) -> Self {
+        self.socket_listen = listen;
+        self
+    }
+
     pub fn new(units: Vec<UnitDBusSnapshot>) -> Self {
         Self {
             units,
+            socket_listen: HashMap::new(),
             cgroup_to_unit: std::collections::HashMap::new(),
         }
     }
@@ -238,12 +360,20 @@ impl FixtureSystemdDBusReader {
     ) -> Self {
         Self {
             units,
+            socket_listen: HashMap::new(),
             cgroup_to_unit,
         }
     }
 }
 
 impl SystemdDBusReader for FixtureSystemdDBusReader {
+    fn socket_listen(&self, unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
+        self.socket_listen
+            .get(unit)
+            .cloned()
+            .ok_or_else(socket_property_error)
+    }
+
     fn list_units(&self) -> Result<Vec<UnitDBusSnapshot>, SystemdDBusError> {
         Ok(self.units.clone())
     }
@@ -284,9 +414,44 @@ pub fn collect_dbus_observations<R: SystemdDBusReader>(
             "service"
         };
         state_meta.insert_str("unit_type", unit_type);
+        if unit_type == "socket" {
+            match reader.socket_listen(&unit.name) {
+                Ok(listen) if listen.len() <= 256 => {
+                    state_meta.insert_bool("socket_config_known", true);
+                    state_meta.insert_str(
+                        "socket_config_source",
+                        "org.freedesktop.systemd1.Socket.Listen",
+                    );
+                    for kind in [
+                        SocketListenKind::Stream,
+                        SocketListenKind::Datagram,
+                        SocketListenKind::SequentialPacket,
+                        SocketListenKind::Fifo,
+                    ] {
+                        let addresses: Vec<String> = listen
+                            .iter()
+                            .filter(|entry| entry.kind == kind)
+                            .map(|entry| entry.address.clone())
+                            .collect();
+                        state_meta.insert_str_array(kind.metadata_key(), &addresses);
+                    }
+                }
+                _ => {
+                    state_meta.insert_bool("socket_config_known", false);
+                    warnings.push(SystemdWarning::new(
+                        SystemdWarningKind::SocketPropertyUnreadable,
+                        std::path::PathBuf::from(&unit.name),
+                        "socket Listen property unreadable or unsupported",
+                    ));
+                }
+            }
+        }
         state_meta.insert_str("active_state", &unit.active_state);
         state_meta.insert_str("load_state", &unit.load_state);
         state_meta.insert_str("sub_state", &unit.sub_state);
+        if let Some(id) = &unit.invocation_id {
+            state_meta.insert_str("invocation_id", id);
+        }
         if !unit.control_group.is_empty() {
             state_meta.insert_str("control_group", &unit.control_group);
         }
@@ -307,6 +472,33 @@ pub fn collect_dbus_observations<R: SystemdDBusReader>(
             metadata: state_meta,
         });
 
+        for socket in unit
+            .triggered_by
+            .iter()
+            .filter(|unit| unit.ends_with(".socket"))
+        {
+            let mut metadata = ObservationMetadata::new();
+            metadata.insert_str("socket_unit", socket);
+            metadata.insert_str("service_unit", &unit.name);
+            metadata.insert_str("source", "systemd_dbus");
+            observations.push(RawObservation {
+                source: ObservationSource::SystemdDBus,
+                kind: ObservationKind::SystemdSocketActivates,
+                collector: CollectorName::new(DBUS_COLLECTOR_NAME),
+                subject: Some(RawIdentity::Service {
+                    unit: socket.clone(),
+                }),
+                object: Some(RawIdentity::Service {
+                    unit: unit.name.clone(),
+                }),
+                timestamp: started_at,
+                raw_ref: Some(RawEvidenceRef::new(
+                    "org.freedesktop.systemd1.Unit.TriggeredBy",
+                )),
+                confidence_hint: ConfidenceHint::High,
+                metadata,
+            });
+        }
         for dep in &unit.requires {
             observations.push(dep_observation(
                 &unit.name,
@@ -357,4 +549,30 @@ fn dep_observation(
 
 pub fn try_connect_dbus() -> Option<StdSystemdDBusReader> {
     StdSystemdDBusReader::connect().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invocation_property_requires_a_nonzero_128_bit_identity() {
+        let mut props = HashMap::new();
+        assert_eq!(invocation_id_prop(&props), None);
+        for bytes in [vec![0u8; 16], vec![1u8; 15], vec![1u8; 16]] {
+            props.insert(
+                "InvocationID".into(),
+                OwnedValue::try_from(zbus::zvariant::Value::from(bytes.clone())).expect("property"),
+            );
+            let identity = invocation_id_prop(&props);
+            if bytes == vec![1; 16] {
+                assert_eq!(
+                    identity.as_deref(),
+                    Some("01010101010101010101010101010101")
+                );
+            } else {
+                assert_eq!(identity, None);
+            }
+        }
+    }
 }

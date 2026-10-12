@@ -227,3 +227,135 @@ fn impact_scoring_transitive_raises_risk_reason() {
         .any(|r| r.contains("transitive runtime dependent")));
     assert_ne!(result.risk.level, RiskLevel::Low);
 }
+
+#[test]
+fn default_impact_and_restart_follow_transitive_dependencies_without_persisting_overlay() {
+    let home = IsolatedHome::new();
+    init_scanned_postgres(&home);
+    let mut store = Store::open(&home.layout.db_file()).unwrap();
+    upsert_service(&mut store, "service:nginx.service", "nginx.service");
+    upsert_depends_on(
+        &mut store,
+        "service:nginx.service",
+        "service:django.service",
+        "inferred",
+    );
+    let before = store.list_nodes().unwrap();
+    let result = impact_in(
+        &home.layout,
+        ImpactRequest {
+            target_query: Some("postgresql".into()),
+            ..ImpactRequest::default()
+        },
+    )
+    .unwrap();
+    assert!(!result.paths_requested);
+    assert!(result
+        .impact_paths
+        .iter()
+        .any(|path| path.terminal.id == "service:nginx.service"));
+    let result = twin_app::emulate_in(
+        &home.layout,
+        twin_app::EmulateRequest::restart_query("postgresql"),
+    )
+    .unwrap();
+    assert!(!result.paths_requested);
+    assert!(result
+        .overlay
+        .unavailable_nodes
+        .iter()
+        .any(|node| node.id == "service:nginx.service"));
+    assert_eq!(store.list_nodes().unwrap(), before);
+    let result = impact_in(
+        &home.layout,
+        ImpactRequest {
+            target: Some(twin_core::NodeId::port_tcp("127.0.0.1", 5432).unwrap()),
+            show_paths: true,
+            ..ImpactRequest::default()
+        },
+    )
+    .unwrap();
+    let path = result
+        .impact_paths
+        .iter()
+        .find(|path| path.terminal.id == "service:nginx.service")
+        .unwrap();
+    assert_eq!(path.depth, 2);
+    assert_eq!(path.steps.last().unwrap().to.id, "port:tcp:127.0.0.1:5432");
+}
+
+#[test]
+fn leaf_at_exact_depth_limit_keeps_the_complete_path() {
+    let home = IsolatedHome::new();
+    init_scanned_postgres(&home);
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    upsert_service(&mut store, "service:front.service", "front.service");
+    upsert_depends_on(
+        &mut store,
+        "service:front.service",
+        "service:django.service",
+        "inferred",
+    );
+    let result = impact_paths(&home, 2);
+    assert_eq!(result.impact_paths.len(), 1);
+    assert_eq!(result.impact_paths[0].terminal.id, "service:front.service");
+    assert!(!result.impact_paths[0].is_depth_capped);
+    let emulation = twin_app::emulate_in(
+        &home.layout,
+        twin_app::EmulateRequest {
+            action: twin_app::EmulateActionRequest::Restart {
+                target: Some(twin_core::NodeId::service("postgresql.service")),
+                target_query: None,
+                show_paths: true,
+                max_depth: 2,
+            },
+            ..twin_app::EmulateRequest::default()
+        },
+    )
+    .expect("emulate");
+    assert!(emulation
+        .overlay
+        .unavailable_nodes
+        .iter()
+        .any(|node| node.id == "service:front.service"));
+}
+
+#[test]
+fn transitive_count_includes_intermediate_services_without_double_counting_directs() {
+    let home = IsolatedHome::new();
+    init_scanned_postgres(&home);
+    let mut store = Store::open(&home.layout.db_file()).expect("store");
+    for name in ["gateway", "front"] {
+        upsert_service(&mut store, &format!("service:{name}.service"), name);
+    }
+    upsert_depends_on(
+        &mut store,
+        "service:gateway.service",
+        "service:django.service",
+        "inferred",
+    );
+    upsert_depends_on(
+        &mut store,
+        "service:front.service",
+        "service:gateway.service",
+        "inferred",
+    );
+    let result = impact_paths(&home, 4);
+    assert!(result
+        .risk
+        .reasons
+        .iter()
+        .any(|reason| reason == "2 transitive runtime dependent(s)"));
+    upsert_depends_on(
+        &mut store,
+        "service:gateway.service",
+        "service:postgresql.service",
+        "inferred",
+    );
+    let result = impact_paths(&home, 4);
+    assert!(result
+        .risk
+        .reasons
+        .iter()
+        .any(|reason| reason == "1 transitive runtime dependent(s)"));
+}

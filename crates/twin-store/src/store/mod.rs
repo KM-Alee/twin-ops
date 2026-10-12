@@ -1,5 +1,6 @@
 mod batch;
 mod health;
+mod legacy_arguments;
 mod migrate;
 mod open;
 mod transaction;
