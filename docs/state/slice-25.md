@@ -129,6 +129,14 @@ covers both declarations.
     1 s each with a local mirror.
   - This found and fixed a release-workflow bug: the static check expected "statically
     linked", but `file` reports "static-pie linked".
+- **Released:** v0.2.0 published by the release workflow: x86_64 and aarch64 musl
+  archives, `.deb`, `.rpm`, `SHA256SUMS`, `install.sh`, plus provenance attestations.
+  - The first real install from GitHub failed safely: the per-archive `.sha256` files were
+    not uploaded, so `install.sh` refused to install.
+  - Repaired by uploading checksums derived from the release's own verified `SHA256SUMS`;
+    the workflow now uploads `*.tar.gz.sha256`.
+  - The one-line install plus `twin setup` from GitHub takes 30 s on a clean Fedora 41
+    container (including download), and works on Alpine 3.20.
 - **Demo:** `tools/record_demo.py` records `docs/demo.cast` from real twin output on a
   synthetic host (fake `/proc`, units, Docker fixture), so no machine data is published.
 
