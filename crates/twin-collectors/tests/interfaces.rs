@@ -51,10 +51,7 @@ fn addresses(name: &str) -> Vec<String> {
 
 #[test]
 fn local_addresses_join_the_interface_whose_route_covers_them() {
-    assert_eq!(
-        addresses("wlan0"),
-        vec!["192.0.2.40", "fe80::1"]
-    );
+    assert_eq!(addresses("wlan0"), vec!["192.0.2.40", "fe80::1"]);
     assert_eq!(addresses("docker0"), vec!["172.17.0.1"]);
     assert_eq!(addresses("lo"), vec!["127.0.0.1", "::1"]);
 }
