@@ -23,7 +23,7 @@ fn run_with_stdin(home: &TwinHome, args: &[&str], stdin: &str) -> std::process::
         .env_remove("XDG_CONFIG_HOME")
         .env_remove("XDG_STATE_HOME")
         .env("TWIN_PROC_ROOT", &home.proc_root)
-        .args(args)
+        .args(support::without_host_daemon(args))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

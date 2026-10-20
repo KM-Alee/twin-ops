@@ -1,9 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use twin_core::RiskLevel;
 
 use super::impact_result::EvidenceStrengthView;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreflightVerdict {
     Go,
@@ -21,14 +21,14 @@ impl PreflightVerdict {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreflightAffected {
     pub id: String,
     pub label: String,
     pub effect: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreflightStep {
     pub segment: String,
     pub operation: String,
@@ -43,7 +43,7 @@ pub struct PreflightStep {
     pub advice: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreflightResult {
     pub command: String,
     pub verdict: PreflightVerdict,

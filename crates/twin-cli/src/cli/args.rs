@@ -83,6 +83,106 @@ and answers in that agent's format."
         about = "First-run setup: create twin's store, scan this host, and print agent integration snippets"
     )]
     Setup(SetupArgs),
+    #[command(
+        about = "Privileged daemon: keeps the graph fresh and answers unprivileged queries over a socket"
+    )]
+    Daemon(DaemonArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct DaemonClientArgs {
+    #[arg(
+        long,
+        default_value = twin_app::daemon::DEFAULT_SOCKET,
+        help = "Ask the twin daemon at this socket first; it sees processes your user cannot"
+    )]
+    pub daemon_socket: PathBuf,
+
+    #[arg(long, help = "Never ask the twin daemon; answer from a local scan")]
+    pub no_daemon: bool,
+}
+
+impl DaemonClientArgs {
+    pub fn socket(&self) -> Option<&std::path::Path> {
+        (!self.no_daemon).then_some(self.daemon_socket.as_path())
+    }
+}
+
+#[derive(Args)]
+pub struct DaemonArgs {
+    #[command(subcommand)]
+    pub action: DaemonAction,
+}
+
+#[derive(Subcommand)]
+pub enum DaemonAction {
+    #[command(
+        about = "Run the watch loop and serve the socket (started by the systemd unit, as root)"
+    )]
+    Run(DaemonRunArgs),
+    #[command(
+        name = "install-unit",
+        about = "Print the hardened systemd unit for the daemon; twin never installs it"
+    )]
+    InstallUnit(InstallUnitArgs),
+    #[command(about = "Check whether a twin daemon answers on its socket")]
+    Status(DaemonStatusArgs),
+}
+
+#[derive(Args)]
+pub struct DaemonRunArgs {
+    #[arg(
+        long,
+        default_value = twin_app::daemon::DEFAULT_STATE_DIR,
+        help = "Directory for the daemon's store and settings"
+    )]
+    pub state_dir: PathBuf,
+
+    #[arg(
+        long,
+        default_value = twin_app::daemon::DEFAULT_SOCKET,
+        help = "Socket to serve (mode 0660, owned by the daemon's group)"
+    )]
+    pub socket: PathBuf,
+
+    #[arg(
+        long,
+        default_value = twin_app::daemon::DEFAULT_INTERVAL,
+        help = "Time between scans"
+    )]
+    pub interval: String,
+
+    #[arg(
+        long,
+        help = "Settings file path (default: config.toml in --state-dir)"
+    )]
+    pub config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct InstallUnitArgs {
+    #[arg(
+        long,
+        required = true,
+        help = "Print the unit to stdout (required: twin never writes it for you)"
+    )]
+    pub print: bool,
+
+    #[arg(
+        long,
+        help = "twin executable path for ExecStart (default: /usr/bin/twin)"
+    )]
+    pub twin_path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct DaemonStatusArgs {
+    #[arg(
+        long,
+        default_value = twin_app::daemon::DEFAULT_SOCKET,
+        help = "Socket to check"
+    )]
+    pub socket: PathBuf,
 }
 
 #[derive(Args)]
@@ -123,6 +223,9 @@ pub struct McpArgs {
         help = "Settings file path (database stays in the XDG data directory)"
     )]
     pub config: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub daemon: DaemonClientArgs,
 }
 
 #[derive(Args)]
@@ -151,6 +254,9 @@ pub struct BriefArgs {
         help = "Settings file path (database stays in the XDG data directory)"
     )]
     pub config: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub daemon: DaemonClientArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -223,6 +329,9 @@ pub struct PreflightArgs {
         help = "Settings file path (database stays in the XDG data directory)"
     )]
     pub config: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub daemon: DaemonClientArgs,
 }
 
 #[derive(Args)]

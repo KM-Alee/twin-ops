@@ -226,7 +226,9 @@ The process socket module exports protocol-neutral Inet* parser types; twin-core
 - `twin-app/src/commands/preflight/{shell,intent,mod}.rs` and `model/preflight_result.rs`: command tokenizer, typed intents, graph-backed verdicts.
 - `twin-app/src/commands/brief.rs` and `model/brief_result.rs`: host and target briefings composed from graph, emulation and history.
 - `twin-cli/src/hook.rs`: agent hook input parsing and per-agent response dialects.
-- `twin-cli/src/mcp/{mod,tools}.rs`: stdio MCP server and tool implementations.
+- `twin-cli/src/mcp/{mod,tools}.rs`: the MCP JSON-RPC handler (stdio and daemon modes) and tool implementations.
+- `twin-cli/src/daemon/{mod,client}.rs`: `twin daemon run` socket server, its client and the brief/preflight/status calls; `twin-cli/src/output/daemon.rs` renders `daemon status`.
+- `twin-app/src/daemon/{access,peer,unit}.rs`: socket peer credentials (`SO_PEERCRED`/`SO_PEERGROUPS`), `AccessPolicy` and the printed systemd unit.
 - `twin-cli/src/agent_config.rs` and `assets/SKILL.md`: printed setup snippets and the embedded skill.
 - Tests: `twin-app/tests/{preflight,brief}.rs` (shared `support::scan_postgres_django` fixture), `twin-cli/tests/{hook,agent_integration}.rs`.
 

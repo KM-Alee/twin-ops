@@ -23,7 +23,7 @@ serde_json = { workspace = true }
 twin-app = { workspace = true }
 twin-collectors = { workspace = true }
 twin-core = { workspace = true }
-ctrlc = "3.4"
+ctrlc = { version = "3.4", features = ["termination"] }
 
 [dev-dependencies]
 serde_json = { workspace = true }

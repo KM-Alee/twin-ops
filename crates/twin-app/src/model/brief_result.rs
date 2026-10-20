@@ -1,14 +1,14 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::preflight_result::PreflightVerdict;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefFact {
     pub label: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -17,20 +17,20 @@ pub struct BriefItem {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefSection {
     pub title: String,
     pub items: Vec<BriefItem>,
     pub omitted: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefRestart {
     pub verdict: PreflightVerdict,
     pub summary: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BriefResult {
     pub target: Option<String>,
     pub title: String,

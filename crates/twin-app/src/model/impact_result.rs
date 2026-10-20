@@ -76,7 +76,7 @@ pub struct RiskAssessment {
     pub reasons: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct EvidenceStrengthView {
     pub score: u8,
     pub label: String,

@@ -18,6 +18,7 @@ pub struct ToolContext<'a> {
     pub config: Option<PathBuf>,
     pub proc_root: &'a Path,
     pub max_graph_age_secs: u64,
+    pub should_read_scripts: bool,
 }
 
 pub fn definitions() -> Value {
@@ -236,6 +237,7 @@ fn preflight(context: &ToolContext<'_>, arguments: &Value) -> Result<String, Str
             cwd: optional(arguments, "cwd").map(PathBuf::from),
             config_override: context.config.clone(),
             max_graph_age_secs: context.max_graph_age_secs,
+            should_read_scripts: context.should_read_scripts,
         },
         context.proc_root,
     )

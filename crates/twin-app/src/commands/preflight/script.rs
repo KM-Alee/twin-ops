@@ -13,6 +13,20 @@ pub(crate) fn expand(intents: Vec<(String, Intent)>, cwd: Option<&Path>) -> Vec<
     expand_at(intents, cwd, 0)
 }
 
+/// Script and make invocations stay unassessed: a caution, never a guess.
+pub(crate) fn without_reading(intents: Vec<(String, Intent)>) -> Vec<(String, Intent)> {
+    intents
+        .into_iter()
+        .map(|(segment, intent)| match intent {
+            Intent::RunScript { .. } | Intent::RunMake { .. } => not_inspected(
+                segment,
+                "the twin daemon does not read files for clients; run twin preflight --no-daemon to inspect it",
+            ),
+            other => (segment, other),
+        })
+        .collect()
+}
+
 fn expand_at(
     intents: Vec<(String, Intent)>,
     cwd: Option<&Path>,

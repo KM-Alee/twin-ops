@@ -1,5 +1,6 @@
 mod commands;
 mod config_io;
+pub mod daemon;
 mod error;
 mod model;
 pub mod paths;
@@ -72,6 +73,12 @@ pub fn brief_in(
     commands::brief::run(layout, request, proc_root)
 }
 pub use model::{PreflightAffected, PreflightResult, PreflightStep, PreflightVerdict};
+
+/// Whether evaluating `command` reads a script or makefile it runs. Such commands are
+/// evaluated with the caller's own permissions, never through the daemon.
+pub fn preflight_reads_files(command: &str) -> bool {
+    commands::preflight::reads_files(command)
+}
 
 pub fn preflight(request: PreflightRequest) -> Result<PreflightResult, AppError> {
     commands::preflight::run_home(request)

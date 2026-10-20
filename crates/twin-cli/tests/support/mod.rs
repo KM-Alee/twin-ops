@@ -18,6 +18,25 @@ pub fn twin_bin() -> &'static Path {
         .as_path()
 }
 
+/// Commands that ask a host's twin daemon first. Tests pin them to the fixture by adding
+/// `--no-daemon`, unless a test passes its own `--daemon-socket`.
+const DAEMON_CLIENTS: [&str; 3] = ["brief", "preflight", "mcp"];
+
+pub fn without_host_daemon<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut args = args.to_vec();
+    let pinned = args
+        .iter()
+        .any(|arg| *arg == "--no-daemon" || *arg == "--daemon-socket");
+    if !pinned
+        && args
+            .first()
+            .is_some_and(|first| DAEMON_CLIENTS.contains(first))
+    {
+        args.insert(1, "--no-daemon");
+    }
+    args
+}
+
 pub struct TwinHome {
     pub _temp: TempDir,
     pub proc_root: PathBuf,
@@ -45,7 +64,7 @@ impl TwinHome {
         cmd.env_remove("XDG_CONFIG_HOME");
         cmd.env_remove("XDG_STATE_HOME");
         cmd.env("TWIN_PROC_ROOT", &self.proc_root);
-        cmd.args(args);
+        cmd.args(without_host_daemon(args));
         cmd.output().expect("spawn twin")
     }
 
@@ -56,7 +75,7 @@ impl TwinHome {
         cmd.env_remove("XDG_CONFIG_HOME");
         cmd.env_remove("XDG_STATE_HOME");
         cmd.env_remove("TWIN_PROC_ROOT");
-        cmd.args(args);
+        cmd.args(without_host_daemon(args));
         cmd.output().expect("spawn twin")
     }
 }

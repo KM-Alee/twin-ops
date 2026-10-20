@@ -18,5 +18,6 @@ pub mod what_changed;
 pub mod graph_export;
 
 pub mod brief;
+pub mod daemon;
 pub mod preflight;
 pub mod why;

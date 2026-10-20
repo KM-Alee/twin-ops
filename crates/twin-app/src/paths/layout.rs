@@ -17,6 +17,17 @@ impl TwinLayout {
         }
     }
 
+    /// One directory for the store, settings and state, as the daemon's
+    /// `StateDirectory=` provides.
+    pub fn flat(directory: impl AsRef<Path>) -> Self {
+        let directory = directory.as_ref();
+        Self {
+            data_dir: directory.to_path_buf(),
+            config_dir: directory.to_path_buf(),
+            state_dir: directory.to_path_buf(),
+        }
+    }
+
     pub fn ensure_dirs(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(&self.config_dir)?;

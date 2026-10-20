@@ -22,7 +22,8 @@ use intent::{ContainerVerb, Intent, PackageVerb, ProcessTarget, ServiceVerb};
 const MAX_AFFECTED: usize = 8;
 const MAX_REASONS: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FileOperation {
     Create,
     Edit,
@@ -30,7 +31,7 @@ pub enum FileOperation {
 }
 
 /// A file change an agent makes through its own file tool rather than the shell.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FileChange {
     pub path: PathBuf,
     pub operation: FileOperation,
@@ -63,6 +64,16 @@ pub struct PreflightRequest {
     pub config_override: Option<PathBuf>,
     /// Rescan the host first when the stored graph is older than this.
     pub max_graph_age_secs: u64,
+    /// Whether scripts and makefiles the command runs may be read to find the operations
+    /// inside. The daemon answers for other users and never reads files on their behalf.
+    pub should_read_scripts: bool,
+}
+
+/// Whether evaluating `command` reads a script or makefile it runs.
+pub(crate) fn reads_files(command: &str) -> bool {
+    intent::classify_line(command)
+        .iter()
+        .any(|(_, intent)| matches!(intent, Intent::RunScript { .. } | Intent::RunMake { .. }))
 }
 
 pub fn run_home(request: PreflightRequest) -> Result<PreflightResult, AppError> {
@@ -75,10 +86,12 @@ pub fn run(
     request: &PreflightRequest,
     proc_root: &Path,
 ) -> Result<PreflightResult, AppError> {
-    let mut intents = script::expand(
-        intent::classify_line(&request.command),
-        request.cwd.as_deref(),
-    );
+    let intents = intent::classify_line(&request.command);
+    let mut intents = if request.should_read_scripts {
+        script::expand(intents, request.cwd.as_deref())
+    } else {
+        script::without_reading(intents)
+    };
     intents.extend(
         request
             .file_changes

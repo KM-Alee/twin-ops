@@ -2254,3 +2254,29 @@ fn brief_renderer_lists_facts_restart_sections_and_next_steps() {
         assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
     }
 }
+
+#[test]
+fn daemon_status_renders_reachable_and_absent_daemons() {
+    let reachable = output::daemon::render_status(&twin_cli::daemon::DaemonStatus {
+        socket: "/run/twin/twin.sock".to_string(),
+        is_reachable: true,
+        version: Some("0.2.0".to_string()),
+        graph_age_secs: Some(4),
+        reason: None,
+    });
+    assert!(reachable.starts_with("twin daemon status\n══"));
+    assert!(reachable.contains("ok") && reachable.contains("answering · graph 4 s old"));
+    assert!(reachable.contains("├──  path            /run/twin/twin.sock"));
+    assert!(reachable.contains("└──  version         0.2.0"));
+
+    let absent = output::daemon::render_status(&twin_cli::daemon::DaemonStatus {
+        socket: "/run/twin/twin.sock".to_string(),
+        is_reachable: false,
+        version: None,
+        graph_age_secs: None,
+        reason: Some("no socket at /run/twin/twin.sock".to_string()),
+    });
+    assert!(absent.contains("warn") && absent.contains("not available"));
+    assert!(absent.contains("└──  reason          no socket at /run/twin/twin.sock"));
+    assert!(absent.contains("fallback"));
+}

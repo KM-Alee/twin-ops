@@ -9,9 +9,10 @@ use twin_app::{
     WatchTcpEvent, WatchTick,
 };
 use twin_cli::cli::args::{
-    AgentConfigArgs, BriefArgs, Cli, Command, DiffArgs, DoctorArgs, EmulateActionArgs, EmulateArgs,
-    GlobalArgs, GraphArgs, ImpactArgs, InitArgs, K8sAction, McpArgs, PreflightArgs, ScanArgs,
-    SetupArgs, SnapshotActionArgs, SnapshotArgs, TestAction, TestArgs, WatchArgs, WhatChangedArgs,
+    AgentConfigArgs, BriefArgs, Cli, Command, DaemonAction, DaemonArgs, DiffArgs, DoctorArgs,
+    EmulateActionArgs, EmulateArgs, GlobalArgs, GraphArgs, ImpactArgs, InitArgs, K8sAction,
+    McpArgs, PreflightArgs, ScanArgs, SetupArgs, SnapshotActionArgs, SnapshotArgs, TestAction,
+    TestArgs, WatchArgs, WhatChangedArgs,
 };
 use twin_cli::cli::diff;
 use twin_cli::cli::emulate;
@@ -60,6 +61,7 @@ fn dispatch(cli: Cli) -> i32 {
         Command::Mcp(args) => run_mcp(&args),
         Command::AgentConfig(args) => run_agent_config(&cli.global, &args),
         Command::Setup(args) => run_setup(&cli.global, &args),
+        Command::Daemon(args) => run_daemon(&cli.global, &args),
     }
 }
 
@@ -122,13 +124,28 @@ fn run_preflight(global: &GlobalArgs, args: &PreflightArgs) -> i32 {
         cwd: cwd.or_else(|| std::env::current_dir().ok()),
         config_override: args.config.clone(),
         max_graph_age_secs: args.max_age,
+        should_read_scripts: true,
     };
-    let result = match twin_app::paths::resolve_command_paths(args.config.as_deref())
-        .map_err(twin_app::AppError::from)
-        .and_then(|paths| {
-            twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
-            twin_app::preflight_in(&paths.layout, &request, &proc_root())
-        }) {
+    let from_daemon = args
+        .daemon
+        .socket()
+        .map(|socket| twin_cli::daemon::preflight(socket, &request));
+    let result = match from_daemon {
+        Some(Ok(result)) => Ok(result),
+        unavailable => twin_app::paths::resolve_command_paths(args.config.as_deref())
+            .map_err(twin_app::AppError::from)
+            .and_then(|paths| {
+                twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
+                twin_app::preflight_in(&paths.layout, &request, &proc_root())
+            })
+            .map(|mut result| {
+                if let Some(Err(unavailable)) = unavailable {
+                    result.coverage_notes.push(unavailable.coverage_note());
+                }
+                result
+            }),
+    };
+    let result = match result {
         Ok(result) => result,
         Err(error) => {
             if let Some(agent) = args.hook {
@@ -157,12 +174,26 @@ fn run_brief(global: &GlobalArgs, args: &BriefArgs) -> i32 {
         max_graph_age_secs: args.max_age,
         changes_since: args.since.clone(),
     };
-    match twin_app::paths::resolve_command_paths(args.config.as_deref())
-        .map_err(twin_app::AppError::from)
-        .and_then(|paths| {
-            twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
-            twin_app::brief_in(&paths.layout, &request, &proc_root())
-        }) {
+    let from_daemon = args
+        .daemon
+        .socket()
+        .map(|socket| twin_cli::daemon::brief(socket, &request));
+    let result = match from_daemon {
+        Some(Ok(result)) => Ok(result),
+        unavailable => twin_app::paths::resolve_command_paths(args.config.as_deref())
+            .map_err(twin_app::AppError::from)
+            .and_then(|paths| {
+                twin_app::ensure_initialized_in(&paths.layout, args.config.as_deref())?;
+                twin_app::brief_in(&paths.layout, &request, &proc_root())
+            })
+            .map(|mut result| {
+                if let Some(Err(unavailable)) = unavailable {
+                    result.coverage_notes.push(unavailable.coverage_note());
+                }
+                result
+            }),
+    };
+    match result {
         Ok(result) => {
             emit(global.json_mode(), &result, output::brief::render);
             0
@@ -237,7 +268,10 @@ fn run_mcp(args: &McpArgs) -> i32 {
         }
     };
     let server =
-        twin_cli::mcp::McpServer::new(paths.layout, args.config.clone(), proc_root(), args.max_age);
+        twin_cli::mcp::McpServer::new(paths.layout, args.config.clone(), proc_root(), args.max_age)
+            .with_mode(twin_cli::mcp::ServeMode::Local {
+                daemon_socket: args.daemon.socket().map(Path::to_path_buf),
+            });
     let stdin = std::io::stdin();
     match server.serve(stdin.lock(), std::io::stdout()) {
         Ok(()) => 0,
@@ -245,6 +279,83 @@ fn run_mcp(args: &McpArgs) -> i32 {
             eprintln!("Error: {error}");
             1
         }
+    }
+}
+
+fn run_daemon(global: &GlobalArgs, args: &DaemonArgs) -> i32 {
+    match &args.action {
+        DaemonAction::InstallUnit(unit) => {
+            let twin = unit
+                .twin_path
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("/usr/bin/twin"));
+            print!("{}", twin_app::daemon::systemd_unit(&twin));
+            0
+        }
+        DaemonAction::Status(status) => {
+            let status = twin_cli::daemon::status(&status.socket);
+            emit(global.json_mode(), &status, output::daemon::render_status);
+            if status.is_reachable {
+                0
+            } else {
+                3
+            }
+        }
+        DaemonAction::Run(run) => {
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&stop);
+            let socket = run.socket.clone();
+            if let Err(error) = ctrlc::set_handler(move || {
+                flag.store(true, Ordering::SeqCst);
+                twin_cli::daemon::wake(&socket);
+            }) {
+                eprintln!("Error: {error}");
+                return 1;
+            }
+            let options = twin_cli::daemon::DaemonOptions {
+                layout: twin_app::TwinLayout::flat(&run.state_dir),
+                config: run.config.clone(),
+                proc_root: proc_root(),
+                socket: run.socket.clone(),
+                interval: run.interval.clone(),
+            };
+            let mut log = DaemonLog {
+                socket: run.socket.clone(),
+                interval: run.interval.clone(),
+            };
+            match twin_cli::daemon::run(options, &stop, &mut log) {
+                Ok(_) => 0,
+                Err(error) => {
+                    eprintln!("Error: {error}");
+                    1
+                }
+            }
+        }
+    }
+}
+
+/// The daemon logs to the journal: its start and every warning, not every tick.
+struct DaemonLog {
+    socket: std::path::PathBuf,
+    interval: String,
+}
+
+impl WatchSink for DaemonLog {
+    fn on_start(&mut self, _interval_secs: u64) {
+        eprintln!(
+            "{}",
+            output::daemon::render_started(&self.socket, &self.interval)
+        );
+    }
+
+    fn on_tick(&mut self, _tick: &WatchTick) {}
+
+    fn on_exec(&mut self, _event: &WatchExecEvent) {}
+
+    fn on_tcp(&mut self, _event: &WatchTcpEvent) {}
+
+    fn on_warning(&mut self, message: &str) {
+        eprintln!("warning: {message}");
     }
 }
 

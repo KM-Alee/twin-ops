@@ -14,6 +14,7 @@ fn request(command: &str) -> PreflightRequest {
         cwd: Some(PathBuf::from("/home/dev/project")),
         config_override: None,
         max_graph_age_secs: u64::MAX,
+        should_read_scripts: true,
     }
 }
 
