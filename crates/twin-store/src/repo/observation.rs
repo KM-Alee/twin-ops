@@ -13,6 +13,9 @@ use crate::store::Store;
 
 const RAW_REF_KEY: &str = "__raw_ref";
 
+pub(crate) const OBSERVATION_COLUMNS: &str = "id, source, kind, subject_node_id, object_node_id, timestamp_ns, confidence_hint, redaction_state, metadata_json, collector_run_id, last_seen_ns, seen_count";
+pub(crate) const OBSERVATION_COLUMN_COUNT: usize = 12;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservationRow {
     pub id: String,
@@ -25,6 +28,10 @@ pub struct ObservationRow {
     pub redaction_state: String,
     pub metadata_json: String,
     pub collector_run_id: Option<i64>,
+    /// `timestamp_ns` is the first sighting; repeated sightings of the same fact
+    /// move `last_seen_ns` and `seen_count` instead of adding rows.
+    pub last_seen_ns: i64,
+    pub seen_count: i64,
 }
 
 impl Store {
@@ -33,8 +40,9 @@ impl Store {
             .execute(
                 "INSERT INTO observations (
                     id, source, kind, subject_node_id, object_node_id, timestamp_ns,
-                    confidence_hint, redaction_state, metadata_json, collector_run_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    confidence_hint, redaction_state, metadata_json, collector_run_id,
+                    last_seen_ns, seen_count, fingerprint, merge_pending
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1)",
                 params![
                     obs.id,
                     obs.source,
@@ -46,6 +54,9 @@ impl Store {
                     obs.redaction_state,
                     obs.metadata_json,
                     obs.collector_run_id,
+                    obs.last_seen_ns.max(obs.timestamp_ns),
+                    obs.seen_count.max(1),
+                    super::observation_merge::fingerprint(obs),
                 ],
             )
             .map_err(|source| StoreError::Insert { source })?;
@@ -64,11 +75,9 @@ impl Store {
     pub fn get_observation(&self, id: &str) -> Result<Option<ObservationRow>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns,
-                        confidence_hint, redaction_state, metadata_json, collector_run_id
-                 FROM observations WHERE id = ?1",
-            )
+            .prepare(&format!(
+                "SELECT {OBSERVATION_COLUMNS} FROM observations WHERE id = ?1"
+            ))
             .map_err(|source| StoreError::Query { source })?;
 
         let mut rows = stmt
@@ -99,11 +108,9 @@ impl Store {
     pub fn list_observations_by_kind(&self, kind: &str) -> Result<Vec<ObservationRow>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns,
-                        confidence_hint, redaction_state, metadata_json, collector_run_id
-                 FROM observations WHERE kind = ?1 ORDER BY timestamp_ns",
-            )
+            .prepare(&format!(
+                "SELECT {OBSERVATION_COLUMNS} FROM observations WHERE kind = ?1 ORDER BY timestamp_ns"
+            ))
             .map_err(|source| StoreError::Query { source })?;
         let rows = stmt
             .query_map(params![kind], row_from_observation)
@@ -117,11 +124,9 @@ impl Store {
     ) -> Result<Vec<ObservationRow>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns,
-                        confidence_hint, redaction_state, metadata_json, collector_run_id
-                 FROM observations WHERE source = ?1 ORDER BY timestamp_ns",
-            )
+            .prepare(&format!(
+                "SELECT {OBSERVATION_COLUMNS} FROM observations WHERE source = ?1 ORDER BY timestamp_ns"
+            ))
             .map_err(|source| StoreError::Query { source })?;
 
         let rows = stmt
@@ -137,11 +142,9 @@ impl Store {
     ) -> Result<Vec<ObservationRow>, StoreError> {
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns,
-                        confidence_hint, redaction_state, metadata_json, collector_run_id
-                 FROM observations WHERE subject_node_id = ?1 ORDER BY timestamp_ns",
-            )
+            .prepare(&format!(
+                "SELECT {OBSERVATION_COLUMNS} FROM observations WHERE subject_node_id = ?1 ORDER BY timestamp_ns"
+            ))
             .map_err(|source| StoreError::Query { source })?;
 
         let rows = stmt
@@ -200,6 +203,8 @@ impl From<&Observation> for ObservationRow {
             redaction_state: obs.redaction_state().to_string(),
             metadata_json: metadata.to_json(),
             collector_run_id: None,
+            last_seen_ns: obs.timestamp().as_i64(),
+            seen_count: 1,
         }
     }
 }
@@ -276,6 +281,8 @@ pub(crate) fn row_from_observation(row: &Row<'_>) -> Result<ObservationRow, rusq
         redaction_state: row.get(7)?,
         metadata_json: row.get(8)?,
         collector_run_id: row.get(9)?,
+        last_seen_ns: row.get(10)?,
+        seen_count: row.get(11)?,
     })
 }
 

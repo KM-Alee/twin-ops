@@ -65,7 +65,7 @@ impl Store {
         query_by_ids(
             &self.conn,
             "observations",
-            observation_select_sql(),
+            &observation_select_sql(),
             ids,
             super::observation::row_from_observation,
         )
@@ -76,8 +76,11 @@ fn node_select_sql() -> &'static str {
     "SELECT id, kind, label, state, first_seen_ns, last_seen_ns, valid_from_ns, valid_to_ns, metadata_json FROM nodes WHERE id IN "
 }
 
-fn observation_select_sql() -> &'static str {
-    "SELECT id, source, kind, subject_node_id, object_node_id, timestamp_ns, confidence_hint, redaction_state, metadata_json, collector_run_id FROM observations WHERE id IN "
+fn observation_select_sql() -> String {
+    format!(
+        "SELECT {} FROM observations WHERE id IN ",
+        super::observation::OBSERVATION_COLUMNS
+    )
 }
 
 fn query_by_ids<F, R>(

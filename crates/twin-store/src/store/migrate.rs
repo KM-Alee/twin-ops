@@ -56,6 +56,7 @@ impl Store {
             4 => migration::MIGRATION_004,
             5 => migration::MIGRATION_005,
             6 => migration::MIGRATION_006,
+            7 => migration::MIGRATION_007,
             _ => {
                 return Err(StoreError::Migration {
                     version,
@@ -77,6 +78,10 @@ impl Store {
         transaction
             .execute_batch(sql)
             .map_err(|source| StoreError::Migration { version, source })?;
+        if version == 7 {
+            crate::repo::observation_merge::backfill_fingerprints(&transaction)
+                .map_err(|source| StoreError::Migration { version, source })?;
+        }
 
         let applied_at_ns = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

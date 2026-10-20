@@ -1,3 +1,4 @@
+pub mod cron;
 pub mod dns;
 pub mod dpkg;
 pub mod error;
@@ -7,6 +8,7 @@ pub mod mounts;
 pub mod process;
 pub mod systemd;
 
+pub use cron::{collect_cron, CronBatch, CronEntry, CronWarning, CronWarningKind};
 pub use dpkg::{parse_dpkg_list, parse_dpkg_status, InstalledPackage};
 pub use error::CollectorError;
 pub use interfaces::{parse_interfaces, NetInterface};
@@ -23,6 +25,6 @@ pub use systemd::{
     ConfigFileSource, EffectiveUnit, FixtureSystemdDBusReader, ServiceConfigFileDiscovery,
     SocketListenAddress, SocketListenKind, SystemdDBusError, SystemdDBusReader,
     SystemdRuntimeBatch, SystemdRuntimeCollector, SystemdUnitBatch, SystemdUnitCollector,
-    SystemdWarning, SystemdWarningKind, UnitDBusSnapshot, UnitFileReader,
+    SystemdWarning, SystemdWarningKind, TimerSchedule, UnitDBusSnapshot, UnitFileReader,
     COLLECTOR_NAME as SYSTEMD_UNIT_COLLECTOR_NAME, RUNTIME_COLLECTOR_NAME,
 };

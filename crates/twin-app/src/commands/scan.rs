@@ -113,10 +113,16 @@ fn prune_after_scan(
         now.saturating_sub(i64::from(config.retention.graph_history_days).saturating_mul(day_ns));
     let mut store = Store::open(db_path).map_err(ScanError::StoreOpen)?;
     store
+        .merge_all_repeated_observations(OBSERVATION_MERGE_BATCH)
+        .map_err(ScanError::Store)?;
+    store
         .prune_retention(observations_before, ebpf_before, graph_before)
         .map_err(ScanError::Store)?;
     Ok(())
 }
+
+/// Rows checked per merge transaction, so a large backlog never holds one long write lock.
+pub(crate) const OBSERVATION_MERGE_BATCH: usize = 5_000;
 
 fn proc_root_for_sample(proc_root: &Path, sample_index: u32) -> Cow<'_, Path> {
     let sub = proc_root.join(format!("sample-{}", sample_index + 1));
@@ -178,6 +184,10 @@ fn run_scan_pass(
             proc_root,
             docker_fixture: request.docker_fixture.as_deref(),
             containerd_fixture: request.containerd_fixture.as_deref(),
+            cron_root: request.cron_root.clone().or_else(|| {
+                (proc_root == Path::new("/proc"))
+                    .then(|| super::scan_config_files::host_path_for_discovery("/"))
+            }),
         },
         dns,
     )?;
@@ -231,6 +241,7 @@ struct PersistSample<'a> {
     proc_root: &'a Path,
     docker_fixture: Option<&'a Path>,
     containerd_fixture: Option<&'a Path>,
+    cron_root: Option<PathBuf>,
 }
 
 fn persist_scan(
@@ -307,6 +318,7 @@ fn persist_scan(
         detail: None,
     };
     let mut containerd_notes = super::scan_containerd::ContainerdScanNotes::default();
+    let mut cron_notes = super::scan_cron::CronScanNotes::default();
     let mut container_notes = super::scan_containers::ContainerScanNotes {
         warning: None,
         detail: None,
@@ -315,6 +327,7 @@ fn persist_scan(
     };
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
+    let mut timer_activation_edge_count = 0usize;
     let mut cgroup_correction_count = 0usize;
     let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
     let mut seen_services: HashSet<NodeId> = HashSet::new();
@@ -1104,6 +1117,18 @@ fn persist_scan(
                 sample.proc_root,
                 scan_time,
             )?;
+            match &sample.cron_root {
+                Some(root) => {
+                    cron_notes = super::scan_cron::persist_cron_in_scan(
+                        store,
+                        &mut history,
+                        &mut edge_cache,
+                        root,
+                        scan_time,
+                    )?;
+                }
+                None => history.skip_source("cron_file"),
+            }
             library_notes = super::scan_libraries::persist_libraries_in_scan(
                 store,
                 &mut history,
@@ -1154,15 +1179,20 @@ fn persist_scan(
                 history.uncertain_source("docker");
             }
 
-            socket_activation_edge_count =
-                super::scan_systemd_socket::persist_socket_activation_in_scan(
+            for (activation, count) in [
+                (super::scan_systemd_socket::Activation::Socket, &mut socket_activation_edge_count),
+                (super::scan_systemd_socket::Activation::Timer, &mut timer_activation_edge_count),
+            ] {
+                *count = super::scan_systemd_socket::persist_activation_in_scan(
                     store,
                     &mut history,
                     &mut edge_cache,
                     &unit_observations,
                     scan_time,
                     &mut seen_service_depends,
+                    activation,
                 )?;
+            }
 
             super::scan_systemd_runtime::persist_runtime_in_scan(
                 store,
@@ -1195,9 +1225,14 @@ fn persist_scan(
                 cgroup_reader,
             )?;
 
-            socket_activation_edge_count += super::scan_systemd_socket::persist_socket_activation_in_scan(
-                store, &mut history, &mut edge_cache, &runtime_observations, scan_time, &mut seen_service_depends,
-            )?;
+            for (activation, count) in [
+                (super::scan_systemd_socket::Activation::Socket, &mut socket_activation_edge_count),
+                (super::scan_systemd_socket::Activation::Timer, &mut timer_activation_edge_count),
+            ] {
+                *count += super::scan_systemd_socket::persist_activation_in_scan(
+                    store, &mut history, &mut edge_cache, &runtime_observations, scan_time, &mut seen_service_depends, activation,
+                )?;
+            }
 
             let namespace_counts = super::scan_namespaces::persist(store, &mut history, &mut edge_cache, &batch, &observations, scan_time)?;
             for endpoint in namespace_counts.endpoints {
@@ -1271,6 +1306,12 @@ fn persist_scan(
         warning_count += warning.count;
         warnings.push(warning);
     }
+    warning_count += cron_notes
+        .warnings
+        .iter()
+        .map(|warning| warning.count)
+        .sum::<usize>();
+    warnings.extend(cron_notes.warnings);
     warning_count += containerd_notes
         .warnings
         .iter()
@@ -1309,6 +1350,8 @@ fn persist_scan(
             interval_secs: 0,
             edges_first_seen_by_sample: vec![edges_new],
             socket_activation_edge_count,
+            timer_activation_edge_count,
+            cron_job_count: cron_notes.jobs,
             cgroup_correction_count,
             started_at_ns: batch.started_at().as_i64(),
             ended_at_ns: batch.ended_at().as_i64(),
@@ -1389,6 +1432,7 @@ fn persist_scan(
                 if let Some(detail) = container_notes.detail {
                     details.push(detail);
                 }
+                details.extend(cron_notes.details);
                 details
             },
             coverage,

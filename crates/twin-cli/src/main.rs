@@ -598,6 +598,7 @@ fn run_scan(global: &GlobalArgs, args: &ScanArgs) -> i32 {
     let request = ScanRequest {
         docker_fixture: args.docker_fixture.clone(),
         containerd_fixture: args.containerd_fixture.clone(),
+        cron_root: None,
         config_override: args.config.clone(),
         samples: args.samples,
         interval_secs: args.interval,

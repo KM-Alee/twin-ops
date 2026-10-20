@@ -419,10 +419,10 @@ fn ebpf_only_connect_records_node_and_edge_history() {
     assert_eq!(nodes.len(), 2);
     assert!(nodes.iter().all(|row| row.change_kind == "new"));
     let edges = store.list_edge_history_since(0).unwrap();
-    assert_eq!(edges.len(), 2);
+    assert_eq!(edges.len(), 1, "a repeated sighting is not a change");
     assert_eq!(edges[0].change_kind, "new");
-    assert_eq!(edges[1].change_kind, "changed");
-    assert_eq!(edges[1].evidence_count, 2);
+    let current = store.get_edge(&edges[0].edge_id).unwrap().expect("edge");
+    assert_eq!(current.evidence_count, 2);
 }
 
 #[test]

@@ -29,6 +29,14 @@ impl Store {
                 params![id.as_str(), started_at.as_i64()],
             )
             .map_err(|source| StoreError::Upsert { source })?;
+        // Sightings of an earlier incarnation never continue into the new one.
+        self.conn
+            .execute(
+                "UPDATE observations SET fingerprint = NULL
+                 WHERE merge_pending = 0 AND (subject_node_id = ?1 OR object_node_id = ?1)",
+                params![id.as_str()],
+            )
+            .map_err(|source| StoreError::Upsert { source })?;
         Ok(())
     }
 

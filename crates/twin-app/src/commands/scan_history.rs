@@ -1,12 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use twin_collectors::ProcessWarningKind;
 use twin_core::{ChangeKind, GraphEdge, GraphNode, TimestampNs};
 use twin_store::{EdgeRow, NodeRow, Store, StoreError};
 
+/// The state an entity had before this pass and the history row this pass wrote for it.
+struct PassWrite<T> {
+    before: Option<T>,
+    history_id: Option<i64>,
+}
+
 pub(crate) struct ScanHistorySession {
     seen_nodes: HashSet<String>,
     seen_edges: HashSet<String>,
+    node_writes: HashMap<String, PassWrite<NodeRow>>,
+    edge_writes: HashMap<String, PassWrite<EdgeRow>>,
     recorded_at_ns: i64,
     collector_run_id: Option<i64>,
     prefer_stale: bool,
@@ -37,6 +45,8 @@ impl ScanHistorySession {
         Self {
             seen_nodes: HashSet::new(),
             seen_edges: HashSet::new(),
+            node_writes: HashMap::new(),
+            edge_writes: HashMap::new(),
             recorded_at_ns,
             collector_run_id,
             prefer_stale,
@@ -257,20 +267,31 @@ fn metadata_source(metadata_json: &str) -> Option<String> {
         })
 }
 
+/// Several writers may touch one entity in a pass; history records the net change of the
+/// pass once, and nothing when the entity ends the pass as it started.
 pub(crate) fn upsert_node(
     store: &mut Store,
     session: &mut ScanHistorySession,
     node: &GraphNode,
 ) -> Result<(), StoreError> {
     let row = NodeRow::from(node);
-    let existing = store.get_node(node.id().as_str())?;
-    if let Some(change_kind) = classify_node_change(existing.as_ref(), &row) {
-        store.insert_node_history(
+    let write = match session.node_writes.entry(row.id.clone()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(PassWrite {
+            before: store.get_node(&row.id)?,
+            history_id: None,
+        }),
+    };
+    if let Some(previous) = write.history_id.take() {
+        store.delete_node_history(previous)?;
+    }
+    if let Some(change_kind) = classify_node_change(write.before.as_ref(), &row) {
+        write.history_id = Some(store.insert_node_history(
             &row,
             change_kind,
             session.recorded_at_ns,
             session.collector_run_id,
-        )?;
+        )?);
     }
     store.upsert_node(&row)?;
     session.seen_nodes.insert(node.id().to_string());
@@ -283,14 +304,23 @@ pub(crate) fn upsert_edge(
     edge: &GraphEdge,
 ) -> Result<(), StoreError> {
     let row = EdgeRow::from(edge);
-    let existing = store.get_edge(edge.id().as_str())?;
-    if let Some(change_kind) = classify_edge_change(existing.as_ref(), &row) {
-        store.insert_edge_history(
+    let write = match session.edge_writes.entry(row.id.clone()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(PassWrite {
+            before: store.get_edge(&row.id)?,
+            history_id: None,
+        }),
+    };
+    if let Some(previous) = write.history_id.take() {
+        store.delete_edge_history(previous)?;
+    }
+    if let Some(change_kind) = classify_edge_change(write.before.as_ref(), &row) {
+        write.history_id = Some(store.insert_edge_history(
             &row,
             change_kind,
             session.recorded_at_ns,
             session.collector_run_id,
-        )?;
+        )?);
     }
     store.upsert_edge(&row)?;
     session.seen_edges.insert(edge.id().to_string());
@@ -302,15 +332,25 @@ pub(crate) fn delete_edge(
     session: &mut ScanHistorySession,
     edge_id: &str,
 ) -> Result<(), StoreError> {
-    if let Some(row) = store.get_edge(edge_id)? {
-        let mut gone = row;
+    let write = match session.edge_writes.entry(edge_id.to_string()) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(PassWrite {
+            before: store.get_edge(edge_id)?,
+            history_id: None,
+        }),
+    };
+    if let Some(previous) = write.history_id.take() {
+        store.delete_edge_history(previous)?;
+    }
+    if let Some(row) = write.before.as_ref().filter(|row| row.state != "gone") {
+        let mut gone = row.clone();
         gone.state = "gone".to_string();
-        store.insert_edge_history(
+        write.history_id = Some(store.insert_edge_history(
             &gone,
             ChangeKind::Gone,
             session.recorded_at_ns,
             session.collector_run_id,
-        )?;
+        )?);
     }
     store.delete_edge(edge_id)?;
     session.seen_edges.remove(edge_id);
@@ -325,7 +365,7 @@ fn classify_node_change(existing: Option<&NodeRow>, node: &NodeRow) -> Option<Ch
         return Some(ChangeKind::Reappeared);
     }
     if prev.label != node.label
-        || prev.metadata_json != node.metadata_json
+        || stable_metadata(&prev.metadata_json) != stable_metadata(&node.metadata_json)
         || prev.kind != node.kind
         || prev.state != node.state
     {
@@ -334,6 +374,21 @@ fn classify_node_change(existing: Option<&NodeRow>, node: &NodeRow) -> Option<Ch
     None
 }
 
+/// Keys restamped on every sighting of an unchanged node.
+const PER_SIGHTING_NODE_KEYS: [&str; 1] = ["runtime_observed_at_ns"];
+
+fn stable_metadata(metadata_json: &str) -> Option<serde_json::Value> {
+    let mut value: serde_json::Value = serde_json::from_str(metadata_json).ok()?;
+    if let Some(map) = value.as_object_mut() {
+        for key in PER_SIGHTING_NODE_KEYS {
+            map.remove(key);
+        }
+    }
+    Some(value)
+}
+
+/// `evidence_count` and `last_seen_ns` move on every sighting of an unchanged edge; they
+/// are not changes and must not add a history row per scan.
 fn classify_edge_change(existing: Option<&EdgeRow>, edge: &EdgeRow) -> Option<ChangeKind> {
     let Some(prev) = existing else {
         return Some(ChangeKind::New);
@@ -348,7 +403,6 @@ fn classify_edge_change(existing: Option<&EdgeRow>, edge: &EdgeRow) -> Option<Ch
         || prev.state != edge.state
         || prev.evidence_score != edge.evidence_score
         || prev.evidence_label != edge.evidence_label
-        || prev.evidence_count != edge.evidence_count
         || prev.metadata_json != edge.metadata_json
     {
         return Some(ChangeKind::Changed);

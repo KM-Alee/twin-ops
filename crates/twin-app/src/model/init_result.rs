@@ -11,4 +11,5 @@ pub struct InitResult {
     pub config_updated: bool,
     pub db_created: bool,
     pub schema_version: i64,
+    pub repeated_observations_collapsed: usize,
 }

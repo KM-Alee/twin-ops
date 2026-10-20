@@ -91,8 +91,36 @@ impl SocketListenAddress {
     }
 }
 
+/// When a timer last fired and will next fire, as wall-clock nanoseconds since the epoch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TimerSchedule {
+    pub last_trigger_ns: Option<i64>,
+    pub next_elapse_ns: Option<i64>,
+}
+
+impl TimerSchedule {
+    /// systemd reports microseconds, with 0 (and `u64::MAX` for the next run) meaning none.
+    pub fn from_usec(last_trigger_usec: u64, next_elapse_usec: u64) -> Self {
+        let to_ns = |usec: u64| {
+            (usec != 0 && usec != u64::MAX)
+                .then(|| i64::try_from(usec).ok()?.checked_mul(1_000))
+                .flatten()
+        };
+        Self {
+            last_trigger_ns: to_ns(last_trigger_usec),
+            next_elapse_ns: to_ns(next_elapse_usec),
+        }
+    }
+}
+
 pub trait SystemdDBusReader {
     fn list_units(&self) -> Result<Vec<UnitDBusSnapshot>, SystemdDBusError>;
+
+    fn timer_schedule(&self, _unit: &str) -> Result<TimerSchedule, SystemdDBusError> {
+        Err(SystemdDBusError::Unavailable {
+            detail: "timer properties unavailable".into(),
+        })
+    }
 
     fn socket_listen(&self, _unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
         Err(SystemdDBusError::Unavailable {
@@ -258,6 +286,31 @@ impl SystemdDBusReader for StdSystemdDBusReader {
         Ok(out)
     }
 
+    fn timer_schedule(&self, unit: &str) -> Result<TimerSchedule, SystemdDBusError> {
+        let failed = || SystemdDBusError::CallFailed {
+            detail: "timer properties unreadable".into(),
+        };
+        let manager = SystemdManagerProxyBlocking::new(&self.connection).map_err(|_| failed())?;
+        let path = manager.get_unit(unit).map_err(|_| failed())?;
+        let props = UnitPropertiesProxyBlocking::builder(&self.connection)
+            .path(path)
+            .map_err(|_| failed())?
+            .build()
+            .map_err(|_| failed())?
+            .get_all("org.freedesktop.systemd1.Timer")
+            .map_err(|_| failed())?;
+        let usec = |key: &str| {
+            props
+                .get(key)
+                .and_then(|value| u64::try_from(value.clone()).ok())
+                .ok_or_else(failed)
+        };
+        Ok(TimerSchedule::from_usec(
+            usec("LastTriggerUSec")?,
+            usec("NextElapseUSecRealtime")?,
+        ))
+    }
+
     fn socket_listen(&self, unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
         let manager = SystemdManagerProxyBlocking::new(&self.connection)
             .map_err(|_| socket_property_error())?;
@@ -337,6 +390,7 @@ fn socket_property_error() -> SystemdDBusError {
 pub struct FixtureSystemdDBusReader {
     units: Vec<UnitDBusSnapshot>,
     socket_listen: HashMap<String, Vec<SocketListenAddress>>,
+    timer_schedules: HashMap<String, TimerSchedule>,
     cgroup_to_unit: std::collections::HashMap<String, String>,
 }
 
@@ -346,10 +400,16 @@ impl FixtureSystemdDBusReader {
         self
     }
 
+    pub fn with_timer_schedules(mut self, schedules: HashMap<String, TimerSchedule>) -> Self {
+        self.timer_schedules = schedules;
+        self
+    }
+
     pub fn new(units: Vec<UnitDBusSnapshot>) -> Self {
         Self {
             units,
             socket_listen: HashMap::new(),
+            timer_schedules: HashMap::new(),
             cgroup_to_unit: std::collections::HashMap::new(),
         }
     }
@@ -361,12 +421,22 @@ impl FixtureSystemdDBusReader {
         Self {
             units,
             socket_listen: HashMap::new(),
+            timer_schedules: HashMap::new(),
             cgroup_to_unit,
         }
     }
 }
 
 impl SystemdDBusReader for FixtureSystemdDBusReader {
+    fn timer_schedule(&self, unit: &str) -> Result<TimerSchedule, SystemdDBusError> {
+        self.timer_schedules
+            .get(unit)
+            .copied()
+            .ok_or_else(|| SystemdDBusError::CallFailed {
+                detail: "timer properties unreadable".into(),
+            })
+    }
+
     fn socket_listen(&self, unit: &str) -> Result<Vec<SocketListenAddress>, SystemdDBusError> {
         self.socket_listen
             .get(unit)
@@ -410,10 +480,26 @@ pub fn collect_dbus_observations<R: SystemdDBusReader>(
         state_meta.insert_str("unit", &unit.name);
         let unit_type = if unit.name.ends_with(".socket") {
             "socket"
+        } else if unit.name.ends_with(".timer") {
+            "timer"
         } else {
             "service"
         };
         state_meta.insert_str("unit_type", unit_type);
+        if unit_type == "timer" {
+            match reader.timer_schedule(&unit.name) {
+                Ok(schedule) => {
+                    state_meta.insert_bool("timer_schedule_known", true);
+                    if let Some(last) = schedule.last_trigger_ns {
+                        state_meta.insert_str("timer_last_trigger_ns", &last.to_string());
+                    }
+                    if let Some(next) = schedule.next_elapse_ns {
+                        state_meta.insert_str("timer_next_elapse_ns", &next.to_string());
+                    }
+                }
+                Err(_) => state_meta.insert_bool("timer_schedule_known", false),
+            }
+        }
         if unit_type == "socket" {
             match reader.socket_listen(&unit.name) {
                 Ok(listen) if listen.len() <= 256 => {
@@ -487,6 +573,33 @@ pub fn collect_dbus_observations<R: SystemdDBusReader>(
                 collector: CollectorName::new(DBUS_COLLECTOR_NAME),
                 subject: Some(RawIdentity::Service {
                     unit: socket.clone(),
+                }),
+                object: Some(RawIdentity::Service {
+                    unit: unit.name.clone(),
+                }),
+                timestamp: started_at,
+                raw_ref: Some(RawEvidenceRef::new(
+                    "org.freedesktop.systemd1.Unit.TriggeredBy",
+                )),
+                confidence_hint: ConfidenceHint::High,
+                metadata,
+            });
+        }
+        for timer in unit
+            .triggered_by
+            .iter()
+            .filter(|unit| unit.ends_with(".timer"))
+        {
+            let mut metadata = ObservationMetadata::new();
+            metadata.insert_str("timer_unit", timer);
+            metadata.insert_str("service_unit", &unit.name);
+            metadata.insert_str("source", "systemd_dbus");
+            observations.push(RawObservation {
+                source: ObservationSource::SystemdDBus,
+                kind: ObservationKind::SystemdTimerActivates,
+                collector: CollectorName::new(DBUS_COLLECTOR_NAME),
+                subject: Some(RawIdentity::Service {
+                    unit: timer.clone(),
                 }),
                 object: Some(RawIdentity::Service {
                     unit: unit.name.clone(),

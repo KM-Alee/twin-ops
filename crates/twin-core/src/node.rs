@@ -32,6 +32,7 @@ pub enum NodeKind {
     K8sPvc,
     K8sIngress,
     K8sEvent,
+    CronJob,
 }
 
 impl fmt::Display for NodeKind {
@@ -61,6 +62,7 @@ impl fmt::Display for NodeKind {
             Self::K8sPvc => "k8s_pvc",
             Self::K8sIngress => "k8s_ingress",
             Self::K8sEvent => "k8s_event",
+            Self::CronJob => "cron_job",
         })
     }
 }
@@ -94,6 +96,7 @@ impl FromStr for NodeKind {
             "k8s_pvc" => Ok(Self::K8sPvc),
             "k8s_ingress" => Ok(Self::K8sIngress),
             "k8s_event" => Ok(Self::K8sEvent),
+            "cron_job" => Ok(Self::CronJob),
             other => Err(ParseError::Enum {
                 kind: "NodeKind",
                 value: other.to_string(),
@@ -341,6 +344,11 @@ impl NodeId {
         Ok(id)
     }
 
+    /// `cron:/etc/cron.d/backup:3`: a crontab entry by file and line.
+    pub fn cron_job(path: &str, line: usize) -> Self {
+        Self(format!("cron:{}:{line}", lexical_canonical(path)))
+    }
+
     pub fn cgroup(path: &str) -> Self {
         Self(format!("cgroup:{}", lexical_canonical(path)))
     }
@@ -388,6 +396,9 @@ impl NodeId {
         }
         if s.starts_with("cgroup:") && s.len() > "cgroup:".len() {
             return Some(NodeKind::Cgroup);
+        }
+        if s.starts_with("cron:") && s.len() > "cron:".len() {
+            return Some(NodeKind::CronJob);
         }
         None
     }
@@ -490,6 +501,16 @@ fn validate_node_id(s: &str) -> Result<(), ParseError> {
 
     if let Some(path) = s.strip_prefix("cgroup:") {
         if path.is_empty() {
+            return Err(invalid());
+        }
+        return Ok(());
+    }
+
+    if let Some(entry) = s.strip_prefix("cron:") {
+        let is_entry = entry.rsplit_once(':').is_some_and(|(path, line)| {
+            path.starts_with('/') && !line.is_empty() && line.bytes().all(|b| b.is_ascii_digit())
+        });
+        if !is_entry {
             return Err(invalid());
         }
         return Ok(());

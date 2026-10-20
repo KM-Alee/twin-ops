@@ -281,6 +281,7 @@ fn service_neighborhood(
     let mut configured_dependents = Vec::new();
     let mut configured_files = Vec::new();
     let mut socket_activation = Vec::new();
+    let mut timer_activation = Vec::new();
     let mut evidence = Vec::new();
     let mut seen_evidence = HashSet::new();
 
@@ -388,6 +389,16 @@ fn service_neighborhood(
                 .node(peer.as_str())
                 .ok_or_else(|| GraphError::NodeNotFound { id: peer.clone() })?;
             let observation_ids = proof.observation_ids(&edge);
+            if edge.class() == EdgeClass::Observed && edge.metadata().timer_activation() {
+                timer_activation.push(GraphOwnedNode {
+                    id: peer.as_str().to_string(),
+                    label: peer_node.label().to_string(),
+                    edge_class: edge.class().to_string(),
+                    tag: Some("starts on schedule".to_string()),
+                    observation_ids,
+                });
+                continue;
+            }
             if edge.class() == EdgeClass::Observed && is_socket_activation_edge(&edge) {
                 socket_activation.push(GraphOwnedNode {
                     id: peer.as_str().to_string(),
@@ -524,6 +535,7 @@ fn service_neighborhood(
     configured_dependents.sort_by_key(|n| n.id.clone());
     configured_files.sort_by_key(|n| n.id.clone());
     socket_activation.sort_by_key(|n| n.id.clone());
+    timer_activation.sort_by_key(|n| n.id.clone());
     evidence.sort_by(|a, b| a.source.cmp(&b.source));
     let runtime_dependencies = if show_evidence {
         super::ebpf_tcp::runtime_dependencies(store, target)?
@@ -542,6 +554,7 @@ fn service_neighborhood(
         dependencies,
         dependents,
         socket_activation,
+        timer_activation,
         configured_dependents,
         configured_files,
         evidence,
@@ -1671,6 +1684,12 @@ fn historical_store(source: &Store, at: twin_core::TimestampNs) -> Result<Store,
                                 continue;
                             }
                             observation.collector_run_id = None;
+                            // Later sightings must not make history look fresher, and the
+                            // individual sightings before `at` are not retained separately.
+                            if observation.last_seen_ns > at.as_i64() {
+                                observation.last_seen_ns = observation.timestamp_ns;
+                                observation.seen_count = 1;
+                            }
                             if store.get_observation(&id)?.is_none() {
                                 store.insert_observation(&observation)?;
                             }

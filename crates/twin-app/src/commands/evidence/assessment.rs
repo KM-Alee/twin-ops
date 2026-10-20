@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::str::FromStr;
 
 use twin_core::{EvidenceFactors, EvidenceSourceKind, ObservationId, TimestampNs};
-use twin_observation::{ObservationKind, ObservationSource};
-use twin_store::{Store, StoreError};
+use twin_observation::{Observation, ObservationKind, ObservationSource};
+use twin_store::{ObservationRow, SnapshotProofRef, Store, StoreError};
 
 pub(crate) struct ObservationAssessment {
     pub factors: EvidenceFactors,
@@ -16,20 +16,46 @@ pub(crate) fn assess_observations(
     ids: &[String],
     at_ns: i64,
 ) -> Result<ObservationAssessment, StoreError> {
-    assess_observations_at(store, ids, at_ns, true)
+    assess_observations_at(store, ids, &HashMap::new(), at_ns, true)
 }
 
 pub(crate) fn assess_snapshot_observations(
     store: &Store,
-    ids: &[String],
+    proof: &[SnapshotProofRef],
     at_ns: i64,
 ) -> Result<ObservationAssessment, StoreError> {
-    assess_observations_at(store, ids, at_ns, false)
+    let ids = proof
+        .iter()
+        .map(|reference| reference.observation_id.clone())
+        .collect::<Vec<_>>();
+    let captured = proof
+        .iter()
+        .filter_map(|reference| {
+            reference
+                .last_seen_ns
+                .map(|seen| (reference.observation_id.clone(), seen))
+        })
+        .collect();
+    assess_observations_at(store, &ids, &captured, at_ns, false)
+}
+
+/// When an observation was last seen at or before `at_ns`. Sightings after `at_ns` are not
+/// evidence for that time; without a captured value only the first sighting is known.
+fn last_seen_at(row: &ObservationRow, captured: Option<i64>, at_ns: i64) -> i64 {
+    if let Some(captured) = captured {
+        return captured.min(row.last_seen_ns).max(row.timestamp_ns);
+    }
+    if row.last_seen_ns <= at_ns {
+        row.last_seen_ns
+    } else {
+        row.timestamp_ns
+    }
 }
 
 fn assess_observations_at(
     store: &Store,
     ids: &[String],
+    captured: &HashMap<String, i64>,
     at_ns: i64,
     current: bool,
 ) -> Result<ObservationAssessment, StoreError> {
@@ -43,21 +69,30 @@ fn assess_observations_at(
     let mut ebpf = 0u32;
     let mut missing = 0;
     for raw in ids.iter().collect::<BTreeSet<_>>() {
-        let observation = match ObservationId::from_str(raw) {
-            Ok(id) => store.get_observation_typed(id)?,
+        let row = match ObservationId::from_str(raw) {
+            Ok(_) => store.get_observation(raw)?,
             Err(_) => None,
         };
-        let Some(obs) = observation.filter(|obs| obs.timestamp().as_i64() <= at_ns) else {
+        let Some(row) = row.filter(|row| row.timestamp_ns <= at_ns) else {
             missing += 1;
             continue;
         };
+        let obs = Observation::try_from(&row)?;
         supporting_ids.push(raw.clone());
-        newest_ns = Some(newest_ns.unwrap_or(0).max(obs.timestamp().as_i64()));
+        let seen = last_seen_at(&row, captured.get(raw).copied(), at_ns);
+        newest_ns = Some(newest_ns.unwrap_or(0).max(seen));
         sources.insert(obs.source().to_string());
         match obs.kind() {
             ObservationKind::EbpfConnect
             | ObservationKind::EbpfAccept
-            | ObservationKind::EbpfBind => ebpf = ebpf.saturating_add(1),
+            | ObservationKind::EbpfBind => {
+                let sightings = if seen == row.last_seen_ns {
+                    u32::try_from(row.seen_count.max(1)).unwrap_or(u32::MAX)
+                } else {
+                    1
+                };
+                ebpf = ebpf.saturating_add(sightings)
+            }
             ObservationKind::TcpSocketSeen
             | ObservationKind::TcpConnectionSeen
             | ObservationKind::UdpSocketSeen

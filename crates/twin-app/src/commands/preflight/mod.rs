@@ -1,6 +1,9 @@
 mod intent;
+mod scheduled;
 mod script;
 mod shell;
+
+pub(crate) use scheduled::scheduled_facts;
 
 use std::path::{Path, PathBuf};
 

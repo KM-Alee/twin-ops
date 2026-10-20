@@ -151,6 +151,8 @@ fn snapshot_listener_uses_captured_proof_after_reset_and_reports_pruning_as_unkn
         redaction_state: "none".into(),
         metadata_json: "{}".into(),
         collector_run_id: None,
+        last_seen_ns: 0,
+        seen_count: 1,
     };
     store.insert_observation(&observation).expect("observation");
     store

@@ -453,13 +453,10 @@ fn count_edge(
     snapshot: Option<&str>,
 ) -> Result<CountedEdge, AppError> {
     let assessment = if let Some(snapshot) = snapshot {
-        let ids = store
+        let proof = store
             .load_snapshot_observations_for_edge(snapshot, &row.id)
-            .map_err(ScanError::Store)?
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect::<Vec<_>>();
-        super::evidence::assess_snapshot_observations(store, &ids, at_ns)
+            .map_err(ScanError::Store)?;
+        super::evidence::assess_snapshot_observations(store, &proof, at_ns)
     } else {
         super::evidence::assess_edge(store, row, at_ns)
     }

@@ -23,6 +23,8 @@ pub struct ScanResult {
     pub interval_secs: u64,
     pub edges_first_seen_by_sample: Vec<usize>,
     pub socket_activation_edge_count: usize,
+    pub timer_activation_edge_count: usize,
+    pub cron_job_count: usize,
     pub cgroup_correction_count: usize,
     pub started_at_ns: i64,
     pub ended_at_ns: i64,

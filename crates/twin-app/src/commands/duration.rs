@@ -137,3 +137,14 @@ pub fn parse_graph_time(raw: &str) -> Result<twin_core::TimestampNs, AppError> {
     }
     Ok(twin_core::TimestampNs::new(ns))
 }
+
+/// A coarse human age such as `40 s`, `12 min`, `5 h` or `3 d`.
+pub(crate) fn age_label(elapsed_ns: i64) -> String {
+    let seconds = elapsed_ns.max(0) / 1_000_000_000;
+    match seconds {
+        0..=59 => format!("{seconds} s"),
+        60..=3_599 => format!("{} min", seconds / 60),
+        3_600..=86_399 => format!("{} h", seconds / 3_600),
+        _ => format!("{} d", seconds / 86_400),
+    }
+}

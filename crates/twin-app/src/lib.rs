@@ -174,6 +174,9 @@ pub fn read_config(
 pub struct ScanRequest {
     pub containerd_fixture: Option<PathBuf>,
     pub docker_fixture: Option<PathBuf>,
+    /// Read crontabs under this root. Without it only a host scan (`/proc`) reads the
+    /// host's cron files.
+    pub cron_root: Option<PathBuf>,
     pub config_override: Option<PathBuf>,
     pub samples: u32,
     pub interval_secs: u64,
@@ -185,6 +188,7 @@ impl Default for ScanRequest {
             config_override: None,
             docker_fixture: None,
             containerd_fixture: None,
+            cron_root: None,
             samples: 1,
             interval_secs: 2,
         }

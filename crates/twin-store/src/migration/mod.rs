@@ -222,4 +222,29 @@ JOIN observations o ON o.id = eo.observation_id
 WHERE o.timestamp_ns <= s.created_at_ns;
 ";
 
-pub const LATEST_VERSION: i64 = 6;
+/// Repeated sightings update one row. Fingerprints for existing rows are computed in Rust
+/// inside the same transaction; collapsing legacy duplicates then runs in batches.
+pub const MIGRATION_007: &str = r"
+ALTER TABLE observations ADD COLUMN last_seen_ns INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE observations ADD COLUMN seen_count INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE observations ADD COLUMN fingerprint TEXT;
+ALTER TABLE observations ADD COLUMN merge_pending INTEGER NOT NULL DEFAULT 0;
+UPDATE observations SET last_seen_ns = timestamp_ns;
+
+CREATE INDEX IF NOT EXISTS idx_observations_fingerprint ON observations(fingerprint, last_seen_ns);
+CREATE INDEX IF NOT EXISTS idx_observations_merge_pending ON observations(timestamp_ns) WHERE merge_pending = 1;
+CREATE INDEX IF NOT EXISTS idx_observations_last_seen ON observations(last_seen_ns);
+CREATE INDEX IF NOT EXISTS idx_observations_object ON observations(object_node_id);
+CREATE INDEX IF NOT EXISTS idx_observations_run ON observations(collector_run_id);
+CREATE INDEX IF NOT EXISTS idx_node_history_run ON node_history(collector_run_id);
+CREATE INDEX IF NOT EXISTS idx_edge_history_run ON edge_history(collector_run_id);
+CREATE INDEX IF NOT EXISTS idx_edge_obs_observation ON edge_observations(observation_id);
+
+ALTER TABLE snapshot_edge_observations ADD COLUMN last_seen_ns INTEGER;
+UPDATE snapshot_edge_observations SET last_seen_ns = (
+    SELECT o.timestamp_ns FROM observations o WHERE o.id = snapshot_edge_observations.observation_id
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_edge_obs_observation ON snapshot_edge_observations(observation_id);
+";
+
+pub const LATEST_VERSION: i64 = 7;

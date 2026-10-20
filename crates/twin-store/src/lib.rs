@@ -4,8 +4,8 @@ pub mod repo;
 mod store;
 
 pub use repo::{
-    CollectorRunRow, EdgeHistoryRow, EdgeRow, NodeHistoryRow, NodeRow, ObservationRow,
-    SnapshotError, SnapshotRow, TestRunRow,
+    CollectorRunRow, EdgeHistoryRow, EdgeRow, NodeHistoryRow, NodeRow, ObservationMergeProgress,
+    ObservationRow, SnapshotError, SnapshotProofRef, SnapshotRow, TestRunRow,
 };
 pub use store::Store;
 

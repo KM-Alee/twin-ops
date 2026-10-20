@@ -21,6 +21,7 @@ fn sample_init_result() -> InitResult {
         config_updated: false,
         db_created: true,
         schema_version: LATEST_VERSION,
+        repeated_observations_collapsed: 0,
     }
 }
 
@@ -41,6 +42,22 @@ fn init_render_unchanged() {
     };
     let text = output::init::render(&result);
     assert!(text.contains("unchanged"));
+}
+
+#[test]
+fn init_render_reports_collapsed_repeated_sightings() {
+    let quiet = output::init::render(&sample_init_result());
+    assert!(!quiet.contains("repeated sightings"));
+    assert!(quiet.contains("└──  log"));
+    let result = InitResult {
+        repeated_observations_collapsed: 84_000,
+        ..sample_init_result()
+    };
+    let text = output::init::render(&result);
+    assert!(text.contains("└──  log"), "{text}");
+    assert!(text.contains("store"));
+    assert!(text.contains("└──  observations"), "{text}");
+    assert!(text.contains("84000 repeated sightings collapsed into existing rows"));
 }
 
 #[test]
@@ -233,6 +250,7 @@ fn graph_service_evidence_is_deduped() {
         dependencies: vec![],
         dependents: vec![],
         socket_activation: vec![],
+        timer_activation: vec![],
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![
@@ -430,6 +448,7 @@ fn graph_service_render_declared_dependency() {
         }],
         dependents: vec![],
         socket_activation: vec![],
+        timer_activation: vec![],
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![],
@@ -471,6 +490,7 @@ fn graph_service_render_separates_proxy_from_runtime_depends() {
         ],
         dependents: vec![],
         socket_activation: vec![],
+        timer_activation: vec![],
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![GraphEvidenceLine {
@@ -885,6 +905,7 @@ fn graph_service_render_inferred_ownership() {
         }],
         dependents: vec![],
         socket_activation: vec![],
+        timer_activation: vec![],
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![GraphEvidenceLine {
@@ -2014,6 +2035,7 @@ fn sample_service_graph() -> GraphServiceResult {
         dependencies: vec![],
         dependents: vec![],
         socket_activation: vec![],
+        timer_activation: vec![],
         configured_dependents: vec![],
         configured_files: vec![],
         evidence: vec![],

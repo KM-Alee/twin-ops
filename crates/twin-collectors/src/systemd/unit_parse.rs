@@ -19,6 +19,12 @@ pub struct SocketUnitConfig {
     pub listen_fifos: Vec<String>,
 }
 
+/// `[Timer]` settings that matter for the graph: the unit the timer starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TimerUnitConfig {
+    pub unit: Option<String>,
+}
+
 pub fn parse_unit_file(path: &Path, content: &str) -> Result<UnitDependencies, CollectorError> {
     let section = parse_ini_section(content, "[Unit]")
         .map_err(|detail| CollectorError::SystemdParse {
@@ -67,7 +73,9 @@ pub fn normalize_unit_name(raw: &str) -> Option<String> {
             return None;
         }
     }
-    if trimmed.ends_with(".service") || trimmed.ends_with(".target") || trimmed.ends_with(".socket")
+    if [".service", ".target", ".socket", ".timer"]
+        .iter()
+        .any(|suffix| trimmed.ends_with(suffix))
     {
         return Some(trimmed.to_string());
     }
@@ -155,6 +163,65 @@ fn apply_socket_pairs(
         }
     }
     Ok(())
+}
+
+pub fn parse_timer_unit(path: &Path, content: &str) -> Result<TimerUnitConfig, CollectorError> {
+    let section = parse_ini_section(content, "[Timer]")
+        .map_err(|detail| CollectorError::SystemdParse {
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        })?
+        .ok_or_else(|| CollectorError::SystemdParse {
+            path: path.to_path_buf(),
+            detail: "missing [Timer] section".to_string(),
+        })?;
+    let mut config = TimerUnitConfig::default();
+    apply_timer_pairs(path, &mut config, section)?;
+    Ok(config)
+}
+
+pub(crate) fn apply_timer_dropin(
+    path: &Path,
+    config: &mut TimerUnitConfig,
+    content: &str,
+) -> Result<(), CollectorError> {
+    if let Some(section) =
+        parse_ini_section(content, "[Timer]").map_err(|detail| CollectorError::SystemdParse {
+            path: path.to_path_buf(),
+            detail: detail.into(),
+        })?
+    {
+        apply_timer_pairs(path, config, section)?;
+    }
+    Ok(())
+}
+
+fn apply_timer_pairs(
+    path: &Path,
+    config: &mut TimerUnitConfig,
+    section: Vec<(String, String)>,
+) -> Result<(), CollectorError> {
+    for (key, value) in section {
+        if key == "Unit" {
+            config.unit = super::syntax::words(&value)
+                .map_err(|detail| CollectorError::SystemdParse {
+                    path: path.to_path_buf(),
+                    detail: detail.into(),
+                })?
+                .into_iter()
+                .next();
+        }
+    }
+    Ok(())
+}
+
+/// The unit a timer starts: `Unit=` when set, otherwise the service with the timer's name.
+pub fn timer_activation_target(timer_unit: &str, config: &TimerUnitConfig) -> Option<String> {
+    if let Some(unit) = &config.unit {
+        // A template (`job@.service`) is not a unit a timer can start.
+        return (!unit.contains('%') && !unit.contains("@.")).then(|| unit.clone());
+    }
+    Some(format!("{}.service", timer_unit.strip_suffix(".timer")?))
 }
 
 pub fn socket_activation_target(socket_unit: &str, config: &SocketUnitConfig) -> Option<String> {

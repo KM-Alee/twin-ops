@@ -2549,6 +2549,7 @@ name = "twin-store"
 version = "0.2.0"
 dependencies = [
  "rusqlite",
+ "serde_json",
  "tempfile",
  "thiserror 1.0.69",
  "twin-core",

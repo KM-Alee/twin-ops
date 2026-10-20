@@ -28,7 +28,7 @@ fn large_service_keeps_every_peer_label_proof_reference_and_valid_evidence() {
             let edge = format!("service:batch.service|owns|{id}");
             store.upsert_edge(&EdgeRow { id: edge.clone(), from_node_id: "service:batch.service".into(), to_node_id: id.clone(), kind: "owns".into(), class: "inferred".into(), state: "active".into(), evidence_score: 45, evidence_label: "moderate".into(), evidence_count: 1, first_seen_ns: 1, last_seen_ns: 1, metadata_json: "{}".into() })?;
             let obs = format!("00000000-0000-0000-0000-{pid:012}");
-            store.insert_observation(&ObservationRow { id: obs.clone(), source: "proc_cgroup".into(), kind: if pid == 501 { "malformed_kind" } else { "process_belongs_to_cgroup" }.into(), subject_node_id: Some(id), object_node_id: None, timestamp_ns: 1, confidence_hint: "moderate".into(), redaction_state: "none".into(), metadata_json: format!("{{\"cgroup_path\":\"/system.slice/batch.service/{pid}\",\"__raw_ref\":\"/proc/{pid}/cgroup\"}}"), collector_run_id: None })?;
+            store.insert_observation(&ObservationRow { id: obs.clone(), source: "proc_cgroup".into(), kind: if pid == 501 { "malformed_kind" } else { "process_belongs_to_cgroup" }.into(), subject_node_id: Some(id), object_node_id: None, timestamp_ns: 1, confidence_hint: "moderate".into(), redaction_state: "none".into(), metadata_json: format!("{{\"cgroup_path\":\"/system.slice/batch.service/{pid}\",\"__raw_ref\":\"/proc/{pid}/cgroup\"}}"), collector_run_id: None , last_seen_ns: 0, seen_count: 1})?;
             store.link_edge_observation(&edge, &obs, "direct")?;
         }
         Ok(())

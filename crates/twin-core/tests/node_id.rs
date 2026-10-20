@@ -182,3 +182,23 @@ fn from_str_rejects_non_canonical() {
     let err = NodeId::from_str("port:tcp:::1:80").expect_err("legacy ambiguous");
     assert!(matches!(err, ParseError::InvalidNodeId { .. }));
 }
+
+#[test]
+fn cron_job_ids_name_a_file_and_line() {
+    let id = NodeId::cron_job("/etc/cron.d/backup", 3);
+    assert_eq!(id.as_str(), "cron:/etc/cron.d/backup:3");
+    assert_eq!(id.kind(), Some(NodeKind::CronJob));
+    assert_eq!(NodeId::from_str(id.as_str()).expect("parse"), id);
+    assert_eq!(
+        "cron_job".parse::<NodeKind>().expect("kind"),
+        NodeKind::CronJob
+    );
+    for invalid in [
+        "cron:",
+        "cron:backup:3",
+        "cron:/etc/cron.d/backup",
+        "cron:/etc/crontab:x",
+    ] {
+        assert!(NodeId::from_str(invalid).is_err(), "{invalid}");
+    }
+}

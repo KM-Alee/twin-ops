@@ -17,6 +17,18 @@ pub fn render(result: &InitResult) -> String {
         Some(&format!("schema v{}", result.schema_version)),
     );
     out.path_row(true, "log", &result.log_path, None);
+    if result.repeated_observations_collapsed > 0 {
+        out.blank();
+        out.section("store");
+        out.tree_leaf(
+            true,
+            "observations",
+            &format!(
+                "{} repeated sightings collapsed into existing rows",
+                result.repeated_observations_collapsed
+            ),
+        );
+    }
     out.into_string()
 }
 

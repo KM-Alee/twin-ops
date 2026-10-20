@@ -101,6 +101,17 @@ impl<R: UnitFileReader> SystemdUnitCollector<R> {
 
         for unit in &units {
             observations.push(raw_unit_seen(unit, started_at));
+            if let Some(timer) = &unit.timer_config {
+                if let Some(observation) = raw_timer_activates(unit, timer, started_at) {
+                    observations.push(observation);
+                } else {
+                    warnings.push(crate::systemd::warning::SystemdWarning::new(
+                        crate::systemd::warning::SystemdWarningKind::ParseError,
+                        unit.main_path.clone(),
+                        "invalid or unresolved timer unit",
+                    ));
+                }
+            }
             if let Some(socket) = &unit.socket_config {
                 if let Some(observation) = raw_socket_activates(unit, socket, started_at) {
                     observations.push(observation);
@@ -191,6 +202,31 @@ fn raw_socket_activates(
         object: Some(RawIdentity::Service { unit: target }),
         timestamp,
         raw_ref: Some(raw_ref),
+        confidence_hint: ConfidenceHint::High,
+        metadata: meta,
+    })
+}
+
+fn raw_timer_activates(
+    unit: &EffectiveUnit,
+    timer: &crate::systemd::unit_parse::TimerUnitConfig,
+    timestamp: TimestampNs,
+) -> Option<RawObservation> {
+    let target = crate::systemd::unit_parse::timer_activation_target(&unit.unit_name, timer)?;
+    let mut meta = ObservationMetadata::new();
+    meta.insert_str("timer_unit", &unit.unit_name);
+    meta.insert_str("service_unit", &target);
+    meta.insert_str("unit_path", &unit.main_path.display().to_string());
+    Some(RawObservation {
+        source: ObservationSource::SystemdUnitFile,
+        kind: ObservationKind::SystemdTimerActivates,
+        collector: CollectorName::new(COLLECTOR_NAME),
+        subject: Some(RawIdentity::Service {
+            unit: unit.unit_name.clone(),
+        }),
+        object: Some(RawIdentity::Service { unit: target }),
+        timestamp,
+        raw_ref: Some(RawEvidenceRef::new(unit.main_path.display().to_string())),
         confidence_hint: ConfidenceHint::High,
         metadata: meta,
     })

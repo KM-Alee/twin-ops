@@ -26,6 +26,10 @@ impl GraphMetadata {
     pub fn socket_activation(&self) -> bool {
         self.bool_field("socket_activation")
     }
+
+    pub fn timer_activation(&self) -> bool {
+        self.bool_field("timer_activation")
+    }
 }
 
 impl fmt::Display for GraphMetadata {

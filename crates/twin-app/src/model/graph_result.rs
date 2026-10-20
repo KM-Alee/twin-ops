@@ -78,6 +78,8 @@ pub struct GraphServiceResult {
     pub dependencies: Vec<GraphOwnedNode>,
     pub dependents: Vec<GraphOwnedNode>,
     pub socket_activation: Vec<GraphOwnedNode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timer_activation: Vec<GraphOwnedNode>,
     pub configured_dependents: Vec<GraphOwnedNode>,
     pub configured_files: Vec<GraphOwnedNode>,
     pub evidence: Vec<GraphEvidenceLine>,

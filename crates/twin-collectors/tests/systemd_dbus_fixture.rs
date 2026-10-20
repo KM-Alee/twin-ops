@@ -209,3 +209,83 @@ fn socket_listen_is_bounded_and_rejects_control_characters() {
         .get("socket_config_streams")
         .is_none());
 }
+
+#[test]
+fn timers_report_what_they_start_and_their_schedule_without_inventing_one() {
+    use std::collections::HashMap;
+    use twin_collectors::TimerSchedule;
+    let mut backup = socket_unit("backup.service");
+    backup.triggered_by = vec!["backup.timer".into()];
+    let batch = SystemdRuntimeCollector::with_dbus_fixture(
+        vec![],
+        vec![
+            backup,
+            socket_unit("backup.timer"),
+            socket_unit("hidden.timer"),
+        ],
+    )
+    .with_timer_schedule_fixture(HashMap::from([(
+        "backup.timer".into(),
+        TimerSchedule::from_usec(1_700_000_000_000_000, u64::MAX),
+    )]))
+    .collect(TimestampNs::new(1))
+    .expect("collect");
+    let observations = batch.observations();
+    assert!(observations.iter().any(|obs| {
+        obs.kind == ObservationKind::SystemdTimerActivates
+            && obs.metadata.get("timer_unit").and_then(|v| v.as_str()) == Some("backup.timer")
+            && obs.metadata.get("service_unit").and_then(|v| v.as_str()) == Some("backup.service")
+    }));
+    let state = |unit: &str| {
+        observations
+            .iter()
+            .find(|obs| {
+                obs.kind == ObservationKind::SystemdUnitStateSeen
+                    && obs.metadata.get("unit").and_then(|v| v.as_str()) == Some(unit)
+            })
+            .expect("state")
+    };
+    let backup = state("backup.timer");
+    assert_eq!(
+        backup.metadata.get("unit_type").and_then(|v| v.as_str()),
+        Some("timer")
+    );
+    assert_eq!(
+        backup
+            .metadata
+            .get("timer_last_trigger_ns")
+            .and_then(|v| v.as_str()),
+        Some("1700000000000000000")
+    );
+    assert!(
+        backup.metadata.get("timer_next_elapse_ns").is_none(),
+        "no next run is not a run at u64::MAX"
+    );
+    let hidden = state("hidden.timer");
+    assert_eq!(
+        hidden
+            .metadata
+            .get("timer_schedule_known")
+            .and_then(|v| v.as_bool()),
+        Some(false)
+    );
+    assert!(hidden.metadata.get("timer_last_trigger_ns").is_none());
+}
+
+#[test]
+fn timer_schedule_treats_zero_and_max_as_never() {
+    use twin_collectors::TimerSchedule;
+    assert_eq!(TimerSchedule::from_usec(0, 0), TimerSchedule::default());
+    assert_eq!(
+        TimerSchedule::from_usec(0, u64::MAX),
+        TimerSchedule::default()
+    );
+    let schedule = TimerSchedule::from_usec(5, 7);
+    assert_eq!(schedule.last_trigger_ns, Some(5_000));
+    assert_eq!(schedule.next_elapse_ns, Some(7_000));
+    assert_eq!(
+        TimerSchedule::from_usec(u64::MAX - 1, 1).last_trigger_ns,
+        None,
+        "overflow is unknown, not a wrapped time"
+    );
+}

@@ -13,6 +13,7 @@ fn observation_sources_round_trip() {
         ObservationSource::SystemdDBus,
         ObservationSource::SystemdEnableSymlink,
         ObservationSource::ConfigFileDiscovery,
+        ObservationSource::CronFile,
         ObservationSource::Ebpf,
     ] {
         let s = source.to_string();
@@ -47,6 +48,8 @@ fn systemd_observation_kinds_round_trip() {
         ObservationKind::SystemdUnitWantedBy,
         ObservationKind::SystemdSocketSeen,
         ObservationKind::SystemdSocketActivates,
+        ObservationKind::SystemdTimerActivates,
+        ObservationKind::CronJobSeen,
         ObservationKind::SystemdCgroupCorrection,
         ObservationKind::ConfigFileSeen,
         ObservationKind::ConfigProxyPass,

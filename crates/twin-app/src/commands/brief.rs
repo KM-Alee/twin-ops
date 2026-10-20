@@ -489,6 +489,7 @@ fn target_brief(
                 ),
                 section("configuration files", owned(&r.configured_files)),
                 section("socket activation", owned(&r.socket_activation)),
+                section("timer activation", owned(&r.timer_activation)),
             ];
             (
                 r.service.id.clone(),

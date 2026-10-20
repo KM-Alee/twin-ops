@@ -15,7 +15,7 @@ pub use config_files::{
 };
 pub use dbus::{
     try_connect_dbus, FixtureSystemdDBusReader, SocketListenAddress, SocketListenKind,
-    SystemdDBusError, SystemdDBusReader, UnitDBusSnapshot,
+    SystemdDBusError, SystemdDBusReader, TimerSchedule, UnitDBusSnapshot,
 };
 pub use runtime_collector::{SystemdRuntimeBatch, SystemdRuntimeCollector, RUNTIME_COLLECTOR_NAME};
 pub use test_env::should_skip_live_dbus;

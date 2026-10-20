@@ -72,8 +72,10 @@ fn scan_applies_custom_retention_without_relocating_database() {
                 timestamp_ns: now - age * day,
                 confidence_hint: "low".into(),
                 redaction_state: "none".into(),
-                metadata_json: "{}".into(),
+                metadata_json: format!("{{\"fixture\":\"{id}\"}}"),
                 collector_run_id: None,
+                last_seen_ns: now - age * day,
+                seen_count: 1,
             })
             .unwrap();
     }
@@ -89,7 +91,10 @@ fn scan_applies_custom_retention_without_relocating_database() {
         metadata_json: "{}".into(),
     };
     store
-        .insert_node_history(&node, ChangeKind::New, now - 4 * day, None)
+        .insert_node_history(&node, ChangeKind::New, now - 5 * day, None)
+        .unwrap();
+    store
+        .insert_node_history(&node, ChangeKind::Changed, now - 4 * day, None)
         .unwrap();
     store
         .insert_node_history(&node, ChangeKind::Changed, now - 2 * day, None)
@@ -123,8 +128,14 @@ fn scan_applies_custom_retention_without_relocating_database() {
     assert!(history
         .iter()
         .any(|row| row.recorded_at_ns == now - 2 * day));
+    assert!(
+        history
+            .iter()
+            .any(|row| row.recorded_at_ns == now - 4 * day),
+        "the newest row before the cutoff is the state at the cutoff"
+    );
     assert!(!history
         .iter()
-        .any(|row| row.recorded_at_ns == now - 4 * day));
+        .any(|row| row.recorded_at_ns == now - 5 * day));
     assert!(!home.layout.data_dir.join("twin.db").is_dir());
 }

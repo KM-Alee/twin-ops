@@ -42,7 +42,7 @@ fn emulate_at(
     db_path: &std::path::Path,
 ) -> Result<EmulationResult, AppError> {
     validate_request(request)?;
-    crate::config_io::load(layout, request.config_override.as_deref())?;
+    let config = crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(EmulateError::DatabaseNotInitialized.into());
     }
@@ -88,6 +88,7 @@ fn emulate_at(
                 *show_paths,
                 *max_depth,
                 request.show_evidence,
+                config.dependencies.window(),
             )
         }
         EmulateActionRequest::DeleteFile { path } => {
@@ -647,8 +648,9 @@ fn restart_service_emulate(
     show_paths: bool,
     max_depth: usize,
     show_evidence: bool,
+    dependency_window: std::time::Duration,
 ) -> Result<EmulationResult, AppError> {
-    let analysis = load_typed_service_dependents(store, target, label)?;
+    let analysis = load_typed_service_dependents(store, target, label, dependency_window)?;
     let unavailable_nodes = load_listening_sockets(store, target)?;
     let (impact_paths, path_scoring, unknowns) = {
         let path_analysis = load_service_impact_paths(store, target, label, max_depth)?;

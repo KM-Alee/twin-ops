@@ -160,6 +160,43 @@ pub fn warning_metadata_from_process_warnings(
     })
 }
 
+/// Distinct warning groups kept per collector run; host-wide warnings repeat per process.
+const WARNING_GROUP_CAP: usize = 64;
+
+/// One entry per (kind, detail pattern) with its first detail, first path and occurrence count, so every run's
+/// stored metadata stays bounded however many processes repeat the same warning.
+fn grouped_warning_details(
+    warnings: &[twin_collectors::ProcessWarning],
+) -> (Vec<serde_json::Value>, usize) {
+    let mut groups: Vec<(&str, String, String, String, usize)> = Vec::new();
+    for warning in warnings {
+        let kind = warning.kind().detail_key();
+        let pattern = warning_pattern(warning.detail());
+        match groups
+            .iter_mut()
+            .find(|(known_kind, known, _, _, _)| *known_kind == kind && *known == pattern)
+        {
+            Some(group) => group.4 += 1,
+            None => groups.push((
+                kind,
+                pattern,
+                warning.detail().to_string(),
+                warning.path().display().to_string(),
+                1,
+            )),
+        }
+    }
+    let omitted = groups.len().saturating_sub(WARNING_GROUP_CAP);
+    groups.truncate(WARNING_GROUP_CAP);
+    let details = groups
+        .into_iter()
+        .map(|(kind, _, detail, path, count)| {
+            serde_json::json!({"kind": kind, "path": path, "detail": detail, "count": count})
+        })
+        .collect();
+    (details, omitted)
+}
+
 pub(crate) struct ProcessCollectorMetadataInput<'a> {
     pub warnings: &'a [twin_collectors::ProcessWarning],
     pub sample_index: u32,
@@ -198,12 +235,10 @@ pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_
             _ => {}
         }
     }
+    let (warning_details, warning_details_omitted) = grouped_warning_details(input.warnings);
     serde_json::json!({
-        "warning_details": input.warnings.iter().map(|warning| serde_json::json!({
-            "kind": warning.kind().detail_key(),
-            "path": warning.path().display().to_string(),
-            "detail": warning.detail(),
-        })).collect::<Vec<_>>(),
+        "warning_details": warning_details,
+        "warning_details_omitted": warning_details_omitted,
         "permission_denied": permission_denied,
         "fd_permission_denied": fd_permission_denied,
         "cgroup_permission_denied": cgroup_permission_denied,
@@ -221,4 +256,43 @@ pub(crate) fn process_collector_metadata(input: ProcessCollectorMetadataInput<'_
         "udp_connection_count": input.udp_connection_count,
     })
     .to_string()
+}
+
+/// Masks numbers, paths and IPv6 literals so per-pid/per-socket warnings share one
+/// pattern.
+pub(crate) fn warning_pattern(detail: &str) -> String {
+    let mut pattern = String::with_capacity(detail.len());
+    let mut in_brackets = false;
+    let mut in_path = false;
+    for ch in detail.chars() {
+        if in_path {
+            if ch.is_whitespace() {
+                in_path = false;
+                pattern.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '/' | '@' if pattern.is_empty() || pattern.ends_with(' ') => {
+                in_path = true;
+                pattern.push_str("/#");
+            }
+            '[' => {
+                in_brackets = true;
+                pattern.push_str("[#");
+            }
+            ']' => {
+                in_brackets = false;
+                pattern.push(']');
+            }
+            _ if in_brackets => {}
+            '0'..='9' => {
+                if !pattern.ends_with('#') {
+                    pattern.push('#');
+                }
+            }
+            other => pattern.push(other),
+        }
+    }
+    pattern
 }

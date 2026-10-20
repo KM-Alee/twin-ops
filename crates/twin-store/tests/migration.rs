@@ -97,7 +97,7 @@ INSERT INTO snapshot_nodes SELECT 'baseline', * FROM nodes;
 INSERT INTO snapshot_edges SELECT 'baseline', * FROM edges;").expect("history and snapshot");
     conn.execute("INSERT INTO collector_runs (collector,started_at_ns,ended_at_ns,status,error_message,metadata_json) VALUES ('docker',1,1,'unavailable','SYNTHETIC_SENTINEL',?1)", [r#"{"error":"SYNTHETIC_SENTINEL"}"#]).expect("docker error");
     conn.execute("INSERT INTO test_runs VALUES ('legacy','contract','twin.yaml',1,1,0,0,?1)", [r#"{"passed":1,"checks":[{"details":{"argv":["SYNTHETIC_SENTINEL"],"safe":"retained"}}]}"#]).expect("legacy report");
-    store.initialize().expect("upgrade");
+    store.apply_migrations_through(6).expect("upgrade");
     assert_eq!(store.schema_version().expect("version"), 6);
     for table in [
         "observations",

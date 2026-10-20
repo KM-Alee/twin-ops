@@ -50,7 +50,7 @@ pub(crate) fn persist_config_files_in_scan(
         }
 
         let obs = config_file_observation(discovery, scan_time)?;
-        store.insert_observation_typed(&obs)?;
+        insert_for_session(store, history, &obs)?;
         let obs_id = obs.id();
 
         let existing_edge = super::scan::load_existing_edge(
@@ -72,6 +72,17 @@ pub(crate) fn persist_config_files_in_scan(
         edge_count += 1;
     }
     Ok(edge_count)
+}
+
+fn insert_for_session(
+    store: &mut Store,
+    history: &super::scan_history::ScanHistorySession,
+    observation: &Observation,
+) -> Result<(), StoreError> {
+    match history.collector_run_id() {
+        Some(run) => store.insert_observation_typed_for_run(observation, run),
+        None => store.insert_observation_typed(observation),
+    }
 }
 
 pub(crate) struct ConfigParseWarning {
@@ -440,7 +451,7 @@ fn link_reference(
     };
     let obs = proxy_observation(file_id, target_id, proof, scan_time, file_id.as_str())?;
     let obs_id = obs.id();
-    store.insert_observation_typed(&obs)?;
+    insert_for_session(store, history, &obs)?;
     super::scan::upsert_edge_with_link(store, history, &edge, Some((&obs_id, "direct")))?;
     Ok(())
 }
@@ -484,7 +495,7 @@ fn link_proxy(
         upstream.file.as_str(),
     )?;
     let obs_id = obs.id();
-    store.insert_observation_typed(&obs)?;
+    insert_for_session(store, history, &obs)?;
     super::scan::upsert_edge_with_link(store, history, &edge, Some((&obs_id, "support")))?;
     Ok(())
 }

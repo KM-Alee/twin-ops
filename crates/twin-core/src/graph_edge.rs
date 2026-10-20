@@ -61,7 +61,7 @@ impl GraphEdge {
         r#"{"inference":"active_connection_to_listening_service"}"#;
     const SERVICE_UNIX_DEPENDENCY_METADATA: &str =
         r#"{"inference":"unix_connection_to_listener_service"}"#;
-    pub fn observed_socket_activates_service(
+    pub fn observed_activates_service(
         socket_unit: &NodeId,
         service_unit: &NodeId,
         seen_at: TimestampNs,

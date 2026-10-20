@@ -41,7 +41,7 @@ fn impact_at(
     request: &ImpactRequest,
     db_path: &std::path::Path,
 ) -> Result<ImpactResult, AppError> {
-    crate::config_io::load(layout, request.config_override.as_deref())?;
+    let config = crate::config_io::load(layout, request.config_override.as_deref())?;
     if !db_path.exists() {
         return Err(ImpactError::DatabaseNotInitialized.into());
     }
@@ -57,7 +57,13 @@ fn impact_at(
         .ok_or_else(|| ImpactError::NodeNotFound { id: target.clone() })?;
 
     match node.kind() {
-        NodeKind::Service => service_impact(&store, &target, node.label(), request),
+        NodeKind::Service => service_impact(
+            &store,
+            &target,
+            node.label(),
+            request,
+            config.dependencies.window(),
+        ),
         NodeKind::Port | NodeKind::UnixSocket => {
             port_impact(&store, &target, node.label(), node.kind(), request)
         }
@@ -105,6 +111,7 @@ pub(crate) fn load_typed_service_dependents(
     store: &Store,
     target: &NodeId,
     label: &str,
+    dependency_window: std::time::Duration,
 ) -> Result<TypedServiceDependentAnalysis, AppError> {
     let target_summary = node_summary(target, label);
     let mut runtime = Vec::new();
@@ -180,6 +187,15 @@ pub(crate) fn load_typed_service_dependents(
         }
     }
 
+    runtime.extend(recent_dependents(
+        store,
+        target,
+        &target_summary.label,
+        dependency_window,
+        &runtime,
+        &mut seen_evidence,
+    )?);
+
     append_scan_health_note(store, &mut unknowns)?;
     append_coverage_unknowns(store, &mut unknowns)?;
 
@@ -194,12 +210,199 @@ pub(crate) fn load_typed_service_dependents(
     })
 }
 
+/// Inferred dependents whose connection is closed now but was seen inside the dependency
+/// window: idle connection pools and periodic clients. A dependent that is itself gone,
+/// or already has an open connection, is not repeated.
+fn recent_dependents(
+    store: &Store,
+    target: &NodeId,
+    target_label: &str,
+    window: std::time::Duration,
+    open: &[TypedServiceDependent],
+    seen_evidence: &mut HashSet<String>,
+) -> Result<Vec<TypedServiceDependent>, AppError> {
+    let now = twin_core::TimestampNs::now().as_i64();
+    let window_ns = i64::try_from(window.as_nanos()).unwrap_or(i64::MAX);
+    let cutoff = now.saturating_sub(window_ns);
+    let mut recent: Vec<TypedServiceDependent> = Vec::new();
+    for row in store
+        .list_edges_to(target.as_str())
+        .map_err(ImpactError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
+        if is_active_edge(&edge)
+            || edge.class() != EdgeClass::Inferred
+            || !matches!(edge.kind(), EdgeKind::DependsOn | EdgeKind::ConnectsTo)
+            || edge.last_seen().as_i64() < cutoff
+        {
+            continue;
+        }
+        let dependent_id = edge.from();
+        if open
+            .iter()
+            .chain(recent.iter())
+            .any(|known| &known.id == dependent_id)
+        {
+            continue;
+        }
+        let Some(dependent) = store
+            .get_node_typed(dependent_id)
+            .map_err(ImpactError::Store)?
+            .filter(|node| node.state() == twin_core::NodeState::Active)
+        else {
+            continue;
+        };
+        let observation_ids: Vec<String> = store
+            .list_observations_for_edge(edge.id().as_str())
+            .map_err(ImpactError::Store)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        let mut evidence = Vec::new();
+        collect_edge_evidence(
+            store,
+            &observation_ids,
+            &mut evidence,
+            seen_evidence,
+            "Inferred: connection seen recently, closed now",
+        );
+        recent.push(TypedServiceDependent {
+            id: dependent_id.clone(),
+            label: dependent.label().to_string(),
+            edge_kind: EdgeKind::DependsOn,
+            edge_class: edge.class(),
+            impact_kind: twin_core::DependentImpactKind::Runtime,
+            reason: {
+                let mut reason = format!(
+                    "no open connection to {target_label} now; last seen {} ago ({}×)",
+                    super::duration::age_label(now - edge.last_seen().as_i64()),
+                    edge.evidence_count().max(1)
+                );
+                for context in [
+                    timer_context(store, dependent_id, now)?,
+                    cron_context(store, dependent_id)?,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    reason.push_str("; ");
+                    reason.push_str(&context);
+                }
+                reason
+            },
+            to_id: target.clone(),
+            to_label: target_label.to_string(),
+            edge_id: edge.id().clone(),
+            evidence,
+            observation_ids,
+        });
+    }
+    Ok(recent)
+}
+
+/// "started by backup.timer (last ran 3 d ago, next in 4 h)" when a timer starts `service`.
+fn timer_context(store: &Store, service: &NodeId, now: i64) -> Result<Option<String>, AppError> {
+    for row in store
+        .list_active_edges_to(service.as_str())
+        .map_err(ImpactError::Store)?
+    {
+        let edge = GraphEdge::try_from(&row).map_err(ImpactError::Store)?;
+        if edge.kind() != EdgeKind::DependsOn || !edge.metadata().timer_activation() {
+            continue;
+        }
+        let timer = edge.from();
+        let label = timer
+            .as_str()
+            .strip_prefix("service:")
+            .unwrap_or(timer.as_str());
+        let metadata = store
+            .get_node_typed(timer)
+            .map_err(ImpactError::Store)?
+            .and_then(|node| {
+                serde_json::from_str::<serde_json::Value>(node.metadata().as_str()).ok()
+            })
+            .unwrap_or_default();
+        let at = |key: &str| {
+            metadata
+                .get(key)
+                .and_then(|value| value.as_str())
+                .and_then(|value| value.parse::<i64>().ok())
+        };
+        let mut schedule = Vec::new();
+        if let Some(last) = at("timer_last_trigger_ns") {
+            schedule.push(format!(
+                "last ran {} ago",
+                super::duration::age_label(now - last)
+            ));
+        }
+        if let Some(next) = at("timer_next_elapse_ns").filter(|next| *next > now) {
+            schedule.push(format!(
+                "next in {}",
+                super::duration::age_label(next - now)
+            ));
+        }
+        if schedule.is_empty() {
+            schedule.push("schedule unknown".to_string());
+        }
+        return Ok(Some(format!(
+            "started by {label} ({})",
+            schedule.join(", ")
+        )));
+    }
+    Ok(None)
+}
+
+/// "runs cron jobs backup:1 (@daily, backup.sh), …" when `service` is a cron daemon. The
+/// connection belonged to one of its jobs; which one is not observed.
+fn cron_context(store: &Store, service: &NodeId) -> Result<Option<String>, AppError> {
+    let mut jobs = Vec::new();
+    for row in store
+        .list_active_edges_from(service.as_str())
+        .map_err(ImpactError::Store)?
+    {
+        let Ok(target) = NodeId::from_str(&row.to_node_id) else {
+            continue;
+        };
+        if row.kind != "owns" || target.kind() != Some(NodeKind::CronJob) {
+            continue;
+        }
+        let Some(job) = store.get_node_typed(&target).map_err(ImpactError::Store)? else {
+            continue;
+        };
+        let programs = serde_json::from_str::<serde_json::Value>(job.metadata().as_str())
+            .ok()
+            .and_then(|metadata| metadata.get("programs").cloned())
+            .and_then(|programs| serde_json::from_value::<Vec<String>>(programs).ok())
+            .unwrap_or_default();
+        jobs.push(match programs.first() {
+            Some(program) => format!(
+                "{} runs {}",
+                job.label(),
+                program.rsplit('/').next().unwrap_or(program)
+            ),
+            None => job.label().to_string(),
+        });
+    }
+    if jobs.is_empty() {
+        return Ok(None);
+    }
+    jobs.sort();
+    let more = jobs.len().saturating_sub(3);
+    jobs.truncate(3);
+    let mut text = format!("runs cron jobs: {}", jobs.join(", "));
+    if more > 0 {
+        text.push_str(&format!(" and {more} more"));
+    }
+    Ok(Some(text))
+}
+
 pub(crate) fn load_service_dependent_analysis(
     store: &Store,
     target: &NodeId,
     label: &str,
+    dependency_window: std::time::Duration,
 ) -> Result<ServiceDependentAnalysis, AppError> {
-    let typed = load_typed_service_dependents(store, target, label)?;
+    let typed = load_typed_service_dependents(store, target, label, dependency_window)?;
     Ok(ServiceDependentAnalysis {
         direct_dependents: typed
             .runtime
@@ -306,8 +509,9 @@ fn service_impact(
     target: &NodeId,
     label: &str,
     request: &ImpactRequest,
+    dependency_window: std::time::Duration,
 ) -> Result<ImpactResult, AppError> {
-    let analysis = load_service_dependent_analysis(store, target, label)?;
+    let analysis = load_service_dependent_analysis(store, target, label, dependency_window)?;
     let mut unknowns = analysis.unknowns;
     let (impact_paths, path_scoring) = {
         let path_analysis = load_service_impact_paths(store, target, label, request.max_depth)?;
@@ -883,13 +1087,18 @@ fn append_coverage_unknowns(
                         .get("path")
                         .and_then(|value| value.as_str())
                         .map(str::to_string);
-                    let pattern = warning_pattern(detail);
+                    let pattern = super::scan_quality::warning_pattern(detail);
+                    let count = warning
+                        .get("count")
+                        .and_then(|value| value.as_u64())
+                        .and_then(|count| usize::try_from(count).ok())
+                        .unwrap_or(1);
                     match grouped
                         .iter_mut()
                         .find(|(known, _, _, _)| *known == pattern)
                     {
-                        Some(entry) => entry.3 += 1,
-                        None => grouped.push((pattern, detail.to_string(), source, 1)),
+                        Some(entry) => entry.3 += count,
+                        None => grouped.push((pattern, detail.to_string(), source, count)),
                     }
                 }
                 for (_, detail, source, count) in grouped {
@@ -914,45 +1123,6 @@ fn append_coverage_unknowns(
         }
     }
     Ok(())
-}
-
-/// Masks numbers, paths and IPv6 literals so per-pid/per-socket warnings share one
-/// pattern.
-fn warning_pattern(detail: &str) -> String {
-    let mut pattern = String::with_capacity(detail.len());
-    let mut in_brackets = false;
-    let mut in_path = false;
-    for ch in detail.chars() {
-        if in_path {
-            if ch.is_whitespace() {
-                in_path = false;
-                pattern.push(ch);
-            }
-            continue;
-        }
-        match ch {
-            '/' | '@' if pattern.is_empty() || pattern.ends_with(' ') => {
-                in_path = true;
-                pattern.push_str("/#");
-            }
-            '[' => {
-                in_brackets = true;
-                pattern.push_str("[#");
-            }
-            ']' => {
-                in_brackets = false;
-                pattern.push(']');
-            }
-            _ if in_brackets => {}
-            '0'..='9' => {
-                if !pattern.ends_with('#') {
-                    pattern.push('#');
-                }
-            }
-            other => pattern.push(other),
-        }
-    }
-    pattern
 }
 
 fn evidence_adjustments(

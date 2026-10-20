@@ -240,15 +240,12 @@ pub(crate) fn ebpf_connect_evidence(
     let mut socket = false;
     let mut sample = None;
     for obs_id in observation_ids {
-        let Ok(id) = ObservationId::from_str(obs_id) else {
-            continue;
-        };
-        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+        let Some((obs, sightings)) = observation_sightings(store, obs_id) else {
             continue;
         };
         match obs.kind() {
             ObservationKind::EbpfConnect => {
-                connects += 1;
+                connects = connects.saturating_add(sightings);
                 sample = Some(obs.id().to_string());
             }
             ObservationKind::TcpConnectionSeen
@@ -273,6 +270,17 @@ pub(crate) fn ebpf_connect_evidence(
     })
 }
 
+/// A stored observation and how many times that unchanged event was seen.
+fn observation_sightings(store: &Store, obs_id: &str) -> Option<(Observation, u64)> {
+    ObservationId::from_str(obs_id).ok()?;
+    let row = store.get_observation(obs_id).ok()??;
+    let observation = Observation::try_from(&row).ok()?;
+    Some((
+        observation,
+        u64::try_from(row.seen_count.max(1)).unwrap_or(1),
+    ))
+}
+
 fn connect_counts(store: &Store, edge_id: &str) -> Result<(u64, bool), AppError> {
     let links = store
         .list_observations_for_edge(edge_id)
@@ -280,14 +288,11 @@ fn connect_counts(store: &Store, edge_id: &str) -> Result<(u64, bool), AppError>
     let mut connects = 0u64;
     let mut socket = false;
     for (obs_id, _) in links {
-        let Ok(id) = ObservationId::from_str(&obs_id) else {
-            continue;
-        };
-        let Ok(Some(obs)) = store.get_observation_typed(id) else {
+        let Some((obs, sightings)) = observation_sightings(store, &obs_id) else {
             continue;
         };
         match obs.kind() {
-            ObservationKind::EbpfConnect => connects += 1,
+            ObservationKind::EbpfConnect => connects = connects.saturating_add(sightings),
             ObservationKind::TcpConnectionSeen | ObservationKind::TcpSocketSeen => socket = true,
             _ => {}
         }

@@ -226,6 +226,18 @@ fn upsert_service_state_node(
             }
         }
     }
+    if unit.ends_with(".timer") {
+        for key in [
+            "timer_schedule_known",
+            "timer_last_trigger_ns",
+            "timer_next_elapse_ns",
+        ] {
+            meta.remove(key);
+            if let Some(value) = obs.metadata().get(key) {
+                meta.insert(key.into(), value.clone());
+            }
+        }
+    }
     let node = GraphNode::from_parts(GraphNodeParts {
         id,
         kind: NodeKind::Service,

@@ -24,6 +24,10 @@ fn run_inner(layout: &TwinLayout, request: InitRequest) -> Result<InitResult, In
     let db_created = !store.is_initialized().map_err(InitError::Migration)?;
     store.initialize().map_err(InitError::Migration)?;
     let schema_version = store.schema_version().map_err(InitError::Migration)?;
+    let mut store = store;
+    let merged = store
+        .merge_all_repeated_observations(super::scan::OBSERVATION_MERGE_BATCH)
+        .map_err(InitError::Migration)?;
 
     Ok(InitResult {
         config_path: cfg_path,
@@ -33,6 +37,7 @@ fn run_inner(layout: &TwinLayout, request: InitRequest) -> Result<InitResult, In
         config_updated,
         db_created,
         schema_version,
+        repeated_observations_collapsed: merged.merged,
     })
 }
 

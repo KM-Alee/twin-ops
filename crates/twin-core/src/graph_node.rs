@@ -67,11 +67,12 @@ impl GraphNode {
         }
     }
 
+    /// A plain sighting knows nothing about the content, so it keeps a stored fingerprint.
     pub fn file(path: &str, seen_at: TimestampNs, existing: Option<&Self>) -> Self {
         let id = NodeId::file(path);
-        let (first_seen, valid_from) = match existing {
-            Some(node) => (node.first_seen, node.valid_from),
-            None => (seen_at, seen_at),
+        let (first_seen, valid_from, metadata) = match existing {
+            Some(node) => (node.first_seen, node.valid_from, node.metadata.clone()),
+            None => (seen_at, seen_at, GraphMetadata::empty()),
         };
         Self {
             id,
@@ -82,7 +83,7 @@ impl GraphNode {
             last_seen: seen_at,
             valid_from,
             valid_to: None,
-            metadata: GraphMetadata::empty(),
+            metadata,
         }
     }
 

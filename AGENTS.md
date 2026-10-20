@@ -252,3 +252,10 @@ Systemd D-Bus `Socket.Listen` is observed manager configuration, never proof of 
 - Interface data comes from `/proc/net` text via `twin_collectors::parse_interfaces`; no netlink, ioctls or unsafe.
 - Release artifacts: musl static builds via `cross`, `.sha256` per artifact plus `SHA256SUMS`, provenance attestation. `install.sh` must never use sudo or write outside its install directory.
 
+
+## Slice 26 conventions
+
+- Observations are facts with sightings: `timestamp_ns` is the first sighting, and `last_seen_ns`/`seen_count` count repeats. A new row merges into the previous row only via `Store::merge_repeated_observations` (end of every scan pass, and `twin init`). The previous row must have been seen in the same collector's current or previous run, not be sealed by `reset_node_incarnation`, and support exactly the same edges. Recency uses `last_seen_ns` (never newer than the read time); eBPF repeat counts sum `seen_count`. Never add per-sighting keys to observation metadata without adding them to the fingerprint's volatile list.
+- History records the net change of a pass (`ScanHistorySession` `PassWrite`). Sighting counters (`evidence_count`, `last_seen_ns`, `runtime_observed_at_ns`) are not changes. Retention keeps each entity's state at the cutoff.
+- Collector-run metadata must stay bounded per run (group repeated warnings with counts).
+- `[dependencies] window_days` keeps closed inferred connections as runtime dependents with a "last seen … ago (N×)" reason. Timers are `timer → service` `depends_on` edges with `timer_activation`; cron jobs are `cron_job` nodes owned by the cron daemon's service. Cron commands are classified transiently with `preflight::scheduled_facts`, and only program names and typed operations are stored, never command text or environment values (sentinel-tested).

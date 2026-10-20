@@ -495,3 +495,67 @@ fn oversized_unit_and_malformed_socket_dependencies_are_explicit_gaps() {
         .any(|warning| warning.detail().contains("unterminated")));
     assert!(batch.observations().is_empty());
 }
+
+#[test]
+fn timers_declare_the_unit_they_start_with_drop_in_overrides() {
+    let root = tempfile::tempdir().expect("root");
+    for (unit, content) in [
+        ("backup.timer", "[Timer]\nOnCalendar=daily\n"),
+        (
+            "rotate.timer",
+            "[Timer]\nOnCalendar=hourly\nUnit=logrotate.service\n",
+        ),
+        (
+            "moved.timer",
+            "[Timer]\nOnCalendar=weekly\nUnit=old.service\n",
+        ),
+        ("templated.timer", "[Timer]\nUnit=job@%i.service\n"),
+        ("broken.timer", "[Unit]\nDescription=no timer section\n"),
+    ] {
+        std::fs::write(root.path().join(unit), content).expect("timer");
+    }
+    std::fs::create_dir_all(root.path().join("moved.timer.d")).expect("drop-in dir");
+    std::fs::write(
+        root.path().join("moved.timer.d/override.conf"),
+        "[Timer]\nUnit=new.service\n",
+    )
+    .expect("drop-in");
+    let batch = SystemdUnitCollector::new(vec![root.path().to_path_buf()])
+        .collect(twin_core::TimestampNs::new(1))
+        .expect("collect");
+    let mut starts: Vec<_> = batch
+        .observations()
+        .iter()
+        .filter(|obs| obs.kind == twin_observation::ObservationKind::SystemdTimerActivates)
+        .map(|obs| {
+            let field = |key: &str| {
+                obs.metadata
+                    .get(key)
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            (field("timer_unit"), field("service_unit"))
+        })
+        .collect();
+    starts.sort();
+    assert_eq!(
+        starts,
+        [
+            ("backup.timer".to_string(), "backup.service".to_string()),
+            ("moved.timer".to_string(), "new.service".to_string()),
+            ("rotate.timer".to_string(), "logrotate.service".to_string()),
+        ]
+    );
+    let warned: Vec<_> = batch
+        .warnings()
+        .iter()
+        .filter_map(|warning| warning.path().file_name())
+        .map(|name| name.to_string_lossy().to_string())
+        .collect();
+    assert!(warned.contains(&"broken.timer".to_string()), "{warned:?}");
+    assert!(
+        warned.contains(&"templated.timer".to_string()),
+        "{warned:?}"
+    );
+}

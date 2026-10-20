@@ -3,9 +3,11 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::error::CollectorError;
 use crate::systemd::unit_parse::{
-    apply_socket_dropin, effective_unit_name, merge_dependencies, parse_socket_unit,
-    parse_unit_file, template_unit_name_for_instance, SocketUnitConfig, UnitDependencies,
+    apply_socket_dropin, apply_timer_dropin, effective_unit_name, merge_dependencies,
+    parse_socket_unit, parse_timer_unit, parse_unit_file, template_unit_name_for_instance,
+    SocketUnitConfig, TimerUnitConfig, UnitDependencies,
 };
 use crate::systemd::warning::{SystemdWarning, SystemdWarningKind};
 
@@ -26,6 +28,33 @@ pub struct EffectiveUnit {
     pub main_path: PathBuf,
     pub dependencies: UnitDependencies,
     pub socket_config: Option<SocketUnitConfig>,
+    pub timer_config: Option<TimerUnitConfig>,
+}
+
+struct ParsedUnit {
+    path: PathBuf,
+    dependencies: UnitDependencies,
+    socket: Option<SocketUnitConfig>,
+    timer: Option<TimerUnitConfig>,
+}
+
+fn parse_unit(path: &Path, unit_name: &str, content: &str) -> Result<ParsedUnit, CollectorError> {
+    let socket = if unit_name.ends_with(".socket") {
+        Some(parse_socket_unit(path, content)?)
+    } else {
+        None
+    };
+    let timer = if unit_name.ends_with(".timer") {
+        Some(parse_timer_unit(path, content)?)
+    } else {
+        None
+    };
+    Ok(ParsedUnit {
+        path: path.to_path_buf(),
+        dependencies: parse_unit_file(path, content)?,
+        socket,
+        timer,
+    })
 }
 
 pub fn discover_units(
@@ -34,8 +63,7 @@ pub fn discover_units(
     instances: &[String],
 ) -> (Vec<EffectiveUnit>, Vec<SystemdWarning>) {
     let mut warnings = Vec::new();
-    let mut by_name: BTreeMap<String, (PathBuf, UnitDependencies, Option<SocketUnitConfig>)> =
-        BTreeMap::new();
+    let mut by_name: BTreeMap<String, ParsedUnit> = BTreeMap::new();
 
     let mut selected_names = BTreeSet::new();
     for root in search_roots {
@@ -60,7 +88,7 @@ pub fn discover_units(
             let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
                 continue;
             };
-            if ext != "service" && ext != "socket" {
+            if !matches!(ext, "service" | "socket" | "timer") {
                 continue;
             }
             let Some(unit_name) = effective_unit_name(&path) else {
@@ -99,45 +127,16 @@ pub fn discover_units(
                     continue;
                 }
             };
-            let (deps, socket_config) = if ext == "socket" {
-                let socket = match parse_socket_unit(&path, &content) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warnings.push(SystemdWarning::new(
-                            SystemdWarningKind::ParseError,
-                            path.clone(),
-                            e.to_string(),
-                        ));
-                        continue;
-                    }
-                };
-                let dependencies = match parse_unit_file(&path, &content) {
-                    Ok(dependencies) => dependencies,
-                    Err(error) => {
-                        warnings.push(SystemdWarning::new(
-                            SystemdWarningKind::ParseError,
-                            path.clone(),
-                            error.to_string(),
-                        ));
-                        continue;
-                    }
-                };
-                (dependencies, Some(socket))
-            } else {
-                let deps = match parse_unit_file(&path, &content) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warnings.push(SystemdWarning::new(
-                            SystemdWarningKind::ParseError,
-                            path.clone(),
-                            e.to_string(),
-                        ));
-                        continue;
-                    }
-                };
-                (deps, None)
-            };
-            by_name.insert(unit_name, (path, deps, socket_config));
+            match parse_unit(&path, &unit_name, &content) {
+                Ok(parsed) => {
+                    by_name.insert(unit_name, parsed);
+                }
+                Err(error) => warnings.push(SystemdWarning::new(
+                    SystemdWarningKind::ParseError,
+                    path.clone(),
+                    error.to_string(),
+                )),
+            }
         }
     }
 
@@ -197,16 +196,9 @@ pub fn discover_units(
                 continue;
             }
         };
-        let parsed = if unit_name.ends_with(".socket") {
-            parse_socket_unit(&path, &content).and_then(|socket| {
-                parse_unit_file(&path, &content).map(|dependencies| (dependencies, Some(socket)))
-            })
-        } else {
-            parse_unit_file(&path, &content).map(|deps| (deps, None))
-        };
-        match parsed {
-            Ok((deps, socket)) => {
-                by_name.insert(unit_name, (path, deps, socket));
+        match parse_unit(&path, &unit_name, &content) {
+            Ok(parsed) => {
+                by_name.insert(unit_name, parsed);
             }
             Err(error) => warnings.push(SystemdWarning::new(
                 SystemdWarningKind::ParseError,
@@ -216,7 +208,13 @@ pub fn discover_units(
         }
     }
     apply_dropins(search_roots, read, &mut by_name, &mut warnings);
-    for (name, (path, deps, socket)) in &mut by_name {
+    for (name, unit) in &mut by_name {
+        let ParsedUnit {
+            path,
+            dependencies: deps,
+            socket,
+            timer,
+        } = unit;
         for targets in [&mut deps.requires, &mut deps.wants, &mut deps.binds_to] {
             targets.retain_mut(|target| {
                 if let Some(expanded) = crate::systemd::unit_parse::expand_specifiers(target, name)
@@ -272,18 +270,27 @@ pub fn discover_units(
                 }
             }
         }
+        if let Some(target) = timer.as_mut().and_then(|timer| timer.unit.as_mut()) {
+            match crate::systemd::unit_parse::expand_specifiers(target, name) {
+                Some(expanded) => *target = expanded,
+                None => warnings.push(SystemdWarning::new(
+                    SystemdWarningKind::ParseError,
+                    path.clone(),
+                    "unsupported timer unit specifier",
+                )),
+            }
+        }
     }
 
     let units = by_name
         .into_iter()
-        .map(
-            |(unit_name, (main_path, dependencies, socket_config))| EffectiveUnit {
-                unit_name,
-                main_path,
-                dependencies,
-                socket_config,
-            },
-        )
+        .map(|(unit_name, parsed)| EffectiveUnit {
+            unit_name,
+            main_path: parsed.path,
+            dependencies: parsed.dependencies,
+            socket_config: parsed.socket,
+            timer_config: parsed.timer,
+        })
         .collect();
     (units, warnings)
 }
@@ -291,10 +298,16 @@ pub fn discover_units(
 fn apply_dropins(
     roots: &[PathBuf],
     read: &dyn UnitFileReader,
-    by_name: &mut BTreeMap<String, (PathBuf, UnitDependencies, Option<SocketUnitConfig>)>,
+    by_name: &mut BTreeMap<String, ParsedUnit>,
     warnings: &mut Vec<SystemdWarning>,
 ) {
-    for (unit, (_, dependencies, socket)) in by_name {
+    for (unit, parsed) in by_name {
+        let ParsedUnit {
+            dependencies,
+            socket,
+            timer,
+            ..
+        } = parsed;
         let mut files: BTreeMap<String, PathBuf> = BTreeMap::new();
         for name in dropin_names(unit) {
             for root in roots {
@@ -339,6 +352,20 @@ fn apply_dropins(
                 let mut candidate = socket.clone();
                 match apply_socket_dropin(&path, &mut candidate, &content) {
                     Ok(()) => *socket = candidate,
+                    Err(error) => {
+                        warnings.push(SystemdWarning::new(
+                            SystemdWarningKind::ParseError,
+                            path,
+                            error.to_string(),
+                        ));
+                        continue;
+                    }
+                }
+            }
+            if let Some(timer) = timer {
+                let mut candidate = timer.clone();
+                match apply_timer_dropin(&path, &mut candidate, &content) {
+                    Ok(()) => *timer = candidate,
                     Err(error) => {
                         warnings.push(SystemdWarning::new(
                             SystemdWarningKind::ParseError,

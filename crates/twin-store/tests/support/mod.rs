@@ -72,6 +72,8 @@ pub fn observation_row(id: &str, source: &str, kind: &str, ts_ns: i64) -> Observ
         redaction_state: "none".to_string(),
         metadata_json: "{}".to_string(),
         collector_run_id: None,
+        last_seen_ns: ts_ns,
+        seen_count: 1,
     }
 }
 

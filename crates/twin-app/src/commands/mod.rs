@@ -24,6 +24,7 @@ mod scan_cgroup_validate;
 mod scan_config_files;
 mod scan_containerd;
 mod scan_containers;
+mod scan_cron;
 mod scan_history;
 mod scan_libraries;
 mod scan_mounts;

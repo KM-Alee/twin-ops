@@ -144,6 +144,7 @@ pub fn run<S: WatchSink>(
             &ScanRequest {
                 docker_fixture: None,
                 containerd_fixture: None,
+                cron_root: None,
                 config_override: run.config_override.clone(),
                 samples: 1,
                 interval_secs: 1,

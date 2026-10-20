@@ -145,6 +145,7 @@ mod tests {
             main_path: path,
             dependencies: UnitDependencies::default(),
             socket_config: None,
+            timer_config: None,
         }
     }
 

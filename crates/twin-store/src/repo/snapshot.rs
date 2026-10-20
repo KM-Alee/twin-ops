@@ -15,6 +15,15 @@ pub struct SnapshotRow {
     pub edge_count: i64,
 }
 
+/// A proof reference captured with a snapshot. `last_seen_ns` is when the observation had
+/// last been seen at capture time; later sightings never make a snapshot look fresher.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotProofRef {
+    pub observation_id: String,
+    pub role: String,
+    pub last_seen_ns: Option<i64>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
     #[error("snapshot `{name}` already exists")]
@@ -101,8 +110,8 @@ impl Store {
                     .map_err(|source| StoreError::Upsert { source })?;
             }
             store.conn.execute(
-                "INSERT INTO snapshot_edge_observations (snapshot_name, edge_id, observation_id, role)
-                 SELECT ?1, eo.edge_id, eo.observation_id, eo.role FROM edge_observations eo
+                "INSERT INTO snapshot_edge_observations (snapshot_name, edge_id, observation_id, role, last_seen_ns)
+                 SELECT ?1, eo.edge_id, eo.observation_id, eo.role, MIN(o.last_seen_ns, ?2) FROM edge_observations eo
                  JOIN snapshot_edges se ON se.snapshot_name = ?1 AND se.id = eo.edge_id
                  JOIN observations o ON o.id = eo.observation_id
                  WHERE o.timestamp_ns <= ?2",
@@ -121,16 +130,22 @@ impl Store {
         &self,
         name: &str,
         edge_id: &str,
-    ) -> Result<Vec<(String, String)>, StoreError> {
+    ) -> Result<Vec<SnapshotProofRef>, StoreError> {
         let mut statement = self
             .conn
             .prepare(
-                "SELECT observation_id, role FROM snapshot_edge_observations
+                "SELECT observation_id, role, last_seen_ns FROM snapshot_edge_observations
              WHERE snapshot_name = ?1 AND edge_id = ?2 ORDER BY observation_id, role",
             )
             .map_err(|source| StoreError::Query { source })?;
         let rows = statement
-            .query_map(params![name, edge_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .query_map(params![name, edge_id], |row| {
+                Ok(SnapshotProofRef {
+                    observation_id: row.get(0)?,
+                    role: row.get(1)?,
+                    last_seen_ns: row.get(2)?,
+                })
+            })
             .map_err(|source| StoreError::Query { source })?;
         collect_rows(rows)
     }

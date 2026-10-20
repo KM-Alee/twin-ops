@@ -174,6 +174,7 @@ fn why_explains_config_to_runtime_ownership_chain_without_arbitrary_metadata() {
             id: format!("00000000-0000-4000-8000-{index:012}"), source:source.into(),kind:obs_kind.into(),
             subject_node_id:Some(from.into()),object_node_id:Some(to.into()),timestamp_ns:now,
             confidence_hint:"high".into(),redaction_state:"none".into(),collector_run_id:None,
+            last_seen_ns:now,seen_count:1,
             metadata_json:serde_json::json!({"pid":42,"target":to,"line":3,"password":"NEVER_DISPLAY_SECRET","arbitrary":"NEVER_DISPLAY_ARBITRARY","__raw_ref":"/etc/nginx/nginx.conf"}).to_string(),
         };
         store.insert_observation(&observation).expect("observation");
@@ -297,6 +298,8 @@ fn old_observation_is_stale_even_when_latest_scan_ended_at_the_same_time() {
         redaction_state: "none".into(),
         metadata_json: "{}".into(),
         collector_run_id: Some(run),
+        last_seen_ns: 0,
+        seen_count: 1,
     };
     store.insert_observation(&observation).expect("observation");
     store

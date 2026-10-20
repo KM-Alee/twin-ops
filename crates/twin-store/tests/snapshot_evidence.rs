@@ -1,7 +1,15 @@
 mod support;
 
 use twin_core::{EdgeId, TimestampNs};
-use twin_store::Store;
+use twin_store::{SnapshotProofRef, Store};
+
+fn proof(id: &str, last_seen_ns: i64) -> Vec<SnapshotProofRef> {
+    vec![SnapshotProofRef {
+        observation_id: id.into(),
+        role: "direct".into(),
+        last_seen_ns: Some(last_seen_ns),
+    }]
+}
 
 #[test]
 fn snapshot_keeps_proof_references_after_incarnation_reset_and_retention() {
@@ -41,14 +49,14 @@ fn snapshot_keeps_proof_references_after_incarnation_reset_and_retention() {
         store
             .load_snapshot_observations_for_edge("baseline", edge)
             .expect("baseline"),
-        vec![("old".into(), "direct".into())]
+        proof("old", 10)
     );
     store.prune_retention(25, 25, 0).expect("retention");
     assert_eq!(
         store
             .load_snapshot_observations_for_edge("baseline", edge)
             .expect("retained references"),
-        vec![("old".into(), "direct".into())]
+        proof("old", 10)
     );
 }
 
@@ -70,20 +78,17 @@ fn v5_snapshot_backfill_excludes_post_snapshot_observations() {
             10,
         ))
         .expect("edge");
+    let conn = rusqlite::Connection::open(&path).expect("fixture");
     for (id, timestamp) in [("old", 10), ("future", 30)] {
-        store
-            .insert_observation(&support::observation_row(
-                id,
-                "proc",
-                "process_seen",
-                timestamp,
-            ))
-            .expect("observation");
+        conn.execute(
+            "INSERT INTO observations (id, source, kind, timestamp_ns) VALUES (?1, 'proc', 'process_seen', ?2)",
+            rusqlite::params![id, timestamp],
+        )
+        .expect("v5 observation");
         store
             .link_edge_observation("edge", id, "direct")
             .expect("link");
     }
-    let conn = rusqlite::Connection::open(&path).expect("fixture");
     conn.execute_batch(
         "INSERT INTO snapshots VALUES ('baseline',20,1,1);
 INSERT INTO snapshot_nodes SELECT 'baseline', * FROM nodes;
@@ -95,7 +100,7 @@ INSERT INTO snapshot_edges SELECT 'baseline', * FROM edges;",
         store
             .load_snapshot_observations_for_edge("baseline", "edge")
             .expect("backfill"),
-        vec![("old".into(), "direct".into())]
+        proof("old", 10)
     );
     conn.execute("DELETE FROM snapshots WHERE name='baseline'", [])
         .expect("remove baseline");

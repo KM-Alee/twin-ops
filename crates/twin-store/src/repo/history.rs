@@ -53,7 +53,7 @@ impl Store {
         change_kind: ChangeKind,
         recorded_at_ns: i64,
         collector_run_id: Option<i64>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         self.conn
             .execute(
                 "INSERT INTO node_history (
@@ -77,7 +77,7 @@ impl Store {
                 ],
             )
             .map_err(|source| StoreError::Upsert { source })?;
-        Ok(())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn insert_edge_history(
@@ -86,7 +86,7 @@ impl Store {
         change_kind: ChangeKind,
         recorded_at_ns: i64,
         collector_run_id: Option<i64>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         self.conn
             .execute(
                 "INSERT INTO edge_history (
@@ -113,6 +113,20 @@ impl Store {
                     collector_run_id,
                 ],
             )
+            .map_err(|source| StoreError::Upsert { source })?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn delete_node_history(&mut self, id: i64) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM node_history WHERE id = ?1", params![id])
+            .map_err(|source| StoreError::Upsert { source })?;
+        Ok(())
+    }
+
+    pub fn delete_edge_history(&mut self, id: i64) -> Result<(), StoreError> {
+        self.conn
+            .execute("DELETE FROM edge_history WHERE id = ?1", params![id])
             .map_err(|source| StoreError::Upsert { source })?;
         Ok(())
     }

@@ -6,20 +6,48 @@ use twin_core::{
 use twin_observation::{Observation, ObservationKind};
 use twin_store::{Store, StoreError};
 
-pub(crate) fn persist_socket_activation_in_scan(
+/// What starts a service: a socket on connection or a timer on schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Activation {
+    Socket,
+    Timer,
+}
+
+impl Activation {
+    fn observation_kind(self) -> ObservationKind {
+        match self {
+            Self::Socket => ObservationKind::SystemdSocketActivates,
+            Self::Timer => ObservationKind::SystemdTimerActivates,
+        }
+    }
+
+    fn activator_key(self) -> &'static str {
+        match self {
+            Self::Socket => "socket_unit",
+            Self::Timer => "timer_unit",
+        }
+    }
+}
+
+pub(crate) fn persist_activation_in_scan(
     store: &mut Store,
     history: &mut super::scan_history::ScanHistorySession,
     edge_cache: &mut super::scan::ScanEdgeCache,
     observations: &[Observation],
     scan_time: TimestampNs,
     seen_service_depends: &mut HashSet<(NodeId, NodeId)>,
+    activation: Activation,
 ) -> Result<usize, StoreError> {
     let mut count = 0usize;
     for obs in observations {
-        if obs.kind() != ObservationKind::SystemdSocketActivates {
+        if obs.kind() != activation.observation_kind() {
             continue;
         }
-        let Some(socket_unit) = obs.metadata().get("socket_unit").and_then(|v| v.as_str()) else {
+        let Some(socket_unit) = obs
+            .metadata()
+            .get(activation.activator_key())
+            .and_then(|v| v.as_str())
+        else {
             continue;
         };
         let Some(service_unit) = obs.metadata().get("service_unit").and_then(|v| v.as_str()) else {
@@ -43,16 +71,22 @@ pub(crate) fn persist_socket_activation_in_scan(
             &service_id,
             super::scan_systemd_groups::EdgeObservationLink::Single(&obs.id(), "direct"),
             |existing| {
-                twin_core::GraphEdge::observed_socket_activates_service(
+                twin_core::GraphEdge::observed_activates_service(
                     &socket_id,
                     &service_id,
                     scan_time,
                     existing,
                     unit_path,
-                ).with_metadata(twin_core::GraphMetadata::from_json(serde_json::json!({
-                    "source": obs.source().to_string(), "socket_activation": true,
-                    "unit_path": unit_path, "accept": obs.metadata().get("accept").and_then(|value| value.as_bool()),
-                }).to_string()))
+                ).with_metadata(twin_core::GraphMetadata::from_json(match activation {
+                    Activation::Socket => serde_json::json!({
+                        "source": obs.source().to_string(), "socket_activation": true,
+                        "unit_path": unit_path, "accept": obs.metadata().get("accept").and_then(|value| value.as_bool()),
+                    }),
+                    Activation::Timer => serde_json::json!({
+                        "source": obs.source().to_string(), "timer_activation": true,
+                        "unit_path": unit_path,
+                    }),
+                }.to_string()))
             },
         )?;
         if seen_service_depends.insert((socket_id.clone(), service_id.clone())) {
@@ -96,6 +130,8 @@ fn upsert_service_unit_node(
 fn service_unit_metadata(unit: &str, existing: Option<&GraphNode>) -> GraphMetadata {
     let unit_type = if unit.ends_with(".socket") {
         "socket"
+    } else if unit.ends_with(".timer") {
+        "timer"
     } else if unit.ends_with("@.service") {
         "service_template"
     } else {
