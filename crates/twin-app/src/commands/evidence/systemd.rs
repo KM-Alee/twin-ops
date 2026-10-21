@@ -89,7 +89,15 @@ pub fn classify_dependent_impact_kind(
     is_dependent_running: bool,
 ) -> DependentImpactKind {
     if edge.class() == EdgeClass::Inferred {
-        return DependentImpactKind::Runtime;
+        // A declared endpoint is a dependency only while its client runs.
+        let is_declared = serde_json::from_str::<serde_json::Value>(edge.metadata().as_str())
+            .ok()
+            .is_some_and(|metadata| metadata["source"] == "config_declared");
+        return if is_declared && !is_dependent_running {
+            DependentImpactKind::Configured
+        } else {
+            DependentImpactKind::Runtime
+        };
     }
     if edge.kind() == twin_core::EdgeKind::DependsOn
         && serde_json::from_str::<serde_json::Value>(edge.metadata().as_str())

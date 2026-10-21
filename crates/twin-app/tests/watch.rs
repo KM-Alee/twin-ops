@@ -119,6 +119,17 @@ fn unavailable_ebpf_warns_and_still_ticks() {
     assert!(rec.ticks[0].baseline);
     assert_eq!(rec.ticks[1].processes_added, 0);
     assert_eq!(rec.ticks[1].processes_removed, 0);
+
+    let store = twin_store::Store::open(&home.layout.db_file()).expect("store");
+    let run = store
+        .latest_collector_run("ebpf")
+        .expect("read")
+        .expect("the attach attempt is a recorded coverage gap");
+    assert_eq!(run.status, "unavailable");
+    assert!(run
+        .error_message
+        .as_deref()
+        .is_some_and(|reason| reason.contains("older than 5.8")));
 }
 
 #[test]

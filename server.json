@@ -1,0 +1,59 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.KM-Alee/twin",
+  "title": "twin",
+  "description": "Read-only map of a Linux host: what runs, what depends on what, and what a command would break.",
+  "repository": {
+    "url": "https://github.com/KM-Alee/twin-ops",
+    "source": "github"
+  },
+  "version": "0.2.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/km-alee/twin:0.2.0",
+      "transport": { "type": "stdio" },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--volume",
+          "value": "/:/host:ro",
+          "description": "The host's filesystem, read-only; twin reads /host/proc, unit files, packages and sockets",
+          "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "--volume",
+          "value": "twin-data:/data",
+          "description": "twin's own store, kept between runs"
+        },
+        {
+          "type": "named",
+          "name": "--cap-drop",
+          "value": "ALL",
+          "description": "Drop every capability, then add back only the two read capabilities"
+        },
+        {
+          "type": "named",
+          "name": "--cap-add",
+          "value": "DAC_READ_SEARCH",
+          "description": "Read files and process entries other users own"
+        },
+        {
+          "type": "named",
+          "name": "--cap-add",
+          "value": "SYS_PTRACE",
+          "description": "Read other processes' sockets and descriptors in /proc (nothing is traced)"
+        },
+        {
+          "type": "named",
+          "name": "--security-opt",
+          "value": "no-new-privileges"
+        }
+      ],
+      "packageArguments": [
+        { "type": "positional", "value": "mcp" }
+      ]
+    }
+  ]
+}

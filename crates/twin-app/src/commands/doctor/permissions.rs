@@ -4,7 +4,7 @@ use crate::model::{DoctorPermissions, PermissionMode};
 
 pub fn check() -> DoctorPermissions {
     let base_mode = detect_permission_mode();
-    let proc_accessible = fs::read_dir("/proc").is_ok();
+    let proc_accessible = fs::read_dir(crate::paths::default_proc_root()).is_ok();
 
     if !proc_accessible {
         return DoctorPermissions {
@@ -49,7 +49,7 @@ fn detect_permission_mode() -> PermissionMode {
 }
 
 fn count_process_access() -> (usize, usize) {
-    let Ok(entries) = fs::read_dir("/proc") else {
+    let Ok(entries) = fs::read_dir(crate::paths::default_proc_root()) else {
         return (0, 0);
     };
 

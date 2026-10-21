@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use crate::error::CollectorError;
 
@@ -23,6 +24,87 @@ pub struct SocketUnitConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TimerUnitConfig {
     pub unit: Option<String>,
+}
+
+/// `[Service]` environment settings. Values can be credentials: they exist only for the
+/// caller to look for endpoints in, and `Debug` shows names alone.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ServiceEnvironment {
+    pub variables: Vec<(String, String)>,
+    pub files: Vec<EnvironmentFile>,
+}
+
+impl fmt::Debug for ServiceEnvironment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServiceEnvironment")
+            .field(
+                "variables",
+                &self
+                    .variables
+                    .iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>(),
+            )
+            .field("files", &self.files)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnvironmentFile {
+    pub path: PathBuf,
+    /// A leading `-` makes a missing file normal rather than a start failure.
+    pub is_optional: bool,
+}
+
+/// Applies `Environment=` and `EnvironmentFile=` from one unit file or drop-in, in order.
+/// An empty assignment resets the list, as systemd does. A malformed value is skipped and
+/// reported without its content.
+pub(crate) fn apply_service_environment(
+    environment: &mut ServiceEnvironment,
+    content: &str,
+) -> Vec<&'static str> {
+    let mut warnings = Vec::new();
+    let Ok(Some(section)) = parse_ini_section(content, "[Service]") else {
+        return warnings;
+    };
+    for (key, value) in section {
+        match key.as_str() {
+            "Environment" if value.is_empty() => environment.variables.clear(),
+            "Environment" => match super::syntax::words(&value) {
+                Ok(items) => {
+                    for item in items {
+                        let Some((name, value)) = item.split_once('=') else {
+                            warnings.push("Environment= item without a name");
+                            continue;
+                        };
+                        environment.variables.retain(|(known, _)| known != name);
+                        environment
+                            .variables
+                            .push((name.to_string(), value.to_string()));
+                    }
+                }
+                Err(_) => warnings.push("malformed Environment= value"),
+            },
+            "EnvironmentFile" if value.is_empty() => environment.files.clear(),
+            "EnvironmentFile" => {
+                let (is_optional, path) = match value.strip_prefix('-') {
+                    Some(path) => (true, path),
+                    None => (false, value.as_str()),
+                };
+                if path.starts_with('/') {
+                    environment.files.push(EnvironmentFile {
+                        path: PathBuf::from(path),
+                        is_optional,
+                    });
+                } else {
+                    warnings.push("EnvironmentFile= path is not absolute");
+                }
+            }
+            _ => {}
+        }
+    }
+    warnings
 }
 
 pub fn parse_unit_file(path: &Path, content: &str) -> Result<UnitDependencies, CollectorError> {

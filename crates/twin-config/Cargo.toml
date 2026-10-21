@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 twin-core = { workspace = true }
+serde_yaml = { workspace = true }

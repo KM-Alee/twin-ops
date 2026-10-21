@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::CollectorError;
 use crate::systemd::unit_parse::{
-    apply_socket_dropin, apply_timer_dropin, effective_unit_name, merge_dependencies,
-    parse_socket_unit, parse_timer_unit, parse_unit_file, template_unit_name_for_instance,
-    SocketUnitConfig, TimerUnitConfig, UnitDependencies,
+    apply_service_environment, apply_socket_dropin, apply_timer_dropin, effective_unit_name,
+    merge_dependencies, parse_socket_unit, parse_timer_unit, parse_unit_file,
+    template_unit_name_for_instance, ServiceEnvironment, SocketUnitConfig, TimerUnitConfig,
+    UnitDependencies,
 };
 use crate::systemd::warning::{SystemdWarning, SystemdWarningKind};
 
@@ -29,6 +30,7 @@ pub struct EffectiveUnit {
     pub dependencies: UnitDependencies,
     pub socket_config: Option<SocketUnitConfig>,
     pub timer_config: Option<TimerUnitConfig>,
+    pub environment: ServiceEnvironment,
 }
 
 struct ParsedUnit {
@@ -36,6 +38,8 @@ struct ParsedUnit {
     dependencies: UnitDependencies,
     socket: Option<SocketUnitConfig>,
     timer: Option<TimerUnitConfig>,
+    environment: ServiceEnvironment,
+    environment_warnings: Vec<&'static str>,
 }
 
 fn parse_unit(path: &Path, unit_name: &str, content: &str) -> Result<ParsedUnit, CollectorError> {
@@ -49,11 +53,20 @@ fn parse_unit(path: &Path, unit_name: &str, content: &str) -> Result<ParsedUnit,
     } else {
         None
     };
+    let dependencies = parse_unit_file(path, content)?;
+    let mut environment = ServiceEnvironment::default();
+    let environment_warnings = if unit_name.ends_with(".service") {
+        apply_service_environment(&mut environment, content)
+    } else {
+        Vec::new()
+    };
     Ok(ParsedUnit {
         path: path.to_path_buf(),
-        dependencies: parse_unit_file(path, content)?,
+        dependencies,
         socket,
         timer,
+        environment,
+        environment_warnings,
     })
 }
 
@@ -214,6 +227,7 @@ pub fn discover_units(
             dependencies: deps,
             socket,
             timer,
+            ..
         } = unit;
         for targets in [&mut deps.requires, &mut deps.wants, &mut deps.binds_to] {
             targets.retain_mut(|target| {
@@ -290,6 +304,7 @@ pub fn discover_units(
             dependencies: parsed.dependencies,
             socket_config: parsed.socket,
             timer_config: parsed.timer,
+            environment: parsed.environment,
         })
         .collect();
     (units, warnings)
@@ -303,11 +318,21 @@ fn apply_dropins(
 ) {
     for (unit, parsed) in by_name {
         let ParsedUnit {
+            path: main_path,
             dependencies,
             socket,
             timer,
-            ..
+            environment,
+            environment_warnings,
         } = parsed;
+        for warning in environment_warnings.drain(..) {
+            warnings.push(SystemdWarning::new(
+                SystemdWarningKind::ParseError,
+                main_path.clone(),
+                warning,
+            ));
+        }
+        let is_service = unit.ends_with(".service");
         let mut files: BTreeMap<String, PathBuf> = BTreeMap::new();
         for name in dropin_names(unit) {
             for root in roots {
@@ -377,6 +402,16 @@ fn apply_dropins(
                 }
             }
             merge_dependencies(dependencies, overlay);
+            if !is_service {
+                continue;
+            }
+            for warning in apply_service_environment(environment, &content) {
+                warnings.push(SystemdWarning::new(
+                    SystemdWarningKind::ParseError,
+                    path.clone(),
+                    warning,
+                ));
+            }
         }
     }
 }

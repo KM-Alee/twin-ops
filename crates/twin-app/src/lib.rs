@@ -212,7 +212,7 @@ impl ScanRequest {
 }
 
 pub fn scan(request: ScanRequest) -> Result<ScanResult, AppError> {
-    commands::scan::run_home(request, Path::new("/proc"))
+    commands::scan::run_home(request, &paths::default_proc_root())
 }
 
 pub fn scan_in(

@@ -18,6 +18,9 @@ with tempfile.TemporaryDirectory(prefix="twin-bpf-") as directory:
     compiler = subprocess.run(["clang", "--version"], check=True, text=True, capture_output=True).stdout.splitlines()[0]
     manifest = "compiler " + compiler + "\nsource " + hashlib.sha256(source.read_bytes()).hexdigest() + "\nobject " + hashlib.sha256(candidate.read_bytes()).hexdigest() + "\n"
     if args.check:
+        recorded = source.with_suffix(".sha256").read_text().splitlines()
+        if recorded and recorded[0] != "compiler " + compiler:
+            raise SystemExit("cannot verify byte-for-byte: the bundled object was built with " + recorded[0].removeprefix("compiler ") + ", this host has " + compiler)
         if candidate.read_bytes() != output.read_bytes() or source.with_suffix(".sha256").read_text() != manifest:
             raise SystemExit("bundled eBPF object or source manifest is stale; rebuild with tools/build_ebpf.py")
     else:

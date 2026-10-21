@@ -42,12 +42,38 @@ pub struct VolumeMount {
     pub destination: String,
 }
 
-/// The Compose project and service that created a container. These are the only
-/// container labels twin projects; all other labels can carry arbitrary values.
+/// The Compose project and service that created a container, and the Compose files it
+/// came from. These are the only container labels twin projects; all other labels can
+/// carry arbitrary values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposeIdentity {
     pub project: String,
     pub service: String,
+    pub config_files: Vec<String>,
+}
+
+const MAX_CONFIG_FILES: usize = 8;
+
+/// `com.docker.compose.project.config_files`: comma-separated absolute paths. A path with
+/// control characters or `..` drops the whole label rather than guessing.
+fn compose_config_files(labels: &Value) -> Vec<String> {
+    let Some(value) = labels
+        .get("com.docker.compose.project.config_files")
+        .and_then(Value::as_str)
+    else {
+        return Vec::new();
+    };
+    let files: Vec<&str> = value.split(',').map(str::trim).collect();
+    let is_safe = |path: &&str| {
+        path.starts_with('/')
+            && path.len() <= 4096
+            && !path.split('/').any(|segment| segment == "..")
+            && path.chars().all(|c| !c.is_control())
+    };
+    if files.len() > MAX_CONFIG_FILES || !files.iter().all(is_safe) {
+        return Vec::new();
+    }
+    files.into_iter().map(str::to_string).collect()
 }
 
 fn compose_identity(labels: Option<&Value>) -> Option<ComposeIdentity> {
@@ -68,6 +94,7 @@ fn compose_identity(labels: Option<&Value>) -> Option<ComposeIdentity> {
     Some(ComposeIdentity {
         project: safe("com.docker.compose.project")?,
         service: safe("com.docker.compose.service")?,
+        config_files: compose_config_files(labels),
     })
 }
 

@@ -25,7 +25,7 @@ pub struct BriefRequest {
 
 pub fn run_home(request: BriefRequest) -> Result<BriefResult, AppError> {
     let paths = resolve_command_paths(request.config_override.as_deref())?;
-    run(&paths.layout, &request, Path::new("/proc"))
+    run(&paths.layout, &request, &crate::paths::default_proc_root())
 }
 
 pub fn run(
@@ -132,7 +132,11 @@ fn host_brief(
         .collect();
     let processes = active_nodes(store, NodeKind::Process)?;
     let containers = active_nodes(store, NodeKind::Container)?;
-    let hostname = read_trimmed(proc_root.join("sys/kernel/hostname"))
+    // Under a mounted host root the UTS namespace is the container's; the host's own
+    // /etc/hostname names the host.
+    let hostname = crate::paths::host_root()
+        .and_then(|_| read_trimmed(crate::paths::host_path("/etc/hostname")))
+        .or_else(|| read_trimmed(proc_root.join("sys/kernel/hostname")))
         .unwrap_or_else(|| "this host".to_string());
 
     let mut active = 0usize;

@@ -69,6 +69,7 @@ pub struct SystemdRuntimeCollector {
     socket_listen_fixture: HashMap<String, Vec<super::SocketListenAddress>>,
     timer_schedule_fixture: HashMap<String, super::TimerSchedule>,
     cgroup_fixture: Option<HashMap<String, String>>,
+    dbus_socket: Option<PathBuf>,
 }
 
 impl SystemdRuntimeCollector {
@@ -95,6 +96,7 @@ impl SystemdRuntimeCollector {
             socket_listen_fixture: HashMap::new(),
             timer_schedule_fixture: HashMap::new(),
             cgroup_fixture: None,
+            dbus_socket: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl SystemdRuntimeCollector {
             socket_listen_fixture: HashMap::new(),
             timer_schedule_fixture: HashMap::new(),
             cgroup_fixture: None,
+            dbus_socket: None,
         }
     }
 
@@ -119,7 +122,14 @@ impl SystemdRuntimeCollector {
             socket_listen_fixture: HashMap::new(),
             timer_schedule_fixture: HashMap::new(),
             cgroup_fixture: Some(cgroup_to_unit),
+            dbus_socket: None,
         }
+    }
+
+    /// Reads the live manager through this system bus socket instead of the default.
+    pub fn with_dbus_socket(mut self, socket: Option<PathBuf>) -> Self {
+        self.dbus_socket = socket;
+        self
     }
 
     pub fn from_default_paths() -> Self {
@@ -182,7 +192,7 @@ impl SystemdRuntimeCollector {
             dbus_available = true;
             observations.extend(dbus_obs);
         } else if !skip_live_dbus {
-            if let Some(reader) = try_connect_dbus() {
+            if let Some(reader) = try_connect_dbus(self.dbus_socket.as_deref()) {
                 if let Ok(dbus_obs) = collect_dbus_observations(&reader, started_at, &mut warnings)
                 {
                     dbus_unit_count = dbus_obs

@@ -116,5 +116,6 @@ pub(crate) fn dbus_reader_for_scan() -> Option<Box<dyn SystemdDBusReader>> {
     if twin_collectors::should_skip_live_dbus() {
         return None;
     }
-    try_connect_dbus().map(|r| Box::new(r) as Box<dyn SystemdDBusReader>)
+    try_connect_dbus(crate::paths::host_dbus_socket().as_deref())
+        .map(|r| Box::new(r) as Box<dyn SystemdDBusReader>)
 }

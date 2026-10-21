@@ -126,7 +126,11 @@ fn run_with_dns_options(
     }
     super::test_context::validate_snapshots(&store, options)?;
     if options.refresh {
-        crate::scan_in(layout, crate::ScanRequest::default(), Path::new("/proc"))?;
+        crate::scan_in(
+            layout,
+            crate::ScanRequest::default(),
+            &crate::paths::default_proc_root(),
+        )?;
     }
     let at_ns = TimestampNs::now().as_i64();
     let facts = load_facts(

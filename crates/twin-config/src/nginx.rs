@@ -23,6 +23,16 @@ pub enum ProxyTarget {
     Named { name: String },
 }
 
+/// Directives that hand requests to a backend, with the scheme their raw evidence
+/// records. Only `proxy_pass` takes a URL; the others take an address.
+const PASS_DIRECTIVES: [(&str, Option<&str>); 5] = [
+    ("proxy_pass", None),
+    ("fastcgi_pass", Some("fastcgi")),
+    ("uwsgi_pass", Some("uwsgi")),
+    ("scgi_pass", Some("scgi")),
+    ("grpc_pass", Some("grpc")),
+];
+
 pub fn content_fingerprint(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in bytes {
@@ -221,26 +231,40 @@ fn parse_statement(
         }
         return;
     }
-    let Some(rest) = statement.strip_prefix("proxy_pass") else {
+    let Some((directive, rest)) = PASS_DIRECTIVES.iter().find_map(|(directive, scheme)| {
+        statement
+            .strip_prefix(directive)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            .map(|rest| ((*directive, *scheme), rest))
+    }) else {
         return;
     };
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return;
-    }
+    let (directive, gateway_scheme) = directive;
     let target = rest.trim();
     if target.is_empty() || !terminated {
         parsed.warnings.push(format!(
-            "line {line}: proxy_pass is malformed or missing a target"
+            "line {line}: {directive} is malformed or missing a target"
         ));
         return;
     }
+    let grpc;
+    let target = match gateway_scheme {
+        Some("grpc") => {
+            grpc = target
+                .replacen("grpcs://", "https://", 1)
+                .replacen("grpc://", "http://", 1);
+            grpc.as_str()
+        }
+        _ => target,
+    };
+    let is_gateway = gateway_scheme.is_some();
     if is_stream && target.contains("://") {
         parsed.warnings.push(format!(
             "line {line}: stream proxy target has an unsupported URL scheme"
         ));
         return;
     }
-    let stream_address = is_stream
+    let stream_address = (is_stream || is_gateway)
         && !target.contains("://")
         && target.contains(':')
         && !target.starts_with("unix:");
@@ -260,6 +284,8 @@ fn parse_statement(
                     };
                     let scheme = if is_stream {
                         "tcp"
+                    } else if let Some(scheme) = gateway_scheme {
+                        scheme
                     } else if target.starts_with("https://") {
                         "https"
                     } else {
@@ -294,7 +320,7 @@ fn parse_statement(
             });
         }
         None => parsed.warnings.push(format!(
-            "line {line}: proxy_pass target could not be parsed"
+            "line {line}: {directive} target could not be parsed"
         )),
     }
 }

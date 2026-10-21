@@ -96,6 +96,7 @@ impl ProcessBatch {
 pub struct ProcessCollector<R: ProcReader = StdProcReader> {
     proc_root: PathBuf,
     reader: R,
+    host_process: Option<u32>,
 }
 
 impl ProcessCollector<StdProcReader> {
@@ -103,6 +104,7 @@ impl ProcessCollector<StdProcReader> {
         Self {
             proc_root: proc_root.into(),
             reader: StdProcReader,
+            host_process: None,
         }
     }
 }
@@ -112,6 +114,29 @@ impl<R: ProcReader> ProcessCollector<R> {
         Self {
             proc_root: proc_root.into(),
             reader,
+            host_process: None,
+        }
+    }
+
+    /// Takes this process's network namespace and socket tables as the host's instead of
+    /// the scanner's own. In a container the scanner's namespace is not the host's; PID 1
+    /// of the host's `/proc` is.
+    pub fn with_host_process(mut self, pid: Option<u32>) -> Self {
+        self.host_process = pid;
+        self
+    }
+
+    fn host_namespace_path(&self) -> PathBuf {
+        match self.host_process {
+            Some(pid) => self.proc_root.join(pid.to_string()).join("ns/net"),
+            None => self.proc_root.join("self/ns/net"),
+        }
+    }
+
+    fn host_table_root(&self) -> PathBuf {
+        match self.host_process {
+            Some(pid) => self.proc_root.join(pid.to_string()),
+            None => self.proc_root.clone(),
         }
     }
 
@@ -141,11 +166,11 @@ impl<R: ProcReader> ProcessCollector<R> {
                     })
             });
         let host_namespace =
-            super::namespace::read_namespace(&self.reader, &self.proc_root.join("self/ns/net"));
+            super::namespace::read_namespace(&self.reader, &self.host_namespace_path());
         if host_namespace.is_none() {
             warnings.push(ProcessWarning::new(
                 ProcessWarningKind::PermissionDenied,
-                self.proc_root.join("self/ns/net"),
+                self.host_namespace_path(),
                 "scanner network namespace identity unavailable; host ownership unknown",
             ));
         }
@@ -197,7 +222,7 @@ impl<R: ProcReader> ProcessCollector<R> {
             collect_inet_sockets(
                 &self.reader,
                 &self.proc_root,
-                &self.proc_root,
+                &self.host_table_root(),
                 &host_records,
                 started_at,
                 &mut warnings,
@@ -207,7 +232,7 @@ impl<R: ProcReader> ProcessCollector<R> {
             collect_unix_sockets(
                 &self.reader,
                 &self.proc_root,
-                &self.proc_root,
+                &self.host_table_root(),
                 &host_records,
                 started_at,
                 &owners_by_inode,
@@ -220,7 +245,7 @@ impl<R: ProcReader> ProcessCollector<R> {
 
         if let Some(expected) = host_namespace {
             let is_stable =
-                super::namespace::read_namespace(&self.reader, &self.proc_root.join("self/ns/net"))
+                super::namespace::read_namespace(&self.reader, &self.host_namespace_path())
                     == Some(expected)
                     && host_records.iter().all(|record| {
                         super::namespace::read_namespace(
@@ -231,7 +256,7 @@ impl<R: ProcReader> ProcessCollector<R> {
             if !is_stable {
                 warnings.push(ProcessWarning::new(
                     ProcessWarningKind::PermissionDenied,
-                    self.proc_root.join("self/ns/net"),
+                    self.host_namespace_path(),
                     "host namespace identity changed during collection; socket evidence discarded",
                 ));
                 inet_listeners.clear();

@@ -19,7 +19,9 @@ pub use dbus::{
 };
 pub use runtime_collector::{SystemdRuntimeBatch, SystemdRuntimeCollector, RUNTIME_COLLECTOR_NAME};
 pub use test_env::should_skip_live_dbus;
-pub use unit_parse::{merge_dependencies, parse_unit_file, UnitDependencies};
+pub use unit_parse::{
+    merge_dependencies, parse_unit_file, EnvironmentFile, ServiceEnvironment, UnitDependencies,
+};
 pub use unit_paths::{default_search_paths, EffectiveUnit, UnitFileReader};
 pub use warning::{SystemdWarning, SystemdWarningKind};
 

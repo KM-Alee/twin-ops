@@ -8,6 +8,7 @@ permissions:
   contents: write
   id-token: write
   attestations: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -92,3 +93,63 @@ jobs:
             dist/SHA256SUMS
             install.sh
           generate_release_notes: true
+
+  image:
+    needs: build
+    runs-on: ubuntu-24.04
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Unpack static binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          for pair in x86_64:amd64 aarch64:arm64; do
+            arch="${pair%%:*}"; docker_arch="${pair##*:}"
+            mkdir -p "dist/${docker_arch}"
+            tar -xzf "artifacts/twin-${version}-${arch}-linux.tar.gz" -C artifacts
+            cp "artifacts/twin-${version}-${arch}-linux/twin" "dist/${docker_arch}/twin"
+          done
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/container/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/km-alee/twin:${{ steps.version.outputs.version }}
+            ghcr.io/km-alee/twin:latest
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/km-alee/twin
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  mcp-registry:
+    needs: image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check server.json matches this release
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          jq -e --arg v "$version" '.version == $v and .packages[0].identifier == ("ghcr.io/km-alee/twin:" + $v)' server.json
+      - name: Publish to the MCP registry
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

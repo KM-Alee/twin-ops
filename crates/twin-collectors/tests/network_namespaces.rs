@@ -91,3 +91,54 @@ fn namespace_changed_or_vanished_during_collection_discards_socket_evidence() {
             .any(|warning| warning.kind() == ProcessWarningKind::PermissionDenied));
     }
 }
+
+/// In a container the scanner's own namespace (`self`) is not the host's. With a host
+/// process given, PID 1's namespace and tables are the host's.
+#[test]
+fn a_host_process_names_the_host_namespace_instead_of_the_scanner() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let root = temp.path();
+    support::write_proc_fixture(root, 1,
+        "1 (systemd) S 0 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t0\t0\t0\t0\n", b"systemd\0", None);
+    support::write_proc_fixture(root, 42,
+        "42 (api) S 1 1 1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 0 0 0 4294967295 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        "Uid:\t0\t0\t0\t0\n", b"api\0", None);
+    for (name, value) in [("self", 9), ("1", 1), ("42", 1)] {
+        let directory = root.join(name).join("ns");
+        std::fs::create_dir_all(&directory).unwrap();
+        let link = directory.join("net");
+        if std::fs::symlink_metadata(&link).is_ok() {
+            std::fs::remove_file(&link).unwrap();
+        }
+        std::os::unix::fs::symlink(format!("net:[{value}]"), link).unwrap();
+    }
+    let table = "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00000000:00000000 00000000 0 0 100\n";
+    support::write_tcp_table(&root.join("1"), "tcp", table);
+    support::write_tcp_table(root, "tcp", "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n");
+    support::write_socket_fd(root, 42, 8, 100);
+
+    let host = ProcessCollector::new(root)
+        .with_host_process(Some(1))
+        .collect(TimestampNs::new(1))
+        .unwrap();
+    assert!(
+        host.namespaces().is_empty(),
+        "PID 1's namespace is the host's"
+    );
+    assert!(host.owners_by_inode().contains_key(&100));
+    assert!(
+        host.observations()
+            .iter()
+            .any(|observation| observation.kind == ObservationKind::TcpSocketSeen),
+        "PID 1's socket table is read as the host's"
+    );
+
+    let scanner = ProcessCollector::new(root)
+        .collect(TimestampNs::new(1))
+        .unwrap();
+    assert!(
+        !scanner.namespaces().is_empty(),
+        "without a host process the api is in a namespace other than the scanner's"
+    );
+}

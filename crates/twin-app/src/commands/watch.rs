@@ -135,6 +135,12 @@ pub fn run<S: WatchSink>(
     let mut ticks_completed = 0u32;
     let mut previous: Option<TickSnapshot> = None;
     let (mut stream, ebpf_attached) = open_stream(&run.ebpf, sink, &mut warnings);
+    if !matches!(
+        run.ebpf,
+        WatchEbpf::Off | WatchEbpf::Injected(_) | WatchEbpf::InjectedTcp(_)
+    ) {
+        record_ebpf_attachment(layout, ebpf_attached, &warnings, sink)?;
+    }
     let mut tcp_ingest = TcpIngestor::new(TcpRateLimits::session());
 
     while !stop.load(Ordering::SeqCst) && !limit_reached(&run, started, ticks_completed) {
@@ -565,6 +571,45 @@ fn wait_interval(
     }
     stop.load(Ordering::SeqCst)
 }
+
+/// One `ebpf` collector run per attach attempt, so coverage reports an eBPF gap (with
+/// its reason) until a later watch attaches.
+fn record_ebpf_attachment<S: WatchSink>(
+    layout: &TwinLayout,
+    is_attached: bool,
+    warnings: &[String],
+    sink: &mut S,
+) -> Result<(), AppError> {
+    let mut store = Store::open(&layout.db_file()).map_err(ScanError::StoreOpen)?;
+    let now = twin_core::TimestampNs::now().as_i64();
+    let reason = (!is_attached).then(|| {
+        warnings
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "eBPF tracing could not attach".to_string())
+    });
+    if let Err(error) = store.insert_collector_run(&twin_store::CollectorRunRow {
+        id: None,
+        collector: EBPF_COLLECTOR.into(),
+        started_at_ns: now,
+        ended_at_ns: now,
+        status: if is_attached {
+            "success"
+        } else {
+            "unavailable"
+        }
+        .into(),
+        observation_count: 0,
+        warning_count: i64::from(!is_attached),
+        error_message: reason,
+        metadata_json: "{}".into(),
+    }) {
+        sink.on_warning(&format!("eBPF coverage could not be recorded: {error}"));
+    }
+    Ok(())
+}
+
+pub(crate) const EBPF_COLLECTOR: &str = "ebpf";
 
 fn note<S: WatchSink>(sink: &mut S, warnings: &mut Vec<String>, message: String) {
     sink.on_warning(&message);

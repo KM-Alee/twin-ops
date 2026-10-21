@@ -22,9 +22,10 @@ pub use process::{
 };
 pub use systemd::{
     default_search_paths, discover_service_config_files, should_skip_live_dbus, try_connect_dbus,
-    ConfigFileSource, EffectiveUnit, FixtureSystemdDBusReader, ServiceConfigFileDiscovery,
-    SocketListenAddress, SocketListenKind, SystemdDBusError, SystemdDBusReader,
-    SystemdRuntimeBatch, SystemdRuntimeCollector, SystemdUnitBatch, SystemdUnitCollector,
-    SystemdWarning, SystemdWarningKind, TimerSchedule, UnitDBusSnapshot, UnitFileReader,
-    COLLECTOR_NAME as SYSTEMD_UNIT_COLLECTOR_NAME, RUNTIME_COLLECTOR_NAME,
+    ConfigFileSource, EffectiveUnit, EnvironmentFile, FixtureSystemdDBusReader,
+    ServiceConfigFileDiscovery, ServiceEnvironment, SocketListenAddress, SocketListenKind,
+    SystemdDBusError, SystemdDBusReader, SystemdRuntimeBatch, SystemdRuntimeCollector,
+    SystemdUnitBatch, SystemdUnitCollector, SystemdWarning, SystemdWarningKind, TimerSchedule,
+    UnitDBusSnapshot, UnitFileReader, COLLECTOR_NAME as SYSTEMD_UNIT_COLLECTOR_NAME,
+    RUNTIME_COLLECTOR_NAME,
 };

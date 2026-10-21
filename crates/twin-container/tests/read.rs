@@ -150,7 +150,7 @@ fn live_restore_is_read_from_daemon_info_and_unknown_when_absent() {
 }
 
 #[test]
-fn only_compose_project_and_service_labels_are_projected() {
+fn only_compose_project_service_and_config_file_labels_are_projected() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_redis_fixture(dir.path());
     let inspect = dir.path().join("containers/abc123redis.json");
@@ -159,6 +159,8 @@ fn only_compose_project_and_service_labels_are_projected() {
     value["Config"]["Labels"] = serde_json::json!({
         "com.docker.compose.project": "shop",
         "com.docker.compose.service": "cache",
+        "com.docker.compose.project.config_files": "/srv/shop/compose.yml,/srv/shop/compose.prod.yml",
+        "com.docker.compose.project.environment_file": "/srv/shop/LABEL_SECRET_SENTINEL.env",
         "com.example.api-token": "LABEL_SECRET_SENTINEL",
     });
     std::fs::write(&inspect, value.to_string()).expect("write");
@@ -169,7 +171,20 @@ fn only_compose_project_and_service_labels_are_projected() {
         (compose.project.as_str(), compose.service.as_str()),
         ("shop", "cache")
     );
+    assert_eq!(
+        compose.config_files,
+        ["/srv/shop/compose.yml", "/srv/shop/compose.prod.yml"]
+    );
     assert!(!format!("{container:?}").contains("LABEL_SECRET_SENTINEL"));
+
+    value["Config"]["Labels"] = serde_json::json!({
+        "com.docker.compose.project": "shop",
+        "com.docker.compose.service": "cache",
+        "com.docker.compose.project.config_files": "/srv/shop/compose.yml,relative.yml",
+    });
+    std::fs::write(&inspect, value.to_string()).expect("write");
+    let relative = docker.inspect_container("abc123redis").expect("inspect");
+    assert!(relative.compose.expect("identity").config_files.is_empty());
 
     value["Config"]["Labels"] = serde_json::json!({
         "com.docker.compose.project": "shop; rm -rf /",

@@ -148,6 +148,20 @@ impl StdSystemdDBusReader {
         })?;
         Ok(Self { connection })
     }
+
+    /// Connects to the system bus at an explicit socket, such as the host's bus mounted
+    /// into a container.
+    pub fn connect_at(socket: &std::path::Path) -> Result<Self, SystemdDBusError> {
+        let unavailable = |e: zbus::Error| SystemdDBusError::Unavailable {
+            detail: e.to_string(),
+        };
+        let address = format!("unix:path={}", socket.display());
+        let connection = zbus::blocking::connection::Builder::address(address.as_str())
+            .map_err(unavailable)?
+            .build()
+            .map_err(unavailable)?;
+        Ok(Self { connection })
+    }
 }
 
 #[proxy(
@@ -660,8 +674,12 @@ fn dep_observation(
     })
 }
 
-pub fn try_connect_dbus() -> Option<StdSystemdDBusReader> {
-    StdSystemdDBusReader::connect().ok()
+/// The system bus, at `socket` when given and the default address otherwise.
+pub fn try_connect_dbus(socket: Option<&std::path::Path>) -> Option<StdSystemdDBusReader> {
+    match socket {
+        Some(socket) => StdSystemdDBusReader::connect_at(socket).ok(),
+        None => StdSystemdDBusReader::connect().ok(),
+    }
 }
 
 #[cfg(test)]

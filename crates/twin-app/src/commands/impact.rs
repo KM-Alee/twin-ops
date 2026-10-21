@@ -151,6 +151,8 @@ pub(crate) fn load_typed_service_dependents(
         let mut dependent_evidence = Vec::new();
         let relationship = if edge.kind() == EdgeKind::ConnectsTo {
             "Inferred: runtime connection observed by eBPF"
+        } else if is_config_declared(&edge) {
+            "Inferred: endpoint declared in configuration matches this listener"
         } else if edge.class() == EdgeClass::Observed {
             "Configured: systemd unit file dependency"
         } else {
@@ -772,7 +774,40 @@ fn service_dependent_reason(
     if let Some(endpoint) = connection_endpoint_from_observations(store, observation_ids) {
         return format!("active connection to {endpoint}");
     }
+    if let Some(reason) = declared_reason(store, observation_ids) {
+        return reason;
+    }
     format!("active connection to {target_label}")
+}
+
+fn is_config_declared(edge: &GraphEdge) -> bool {
+    serde_json::from_str::<serde_json::Value>(edge.metadata().as_str())
+        .ok()
+        .is_some_and(|metadata| metadata["source"] == "config_declared")
+}
+
+/// `declared in /etc/app.env (DATABASE_URL → postgres://127.0.0.1:5432)`.
+fn declared_reason(store: &Store, observation_ids: &[String]) -> Option<String> {
+    observation_ids.iter().find_map(|obs_id| {
+        let obs = store
+            .get_observation_typed(ObservationId::from_str(obs_id).ok()?)
+            .ok()??;
+        if obs.kind() != ObservationKind::ConfigDeclaredEndpoint {
+            return None;
+        }
+        let fact = |key: &str| {
+            obs.metadata()
+                .get(key)
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        };
+        let file = fact("declared_in")?;
+        let key = fact("key")?;
+        Some(match fact("endpoint") {
+            Some(endpoint) => format!("declared in {file} ({key} → {endpoint})"),
+            None => format!("declared in {file} ({key})"),
+        })
+    })
 }
 
 fn configured_dep_reason_from_observations(

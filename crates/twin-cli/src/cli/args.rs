@@ -23,6 +23,14 @@ pub struct GlobalArgs {
         help = "With --json, include every list item (default caps lists at 100 and reports <field>_omitted)"
     )]
     pub full: bool,
+
+    #[arg(
+        long,
+        global = true,
+        value_name = "DIR",
+        help = "Read the host mounted read-only at DIR (for example /host in a container); same as TWIN_HOST_ROOT"
+    )]
+    pub host_root: Option<PathBuf>,
 }
 
 impl GlobalArgs {
@@ -157,6 +165,20 @@ pub struct DaemonRunArgs {
         help = "Settings file path (default: config.toml in --state-dir)"
     )]
     pub config: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value = "auto",
+        help = "auto: trace TCP with eBPF when `twin doctor --ebpf` passes, otherwise record a coverage gap"
+    )]
+    pub ebpf: DaemonEbpf,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum DaemonEbpf {
+    Auto,
+    Off,
 }
 
 #[derive(Args)]

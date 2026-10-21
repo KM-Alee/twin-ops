@@ -315,6 +315,9 @@ pub struct DaemonOptions {
     pub proc_root: PathBuf,
     pub socket: PathBuf,
     pub interval: String,
+    /// `Ok` attaches live TCP tracing; `Err` records the reason as an eBPF coverage gap.
+    /// `None` leaves eBPF off without a gap.
+    pub ebpf: Option<Result<(), String>>,
 }
 
 /// Binds the socket, scans once, then runs the watch loop and the socket server until
@@ -324,14 +327,19 @@ pub fn run<S: WatchSink + Send>(
     stop: &AtomicBool,
     sink: &mut S,
 ) -> Result<WatchResult, DaemonError> {
-    let watch = twin_app::parse_watch(&WatchCommand {
+    let mut watch = twin_app::parse_watch(&WatchCommand {
         config_override: options.config.clone(),
         interval: options.interval.clone(),
         duration: None,
         ticks: None,
-        ebpf: false,
-        events: None,
+        ebpf: matches!(options.ebpf, Some(Ok(()))),
+        events: matches!(options.ebpf, Some(Ok(()))).then(|| "tcp".to_string()),
     })?;
+    if let Some(Err(reason)) = &options.ebpf {
+        watch.ebpf = twin_app::WatchEbpf::Unavailable {
+            reason: reason.clone(),
+        };
+    }
     options
         .layout
         .ensure_dirs()

@@ -71,7 +71,7 @@ pub(crate) fn persist_containers_in_scan(
         .map(PathBuf::from);
     let backend = match DockerBackend::open(
         fixture_override.or(fixture.as_deref()),
-        Path::new(DOCKER_SOCKET),
+        &crate::paths::host_path(DOCKER_SOCKET),
     ) {
         Ok(backend) => backend,
         Err(err) => return Ok(unavailable(&err.to_string())),
@@ -268,7 +268,7 @@ fn persist_one(
             scan_time,
             existing.as_ref().filter(|_| !recreated),
         ),
-        serde_json::json!({"source":"docker", "docker_id":seen.id, "image_id":seen.image_id, "running_known":seen.is_running.is_some(), "is_running":seen.is_running, "health_status":seen.health.as_str(), "daemon_live_restore":live_restore, "compose_project":seen.compose.as_ref().map(|c| c.project.as_str()), "compose_service":seen.compose.as_ref().map(|c| c.service.as_str())}),
+        serde_json::json!({"source":"docker", "docker_id":seen.id, "image_id":seen.image_id, "running_known":seen.is_running.is_some(), "is_running":seen.is_running, "health_status":seen.health.as_str(), "daemon_live_restore":live_restore, "compose_project":seen.compose.as_ref().map(|c| c.project.as_str()), "compose_service":seen.compose.as_ref().map(|c| c.service.as_str()), "compose_config_files":seen.compose.as_ref().map(|c| &c.config_files)}),
     );
     super::scan_history::upsert_node(store, history, &node)?;
     let image_existing = store.get_node_typed(&image)?;

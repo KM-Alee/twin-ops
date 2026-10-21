@@ -50,8 +50,8 @@ pub(crate) fn assess(socket: &Path) -> DoctorContainers {
 }
 
 pub(crate) fn host() -> DoctorContainers {
-    let mut result = assess(Path::new(DOCKER_SOCKET));
-    let socket = Path::new(twin_container::containerd::CONTAINERD_SOCKET);
+    let mut result = assess(&crate::paths::host_path(DOCKER_SOCKET));
+    let socket = &crate::paths::host_path(twin_container::containerd::CONTAINERD_SOCKET);
     let (listed, namespace_count, detail) = if socket.exists() {
         let reader = twin_container::containerd::LiveContainerd::new(socket);
         match twin_container::containerd::ContainerdReadOnly::list_namespaces(&reader) {

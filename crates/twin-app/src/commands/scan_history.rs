@@ -99,6 +99,11 @@ impl ScanHistorySession {
                     .is_none_or(|source| !self.complete_sources.contains(source)))
     }
 
+    /// Whether some writer already recorded this edge in the current pass.
+    pub fn has_seen_edge(&self, edge_id: &str) -> bool {
+        self.seen_edges.contains(edge_id)
+    }
+
     pub fn uncertain_source(&mut self, source: &str) {
         self.uncertain_sources.insert(source.to_string());
     }

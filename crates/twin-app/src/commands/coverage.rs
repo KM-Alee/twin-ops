@@ -143,6 +143,12 @@ pub(crate) fn load_at(store: &Store, at_ns: i64) -> Result<CoverageReport, ScanE
     if let Some(run) = latest_run_at(store, "docker", at_ns)? {
         report.docker_available = run.status == "success";
     }
+    if let Some(run) = latest_run_at(store, super::watch::EBPF_COLLECTOR, at_ns)? {
+        report.ebpf_available = run.status == "success";
+        if !report.ebpf_available {
+            report.unavailable_collectors.push("ebpf".into());
+        }
+    }
     if let Some(run) = latest_run_at(store, "containerd", at_ns)? {
         report.containerd_available = run.status == "success";
         if !report.containerd_available {

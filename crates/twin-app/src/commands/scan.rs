@@ -145,7 +145,12 @@ fn run_scan_pass(
     let started_at = TimestampNs::now();
     let mut timings = std::collections::BTreeMap::new();
     let started = std::time::Instant::now();
-    let batch = ProcessCollector::new(proc_root).collect(started_at)?;
+    let batch = ProcessCollector::new(proc_root)
+        .with_host_process(
+            (crate::paths::host_root().is_some() && crate::paths::is_host_proc_root(proc_root))
+                .then_some(1),
+        )
+        .collect(started_at)?;
     timings.insert("process".into(), elapsed_ms(started));
     let unit_roots = systemd_unit_roots(proc_root);
     let started = std::time::Instant::now();
@@ -185,7 +190,7 @@ fn run_scan_pass(
             docker_fixture: request.docker_fixture.as_deref(),
             containerd_fixture: request.containerd_fixture.as_deref(),
             cron_root: request.cron_root.clone().or_else(|| {
-                (proc_root == Path::new("/proc"))
+                crate::paths::is_host_proc_root(proc_root)
                     .then(|| super::scan_config_files::host_path_for_discovery("/"))
             }),
         },
@@ -216,12 +221,36 @@ fn collect_systemd_runtime(
             }
         }
     }
-    SystemdRuntimeCollector::new(unit_roots).collect(started_at)
+    SystemdRuntimeCollector::new(unit_roots)
+        .with_dbus_socket(crate::paths::host_dbus_socket())
+        .collect(started_at)
+}
+
+/// Unit files read under a mounted host root are recorded by their host paths.
+fn logical_unit_path(raw: &mut twin_observation::RawObservation) {
+    if crate::paths::host_root().is_none() {
+        return;
+    }
+    if let Some(reference) = &raw.raw_ref {
+        let logical = crate::paths::logical_path(Path::new(reference.as_str()));
+        raw.raw_ref = Some(twin_observation::RawEvidenceRef::new(logical));
+    }
+    let unit_path = raw
+        .metadata
+        .get("unit_path")
+        .and_then(|value| value.as_str())
+        .map(|path| crate::paths::logical_path(Path::new(path)));
+    if let Some(unit_path) = unit_path {
+        raw.metadata.insert_str("unit_path", &unit_path);
+    }
 }
 
 fn systemd_unit_roots(proc_root: &Path) -> Vec<PathBuf> {
-    if proc_root == Path::new("/proc") {
-        return twin_collectors::default_search_paths();
+    if crate::paths::is_host_proc_root(proc_root) {
+        return twin_collectors::default_search_paths()
+            .iter()
+            .map(|path| crate::paths::host_path(&path.display().to_string()))
+            .collect();
     }
     if let Ok(root) = env::var("TWIN_SYSTEMD_UNIT_ROOT") {
         let path = PathBuf::from(root);
@@ -269,11 +298,13 @@ fn persist_scan(
     let mut unit_observations: Vec<Observation> = Vec::new();
     for mut raw in unit_batch.drain_observations() {
         tag_sample(&mut raw, sample.index, sample_at);
+        logical_unit_path(&mut raw);
         unit_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
     let mut runtime_observations: Vec<Observation> = Vec::new();
     for mut raw in runtime_batch.drain_observations() {
         tag_sample(&mut raw, sample.index, sample_at);
+        logical_unit_path(&mut raw);
         runtime_observations.push(pipeline.process(raw).map_err(ScanError::Observation)?);
     }
 
@@ -328,6 +359,8 @@ fn persist_scan(
     let mut unmapped_active_socket_count = 0usize;
     let mut socket_activation_edge_count = 0usize;
     let mut timer_activation_edge_count = 0usize;
+    let mut declared_endpoint_count = 0usize;
+    let mut declared_dependency_count = 0usize;
     let mut cgroup_correction_count = 0usize;
     let mut seen_cgroups: HashSet<NodeId> = HashSet::new();
     let mut seen_services: HashSet<NodeId> = HashSet::new();
@@ -1266,6 +1299,19 @@ fn persist_scan(
                 unmapped_unix_listener_count += namespace.unix_listeners.iter().filter(|socket| !namespace.owners.get(&socket.inode).is_some_and(|owners| !owners.is_empty())).count();
             }
 
+            let declared = super::scan_declared::persist_declared_in_scan(
+                store,
+                &mut history,
+                &mut edge_cache,
+                unit_batch.units(),
+                &config_discoveries,
+                scan_time,
+                dns,
+            )?;
+            declared_endpoint_count = declared.endpoints;
+            declared_dependency_count = declared.dependencies;
+            config_parse_warnings.extend(declared.warnings);
+
             history.finalize_missing_rows(store)?;
 
             store.update_collector_run_metadata(
@@ -1352,6 +1398,8 @@ fn persist_scan(
             socket_activation_edge_count,
             timer_activation_edge_count,
             cron_job_count: cron_notes.jobs,
+            declared_endpoint_count,
+            declared_dependency_count,
             cgroup_correction_count,
             started_at_ns: batch.started_at().as_i64(),
             ended_at_ns: batch.ended_at().as_i64(),
@@ -1988,6 +2036,11 @@ impl ScanEdgeCache {
         Self {
             edges: HashMap::new(),
         }
+    }
+
+    /// Keeps a just-written edge so later writers in the pass build on it.
+    pub fn remember(&mut self, edge: &GraphEdge) {
+        self.edges.insert(edge.id().to_string(), edge.clone());
     }
 }
 

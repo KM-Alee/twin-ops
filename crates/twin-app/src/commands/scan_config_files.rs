@@ -16,12 +16,7 @@ use crate::commands::scan::ScanEdgeCache;
 const CONFIG_DISCOVERY_COLLECTOR: &str = "config_file_discovery";
 
 pub(crate) fn host_path_for_discovery(path: &str) -> PathBuf {
-    if let Ok(root) = std::env::var("TWIN_HOST_ROOT") {
-        if let Some(rest) = path.strip_prefix('/') {
-            return PathBuf::from(root).join(rest);
-        }
-    }
-    PathBuf::from(path)
+    crate::paths::host_path(path)
 }
 
 fn path_exists_for_discovery(path: &Path) -> bool {
@@ -37,7 +32,7 @@ pub(crate) fn persist_config_files_in_scan(
 ) -> Result<usize, StoreError> {
     let mut edge_count = 0usize;
     for discovery in discoveries {
-        let path_str = discovery.file_path.display().to_string();
+        let path_str = crate::paths::logical_path(&discovery.file_path);
         let file_id = NodeId::file(&path_str);
         let existing_file = store.get_node_typed(&file_id)?;
         let file_node = GraphNode::file(&path_str, scan_time, existing_file.as_ref());
@@ -74,7 +69,7 @@ pub(crate) fn persist_config_files_in_scan(
     Ok(edge_count)
 }
 
-fn insert_for_session(
+pub(crate) fn insert_for_session(
     store: &mut Store,
     history: &super::scan_history::ScanHistorySession,
     observation: &Observation,
@@ -110,7 +105,7 @@ pub(crate) fn apply_nginx_proxies(
                 .is_some_and(|name| name == "nginx.conf")
     });
     for discovery in discoveries {
-        let path_str = discovery.file_path.display().to_string();
+        let path_str = crate::paths::logical_path(&discovery.file_path);
         let is_nginx = discovery.service_unit == "nginx.service"
             && discovery.source == ConfigFileSource::KnownServiceConfigPath;
         let host_path = if discovery.source == ConfigFileSource::KnownServiceConfigPath {
@@ -619,7 +614,7 @@ fn config_file_observation(
     discovery: &ServiceConfigFileDiscovery,
     timestamp: TimestampNs,
 ) -> Result<Observation, StoreError> {
-    let path_str = discovery.file_path.display().to_string();
+    let path_str = crate::paths::logical_path(&discovery.file_path);
     let mut meta = ObservationMetadata::new();
     meta.insert_str("source", discovery.source.metadata_key());
     meta.insert_str("path", &path_str);
@@ -730,7 +725,7 @@ pub(crate) fn existing_service_units(store: &Store) -> Result<HashSet<String>, S
         .collect())
 }
 
-fn valid_dns_host(host: &str) -> bool {
+pub(crate) fn valid_dns_host(host: &str) -> bool {
     host.len() <= 253
         && host.split('.').all(|label| {
             !label.is_empty()

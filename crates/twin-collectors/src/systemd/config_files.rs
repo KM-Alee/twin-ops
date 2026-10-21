@@ -92,7 +92,15 @@ fn normalize_dropin_unit(stem: &str) -> Option<String> {
     None
 }
 
-const KNOWN_SERVICE_CONFIGS: &[(&str, &str)] = &[("nginx.service", "/etc/nginx/nginx.conf")];
+const KNOWN_SERVICE_CONFIGS: &[(&str, &str)] = &[
+    ("nginx.service", "/etc/nginx/nginx.conf"),
+    ("haproxy.service", "/etc/haproxy/haproxy.cfg"),
+    ("caddy.service", "/etc/caddy/Caddyfile"),
+    ("redis.service", "/etc/redis/redis.conf"),
+    ("redis.service", "/etc/redis.conf"),
+    ("redis-server.service", "/etc/redis/redis.conf"),
+    ("valkey.service", "/etc/valkey/valkey.conf"),
+];
 
 pub fn discover_known_config_paths(
     existing_services: &HashSet<String>,
@@ -146,6 +154,7 @@ mod tests {
             dependencies: UnitDependencies::default(),
             socket_config: None,
             timer_config: None,
+            environment: Default::default(),
         }
     }
 

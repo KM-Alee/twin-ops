@@ -78,7 +78,7 @@ pub(crate) fn reads_files(command: &str) -> bool {
 
 pub fn run_home(request: PreflightRequest) -> Result<PreflightResult, AppError> {
     let paths = resolve_command_paths(request.config_override.as_deref())?;
-    run(&paths.layout, &request, Path::new("/proc"))
+    run(&paths.layout, &request, &crate::paths::default_proc_root())
 }
 
 pub fn run(

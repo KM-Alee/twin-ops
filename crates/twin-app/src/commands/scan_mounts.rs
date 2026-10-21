@@ -105,7 +105,11 @@ pub(crate) fn persist_mounts_in_scan(
     proc_root: &Path,
     scan_time: TimestampNs,
 ) -> Result<(), StoreError> {
-    let text = match std::fs::read_to_string(proc_root.join("mounts")) {
+    // PID 1's table is the host's even when twin runs in a container or a sandboxed
+    // daemon, whose own mount namespace differs.
+    let text = match std::fs::read_to_string(proc_root.join("1/mounts"))
+        .or_else(|_| std::fs::read_to_string(proc_root.join("mounts")))
+    {
         Ok(text) => text,
         Err(_) => return Ok(()),
     };

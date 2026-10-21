@@ -26,6 +26,17 @@ use twin_cli::output::json::JsonMode;
 
 fn main() {
     let cli = Cli::parse();
+    if let Some(root) = &cli.global.host_root {
+        if !root.is_absolute() || !root.join("proc").is_dir() {
+            eprintln!(
+                "Error: --host-root {} must be an absolute directory holding the host's proc",
+                root.display()
+            );
+            process::exit(1);
+        }
+        // Set once before any thread starts; every host read resolves through it.
+        std::env::set_var("TWIN_HOST_ROOT", root);
+    }
     process::exit(dispatch(cli));
 }
 
@@ -83,7 +94,7 @@ fn refresh_scan(config_override: Option<std::path::PathBuf>) -> Result<ScanFresh
 fn proc_root() -> std::path::PathBuf {
     std::env::var_os("TWIN_PROC_ROOT")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("/proc"))
+        .unwrap_or_else(twin_app::paths::default_proc_root)
 }
 
 fn run_preflight(global: &GlobalArgs, args: &PreflightArgs) -> i32 {
@@ -318,6 +329,12 @@ fn run_daemon(global: &GlobalArgs, args: &DaemonArgs) -> i32 {
                 proc_root: proc_root(),
                 socket: run.socket.clone(),
                 interval: run.interval.clone(),
+                ebpf: match run.ebpf {
+                    twin_cli::cli::args::DaemonEbpf::Auto => {
+                        Some(twin_app::daemon::ebpf_readiness())
+                    }
+                    twin_cli::cli::args::DaemonEbpf::Off => None,
+                },
             };
             let mut log = DaemonLog {
                 socket: run.socket.clone(),
@@ -415,9 +432,7 @@ fn run_watch(global: &GlobalArgs, args: &WatchArgs) -> i32 {
         ebpf: args.ebpf,
         events: args.events.clone(),
     };
-    let proc_root = std::env::var_os("TWIN_PROC_ROOT")
-        .map(|root| Path::new(&root).to_path_buf())
-        .unwrap_or_else(|| Path::new("/proc").to_path_buf());
+    let proc_root = proc_root();
     let mut sink = WatchPrinter { json: global.json };
     match twin_app::watch(command, &proc_root, &stop, &mut sink) {
         Ok(result) => {

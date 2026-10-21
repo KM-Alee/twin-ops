@@ -34,7 +34,7 @@ pub(crate) fn persist(
     proc_root: &Path,
 ) -> Result<ContainerdScanNotes, StoreError> {
     let mut notes = ContainerdScanNotes::default();
-    let snapshot = read_containerd(Path::new(CONTAINERD_SOCKET), fixture);
+    let snapshot = read_containerd(&crate::paths::host_path(CONTAINERD_SOCKET), fixture);
     let existing_sources: BTreeSet<String> = store
         .list_unfinalized_nodes()?
         .iter()
